@@ -264,7 +264,7 @@ cmd_list() {
 
   if ! $found; then
     warn "No profiles yet."
-    info "Run: ctx import"
+    info "Run: ctx setup"
   fi
 }
 
@@ -344,6 +344,41 @@ cmd_secret() {
       keychain_delete "$profile" "$key" && success "Deleted $key from Keychain"
       ;;
     *) echo "Usage: ctx secret <set|get|list|delete> <profile> [KEY]" ;;
+  esac
+}
+
+# ─── config ───────────────────────────────────────────────────────────────────
+cmd_config() {
+  ctx_init_dirs
+  local key="${1:-}" value="${2:-}"
+
+  case "$key" in
+    ""|show)
+      bold "\n  ctx config\n"
+      echo "  work_root: $(ctx_work_root)"
+      echo ""
+      info "Set it with: ctx config work-root <path>"
+      ;;
+    work-root)
+      if [[ -z "$value" ]]; then
+        echo "  work_root: $(ctx_work_root)"
+        echo ""
+        info "Usage: ctx config work-root <path>"
+        return 0
+      fi
+      value="${value/#\~/$HOME}"
+      mkdir -p "$value" || die "Could not create directory: $value"
+      if grep -q "^work_root=" "$CTX_CONFIG" 2>/dev/null; then
+        sed -i.bak "s|^work_root=.*|work_root=$value|" "$CTX_CONFIG"
+        rm -f "$CTX_CONFIG.bak"
+      else
+        echo "work_root=$value" >> "$CTX_CONFIG"
+      fi
+      success "work_root set to: $value"
+      ;;
+    *)
+      die "Usage: ctx config [show|work-root <path>]"
+      ;;
   esac
 }
 
@@ -477,7 +512,7 @@ cmd_doctor() {
     $ok && success "Profile '$pname': ok"
   done
 
-  [[ $pc -eq 0 ]] && info "No profiles yet. Run: ctx import"
+  [[ $pc -eq 0 ]] && info "No profiles yet. Run: ctx setup"
 
   echo ""
   $all_ok && success "Everything looks good." || warn "Fix the issues above."
@@ -537,7 +572,7 @@ cmd_init() {
   echo ""
   bold "  Next steps:"
   echo ""
-  echo "  ctx import    Build your first client profile"
+  echo "  ctx setup     Configure your first client profile"
   echo "  ctx doctor    Full health check"
   echo ""
 }

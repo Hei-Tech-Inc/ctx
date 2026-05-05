@@ -16,7 +16,7 @@ Profiles auto-activate when you `cd` into a client directory.
 
 ## How it works
 
-1. `ctx import` — wizard detects your existing SSH keys, `gh` accounts, AWS/GCP/Azure configs and builds a profile
+1. `ctx setup` — wizard detects your existing SSH keys, `gh` accounts, AWS/GCP/Azure configs and configures a profile
 2. `ctx` writes:
    - `~/.ctx/profiles/<name>.conf` — profile metadata
    - `~/.config/git/ctx-<name>` — git identity
@@ -67,8 +67,11 @@ source ~/.zshrc   # or ~/.bashrc
 # 1. Verify deps and wire up hooks
 ctx init
 
+# Optional: set one default root for all client folders
+ctx config work-root ~/clients
+
 # 2. Build a profile from your existing machine setup
-ctx import
+ctx setup
 
 # 3. Activate a profile
 ctx use <name>
@@ -83,7 +86,10 @@ ctx use <name>
 | Command | Description |
 |---------|-------------|
 | `ctx init` | Check deps, install hooks |
-| `ctx import` / `ctx add` | Detect existing setup and build a profile |
+| `ctx config [show]` | Show current ctx config values |
+| `ctx config work-root <path>` | Set default root used by `ctx setup` for client folders |
+| `ctx setup` | Configure a new client profile (recommended) |
+| `ctx import` / `ctx add` | Alias for `ctx setup` |
 
 ### Daily use
 

@@ -31,7 +31,9 @@ log()     { mkdir -p "$CTX_DIR"; echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$C
 # If gum is installed: beautiful TUI. If not: plain read/echo.
 
 HAS_GUM=false
-command -v gum &>/dev/null && HAS_GUM=true
+if command -v gum &>/dev/null && [[ -t 0 && -t 1 ]]; then
+  HAS_GUM=true
+fi
 
 # Styled header — uses gum style if available
 ctx_header() {
@@ -231,6 +233,17 @@ set_active_profile() {
     echo "active=$name" >> "$CTX_CONFIG"
   fi
   log "Switched to profile: $name"
+}
+
+ctx_work_root() {
+  local configured=""
+  configured="${CTX_WORK_ROOT:-}"
+  if [[ -z "$configured" && -f "$CTX_CONFIG" ]]; then
+    configured="$(grep "^work_root=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  fi
+  [[ -z "$configured" ]] && configured="$HOME/clients"
+  configured="${configured/#\~/$HOME}"
+  echo "$configured"
 }
 
 # ─── Backup ────────────────────────────────────────────────────────────────────

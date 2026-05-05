@@ -62,9 +62,14 @@ cmd_import() {
   hr
   bold "  Working directory"
   echo ""
-  local WORK_DIR
-  WORK_DIR=$(ask "Client directory (e.g. $HOME/clients/${PROFILE_NAME})" "$HOME/clients/${PROFILE_NAME}")
-  WORK_DIR="${WORK_DIR/#\~/$HOME}"
+  local WORK_DIR work_root work_slug
+  work_root="$(ctx_work_root)"
+  info "Profiles default under: $work_root"
+  work_slug=$(ask "Client folder name (not full path)" "$PROFILE_NAME")
+  work_slug="${work_slug//\//-}"
+  work_slug="$(echo "$work_slug" | sed 's/[^a-zA-Z0-9._-]/-/g')"
+  [[ -z "$work_slug" ]] && die "Client folder name required."
+  WORK_DIR="${work_root}/${work_slug}"
   echo ""
 
   # ── SSH key ─────────────────────────────────────────────────────────────
@@ -73,14 +78,38 @@ cmd_import() {
   echo ""
 
   local SSH_KEY_PATH=""
+  local SSH_KEY_GENERATED=0
 
   if [[ ${#ssh_keys[@]} -gt 0 ]]; then
-    local picked
-    picked=$(pick_one "Use an existing SSH key for this profile?" "Generate new key" "${ssh_keys[@]}")
+    local key_choices=() picked choice_label
+    local idx=1
+    for key_path in "${ssh_keys[@]}"; do
+      local fp=""
+      if command -v ssh-keygen &>/dev/null; then
+        fp=$(ssh-keygen -lf "${key_path}.pub" 2>/dev/null | awk '{print $2}')
+      fi
+      if [[ -n "$fp" ]]; then
+        key_choices+=("[$idx] $(basename "$key_path")  ($fp)")
+      else
+        key_choices+=("[$idx] $(basename "$key_path")")
+      fi
+      idx=$((idx + 1))
+    done
+
+    choice_label=$(pick_one "Choose SSH key (recommended: Generate new key)" "Generate new key" "${key_choices[@]}")
+    picked=""
+    if [[ "$choice_label" != "Generate new key" && -n "$choice_label" ]]; then
+      local picked_idx
+      picked_idx=$(echo "$choice_label" | sed -n 's/^\[\([0-9]\+\)\].*/\1/p')
+      if [[ "$picked_idx" =~ ^[0-9]+$ ]] && (( picked_idx >= 1 && picked_idx <= ${#ssh_keys[@]} )); then
+        picked="${ssh_keys[$((picked_idx - 1))]}"
+      fi
+    fi
 
     if [[ "$picked" == "Generate new key" || -z "$picked" ]]; then
       SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
       _gen_ssh_key "$SSH_KEY_PATH" "$GIT_EMAIL"
+      SSH_KEY_GENERATED=1
     else
       SSH_KEY_PATH="$picked"
       success "Using existing key: $(basename "$SSH_KEY_PATH")"
@@ -89,11 +118,19 @@ cmd_import() {
     if ask_yn "No SSH keys found. Generate one for this profile?" "y"; then
       SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
       _gen_ssh_key "$SSH_KEY_PATH" "$GIT_EMAIL"
+      SSH_KEY_GENERATED=1
     fi
   fi
 
   # ── GitHub account ──────────────────────────────────────────────────────
   local GITHUB_USER=""
+  if has gh && ask_yn "Need to login/switch GitHub account now?" "n"; then
+    info "Tip: choose 'Skip' for SSH key upload here; ctx manages per-profile keys."
+    gh auth login || warn "gh auth login did not complete; continuing setup."
+    gh auth switch 2>/dev/null || true
+    gh_accounts=()
+    while IFS= read -r a; do [[ -n "$a" ]] && gh_accounts+=("$a"); done < <(detect_gh_accounts)
+  fi
 
   if [[ ${#gh_accounts[@]} -gt 0 ]]; then
     GITHUB_USER=$(pick_one "Which GitHub account for '$PROFILE_NAME'?" "None / skip" "${gh_accounts[@]}")
@@ -103,6 +140,18 @@ cmd_import() {
 
   if [[ -z "$GITHUB_USER" ]]; then
     GITHUB_USER=$(ask "GitHub username for this client (leave blank to skip)")
+  fi
+  if [[ -n "$GITHUB_USER" && "$SSH_KEY_GENERATED" == "1" && -f "${SSH_KEY_PATH}.pub" ]]; then
+    if has gh && ask_yn "Upload this new SSH key to GitHub account '$GITHUB_USER' now?" "y"; then
+      gh auth switch -u "$GITHUB_USER" 2>/dev/null || true
+      local key_title
+      key_title="ctx-${PROFILE_NAME}-$(hostname)-$(date +%Y%m%d)"
+      if gh ssh-key add "${SSH_KEY_PATH}.pub" --title "$key_title" 2>/dev/null; then
+        success "SSH key uploaded to GitHub ($GITHUB_USER)"
+      else
+        warn "Could not upload key automatically. Add it manually at https://github.com/settings/keys"
+      fi
+    fi
   fi
   echo ""
 

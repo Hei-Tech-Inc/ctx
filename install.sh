@@ -56,7 +56,10 @@ SHELL_RC="$(detect_shell_rc)"
 SHELL_NAME="$(basename "$SHELL")"
 
 # ─── Header ───────────────────────────────────────────────────────────────────
-clear 2>/dev/null || true
+# Some terminals hide/garble output after forced clear; keep scrollback by default.
+if [[ -t 1 && "${CTX_NO_CLEAR:-0}" != "1" ]]; then
+  clear 2>/dev/null || true
+fi
 echo ""
 bold "  ctx v${CTX_VERSION} — client context switcher"
 dim  "  Sets up everything you need. No manual steps."
@@ -273,23 +276,36 @@ activate_mise_in_shell() {
 install_ctx() {
   local install_bin="${CTX_INSTALL_BIN:-/usr/local/bin}"
   local install_lib="${CTX_INSTALL_LIB:-/usr/local/lib/ctx}"
+  local fallback_bin="$HOME/.local/bin"
+  local fallback_lib="$HOME/.local/lib/ctx"
 
-  # Fall back to ~/bin if /usr/local/bin not writable
-  if [[ ! -w "$install_bin" ]]; then
-    install_bin="$HOME/.local/bin"
-    install_lib="$HOME/.local/lib/ctx"
-    mkdir -p "$install_bin"
-
-    # Ensure ~/bin or ~/.local/bin is in PATH in the rc file
-    if ! grep -q "$install_bin" "$SHELL_RC" 2>/dev/null; then
-      echo "" >> "$SHELL_RC"
-      echo "# ctx — added by ctx installer" >> "$SHELL_RC"
-      echo "export PATH=\"$install_bin:\$PATH\"" >> "$SHELL_RC"
-      info "Added $install_bin to PATH in $SHELL_RC"
+  _ensure_path_on_shell_rc() {
+    local path_dir="$1"
+    if ! grep -q "$path_dir" "$SHELL_RC" 2>/dev/null; then
+      {
+        echo ""
+        echo "# ctx — added by ctx installer"
+        echo "export PATH=\"$path_dir:\$PATH\""
+      } >> "$SHELL_RC"
+      info "Added $path_dir to PATH in $SHELL_RC"
     fi
+  }
+
+  _use_fallback_paths() {
+    install_bin="$fallback_bin"
+    install_lib="$fallback_lib"
+    mkdir -p "$install_bin" "$install_lib"
+    _ensure_path_on_shell_rc "$install_bin"
+  }
+
+  # Fall back when either default bin or lib path is unavailable.
+  if [[ ! -w "$install_bin" || ! -w "$(dirname "$install_lib")" ]]; then
+    _use_fallback_paths
+  else
+    mkdir -p "$install_lib" 2>/dev/null || _use_fallback_paths
   fi
 
-  mkdir -p "$install_lib"
+  mkdir -p "$install_bin" "$install_lib" || die "Unable to create install paths: $install_bin and $install_lib"
 
   # Locate source — local install vs remote
   local script_dir
@@ -305,6 +321,9 @@ install_ctx() {
     info "Downloading ctx..."
     _dl() {
       local url="$1" dest="$2"
+      local dest_dir
+      dest_dir="$(dirname "$dest")"
+      [[ -w "$dest_dir" ]] || die "Cannot write to $dest_dir. Set CTX_INSTALL_BIN/CTX_INSTALL_LIB or use user-writable paths."
       curl -fsSL "$url" -o "$dest" 2>/dev/null \
         || wget -qO "$dest" "$url" 2>/dev/null \
         || die "Failed to download $url"
