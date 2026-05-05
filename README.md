@@ -59,6 +59,17 @@ curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.1.1/install.sh 
 
 Replace `v3.1.1` with the tag you trust (see [`lib/core.sh`](lib/core.sh) for `CTX_VERSION` on that ref). See [`packaging/README.md`](packaging/README.md) for Homebrew/Linux packaging notes.
 
+### Homebrew (tap)
+
+After you publish the tap repo **`Hei-Tech-Inc/homebrew-tap`** (see [`packaging/homebrew-tap/README.md`](packaging/homebrew-tap/README.md)):
+
+```bash
+brew tap Hei-Tech-Inc/tap
+brew install ctx
+```
+
+The formula ships the **`ctx` CLI only**; optional tools (`mise`, `gum`, `gh`, …) still come from the full **`install.sh`** flow or your own installs — run **`ctx doctor`** after setup.
+
 ### From source
 
 ```bash

@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`packaging/homebrew-tap/`** — Homebrew formula (`Formula/ctx.rb`) + README to publish as **`Hei-Tech-Inc/homebrew-tap`**; README documents Brew install.
 - CI job **git-history-hygiene** rejects vendor-bot emails or `Co-authored-by:` lines mentioning the IDE on `main`.
 - Smoke test: `bin/ctx version` matches `CTX_VERSION` from `lib/core.sh`.
 - GitHub Actions publishes a GitHub Release when a `v*` tag is pushed.
