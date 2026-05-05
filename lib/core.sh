@@ -127,7 +127,6 @@ pick_one() {
           --header "$prompt" \
           --header.foreground 99 \
           --selected.foreground 99 \
-          --cursor.foreground 99 \
           2>/dev/null) || true
     echo "$result"
   else
@@ -162,7 +161,6 @@ pick_many() {
           --header "$prompt (space to select, enter to confirm)" \
           --header.foreground 99 \
           --selected.foreground 99 \
-          --cursor.foreground 99 \
           2>/dev/null || true
   else
     echo ""
