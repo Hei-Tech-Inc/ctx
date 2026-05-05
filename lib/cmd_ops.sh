@@ -446,26 +446,22 @@ cmd_clone() {
   load_profile "$prof"
 
   local host="github-${prof}"
-  local clone_url="$url"
-
-  if [[ "$clone_url" == git@github.com:* ]]; then
-    clone_url="git@${host}:${clone_url#git@github.com:}"
-    info "Rewrote GitHub SSH URL → $clone_url"
-  elif [[ "$clone_url" == ssh://git@github.com/* ]]; then
-    local gh_path="${clone_url#ssh://git@github.com/}"
-    gh_path="${gh_path#/}"
-    gh_path="${gh_path%.git}.git"
-    clone_url="git@${host}:${gh_path}"
-    info "Rewrote GitHub SSH URL → $clone_url"
-  elif [[ "$clone_url" == https://github.com/* ]]; then
-    local path="${clone_url#https://github.com/}"
-    path="${path#/}"
-    path="${path%.git}.git"
+  local https_as_ssh="n"
+  if [[ "$url" == https://github.com/* ]]; then
     if ask_yn "Use SSH clone via $host instead of HTTPS?" "y"; then
-      clone_url="git@${host}:${path}"
-      info "Using: $clone_url"
+      https_as_ssh="y"
     else
       info "Keeping HTTPS URL (uses gh/credential helper, not ctx SSH host)."
+    fi
+  fi
+
+  local clone_url
+  clone_url="$(github_clone_url_for_profile "$prof" "$url" "$https_as_ssh")"
+  if [[ "$clone_url" != "$url" ]]; then
+    if [[ "$url" == git@github.com:* || "$url" == ssh://git@github.com/* ]]; then
+      info "Rewrote GitHub SSH URL → $clone_url"
+    elif [[ "$url" == https://github.com/* && "$https_as_ssh" == "y" ]]; then
+      info "Using: $clone_url"
     fi
   fi
 
@@ -608,8 +604,7 @@ cmd_upgrade() {
       wget -qO "$rtmp" "${repo}/lib/core.sh" 2>/dev/null || true
     fi
     if [[ -s "$rtmp" ]]; then
-      command -v perl &>/dev/null && perl -0777 -pi -e 's/\r\n/\n/g; s/\r/\n/g' "$rtmp" 2>/dev/null || true
-      remote_ver="$(grep -m1 '^CTX_VERSION=' "$rtmp" 2>/dev/null | cut -d= -f2 | tr -d '"')"
+      remote_ver="$(parse_ctx_version_from_core_sh_file "$rtmp")"
     fi
     rm -f "$rtmp"
     if [[ -n "$remote_ver" ]]; then

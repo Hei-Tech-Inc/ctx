@@ -322,6 +322,40 @@ keychain_list_keys() {
   done | sort
 }
 
+# Read CTX_VERSION= from a lib/core.sh payload (handles CRLF).
+parse_ctx_version_from_core_sh_file() {
+  local f="$1" line val
+  [[ -s "$f" ]] || { echo ""; return 0; }
+  line="$(tr -d '\r' < "$f" | grep -m1 '^CTX_VERSION=' || true)"
+  [[ -n "$line" ]] || { echo ""; return 0; }
+  val="${line#CTX_VERSION=}"
+  val="${val//\"/}"
+  printf '%s\n' "$val"
+}
+
+# Rewrite GitHub clone URLs to use Host github-<profile> (see ~/.ssh/ctx_config).
+# Args: profile, url, https_as_ssh (y|n) — for https://github.com/... only.
+github_clone_url_for_profile() {
+  local prof="$1" clone_url="$2" https_as_ssh="${3:-n}"
+  local host="github-${prof}"
+
+  if [[ "$clone_url" == git@github.com:* ]]; then
+    printf '%s\n' "git@${host}:${clone_url#git@github.com:}"
+  elif [[ "$clone_url" == ssh://git@github.com/* ]]; then
+    local gh_path="${clone_url#ssh://git@github.com/}"
+    gh_path="${gh_path#/}"
+    gh_path="${gh_path%.git}.git"
+    printf '%s\n' "git@${host}:${gh_path}"
+  elif [[ "$clone_url" == https://github.com/* && "$https_as_ssh" == "y" ]]; then
+    local path="${clone_url#https://github.com/}"
+    path="${path#/}"
+    path="${path%.git}.git"
+    printf '%s\n' "git@${host}:${path}"
+  else
+    printf '%s\n' "$clone_url"
+  fi
+}
+
 # ─── Safe SSH config (writes ONLY to ~/.ssh/ctx_config, never directly) ───────
 # One-time: add a single Include line to ~/.ssh/config pointing to our file
 ensure_ssh_include() {
