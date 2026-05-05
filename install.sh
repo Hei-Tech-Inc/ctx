@@ -6,7 +6,7 @@
 set -uo pipefail
 
 CTX_VERSION="3.0.0"
-CTX_REPO="https://raw.githubusercontent.com/yourusername/ctx/main"
+CTX_REPO="https://raw.githubusercontent.com/isaackumi/ctx/main"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
