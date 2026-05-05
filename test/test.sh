@@ -79,10 +79,19 @@ test_secret_file_path() {
   pass "secret file path (_secret_file)"
 }
 
+test_ctx_cli_version() {
+  local out want
+  want="$CTX_VERSION"
+  out="$("$ROOT_DIR/bin/ctx" version 2>&1)" || fail "bin/ctx version exited non-zero"
+  [[ "$out" == *"$want"* ]] || fail "ctx version output missing $want (got: $out)"
+  pass "ctx CLI (bin/ctx version)"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_github_clone_url_for_profile
 test_parse_ctx_version_from_core_sh_file
 test_secret_file_path
+test_ctx_cli_version
 
 echo "All tests passed."

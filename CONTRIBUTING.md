@@ -20,4 +20,6 @@ Use clear, imperative messages describing user-facing value.
 
 ## Tests
 
-`test/test.sh` covers pure helpers (env keys, timeouts, clone URL rewrite, version parsing, secret paths). Interactive flows (`ctx setup`, real `git clone`) are not automated yet — exercise those manually when changing onboarding or clone behavior.
+`test/test.sh` covers pure helpers (env keys, timeouts, clone URL rewrite, version parsing, secret paths), plus a smoke check that `bin/ctx version` prints the version from `lib/core.sh`. Interactive flows (`ctx setup`, real `git clone`) are not automated yet — exercise those manually when changing onboarding or clone behavior.
+
+Pushing a tag matching `v*` (for example `v3.1.1`) triggers the release workflow, which creates a GitHub Release with auto-generated notes.
