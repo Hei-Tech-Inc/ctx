@@ -42,13 +42,13 @@ Everything else (`mise`, `gum`, `gh`, `git`, `awscli`) is installed automaticall
 ### One-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/isaackumi/ctx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/isaackumi/ctx.git
+git clone https://github.com/Hei-Tech-Inc/ctx.git
 cd ctx
 bash install.sh
 ```

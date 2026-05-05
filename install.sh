@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ctx installer — sets up everything so the user doesn't have to
 # Usage: bash install.sh
-# Remote: curl -fsSL https://raw.githubusercontent.com/you/ctx/main/install.sh | bash
+# Remote: curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash
 
 set -uo pipefail
 
 CTX_VERSION="3.0.0"
-CTX_REPO="https://raw.githubusercontent.com/isaackumi/ctx/main"
+CTX_REPO="https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then

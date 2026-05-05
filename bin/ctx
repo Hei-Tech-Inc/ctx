@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctx — client context switcher v3.0.0
-# https://github.com/isaackumi/ctx
+# https://github.com/Hei-Tech-Inc/ctx
 
 set -uo pipefail
 
