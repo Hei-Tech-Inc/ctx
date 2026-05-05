@@ -63,7 +63,7 @@ cmd_import() {
   bold "  Working directory"
   echo ""
   local WORK_DIR
-  WORK_DIR=$(ask "Client directory (e.g. ~/clients/${PROFILE_NAME})" "~/clients/${PROFILE_NAME}")
+  WORK_DIR=$(ask "Client directory (e.g. $HOME/clients/${PROFILE_NAME})" "$HOME/clients/${PROFILE_NAME}")
   WORK_DIR="${WORK_DIR/#\~/$HOME}"
   echo ""
 
@@ -154,16 +154,25 @@ cmd_import() {
 
   # ── Secrets → Keychain ──────────────────────────────────────────────────
   hr
-  bold "  Secrets (stored in macOS Keychain — never on disk)"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    bold "  Secrets (stored in macOS Keychain — never on disk)"
+  else
+    bold "  Secrets"
+  fi
   echo ""
-  dim "  Values you enter here go directly into Keychain."
-  dim "  They are exported to your shell by mise's hooks.enter."
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    dim "  Values you enter here go directly into Keychain."
+    dim "  They are exported to your shell by mise's hooks.enter."
+  else
+    warn "Keychain storage is only supported on macOS. Secrets will be skipped."
+  fi
   echo ""
 
   local SECRET_KEYS=()
 
   _maybe_secret() {
     local key="$1" prompt="$2"
+    is_valid_env_key "$key" || { warn "Skipping invalid key '$key'"; return 1; }
     if ask_yn "$prompt?" "n"; then
       local val
       val=$(ask_secret "Value for $key")
@@ -184,6 +193,10 @@ cmd_import() {
     local ckey
     ckey=$(ask "Key name (e.g. STRIPE_SECRET_KEY)")
     [[ -z "$ckey" ]] && break
+    if ! is_valid_env_key "$ckey"; then
+      warn "Invalid key '$ckey'. Use [A-Za-z_][A-Za-z0-9_]*."
+      continue
+    fi
     local cval
     cval=$(ask_secret "Value for $ckey")
     if [[ -n "$cval" ]]; then
@@ -197,7 +210,17 @@ cmd_import() {
   # ── Non-secret env vars ─────────────────────────────────────────────────
   local EXTRA_ENVS=""
   if ask_yn "Add non-secret env vars (e.g. NODE_ENV=development)?" "n"; then
-    EXTRA_ENVS=$(ask "Space-separated KEY=VALUE pairs")
+    while :; do
+      local env_key env_val
+      env_key=$(ask "Env key (leave blank to stop)")
+      [[ -z "$env_key" ]] && break
+      if ! is_valid_env_key "$env_key"; then
+        warn "Invalid key '$env_key'. Use [A-Za-z_][A-Za-z0-9_]*."
+        continue
+      fi
+      env_val=$(ask "Value for $env_key")
+      EXTRA_ENVS+="${env_key}=${env_val}"$'\n'
+    done
   fi
   echo ""
 
@@ -216,6 +239,8 @@ cmd_import() {
 
   # ── Write everything ────────────────────────────────────────────────────
   backup_file "$HOME/.gitconfig"
+  backup_file "$HOME/.config/git/ctx-${PROFILE_NAME}"
+  backup_file "$CTX_SSH_CONFIG"
 
   _write_all \
     "$PROFILE_NAME" "$GIT_NAME" "$GIT_EMAIL" "$WORK_DIR" \
@@ -252,7 +277,11 @@ _gen_ssh_key() {
     return 0
   fi
 
-  ssh-keygen -t ed25519 -C "$email" -f "$key_path" -N "" -q
+  local passphrase=""
+  if ask_yn "Protect this SSH key with a passphrase?" "y"; then
+    passphrase=$(ask_secret "Passphrase (leave blank to use none)")
+  fi
+  ssh-keygen -t ed25519 -C "$email" -f "$key_path" -N "$passphrase" -q
   chmod 600 "$key_path"
   success "SSH key generated: $key_path"
   echo ""
@@ -274,36 +303,34 @@ _write_all() {
 
   # 1. Profile .conf — metadata only, no secrets
   mkdir -p "$CTX_PROFILES_DIR"
-  cat > "$CTX_PROFILES_DIR/${profile}.conf" <<EOF
-# ctx profile: $profile
-# Generated: $(date)
-# Secrets are in macOS Keychain. Env vars are in mise.toml.
-
-PROFILE_NAME="$profile"
-GIT_NAME="$git_name"
-GIT_EMAIL="$git_email"
-WORK_DIR="$work_dir"
-GITHUB_USER="$github_user"
-SSH_KEY_PATH="$ssh_key"
-AWS_PROFILE_NAME="$aws"
-AZURE_SUBSCRIPTION="$azure_sub"
-AZURE_TENANT="$azure_tenant"
-GCP_PROJECT="$gcp"
-GCP_ACCOUNT="$gcp_acct"
-KUBE_CONTEXT="$kube"
-SECRET_KEYS="$secret_keys"
-EXTRA_ENVS="$extra_envs"
-EOF
+  {
+    printf '# ctx profile: %s\n' "$profile"
+    printf '# Generated: %s\n' "$(date)"
+    printf '# Secrets are in macOS Keychain. Env vars are in mise.toml.\n\n'
+    printf 'PROFILE_NAME=%q\n' "$profile"
+    printf 'GIT_NAME=%q\n' "$git_name"
+    printf 'GIT_EMAIL=%q\n' "$git_email"
+    printf 'WORK_DIR=%q\n' "$work_dir"
+    printf 'GITHUB_USER=%q\n' "$github_user"
+    printf 'SSH_KEY_PATH=%q\n' "$ssh_key"
+    printf 'AWS_PROFILE_NAME=%q\n' "$aws"
+    printf 'AZURE_SUBSCRIPTION=%q\n' "$azure_sub"
+    printf 'AZURE_TENANT=%q\n' "$azure_tenant"
+    printf 'GCP_PROJECT=%q\n' "$gcp"
+    printf 'GCP_ACCOUNT=%q\n' "$gcp_acct"
+    printf 'KUBE_CONTEXT=%q\n' "$kube"
+    printf 'SECRET_KEYS=%q\n' "$secret_keys"
+    printf 'EXTRA_ENVS=%q\n' "$extra_envs"
+  } > "$CTX_PROFILES_DIR/${profile}.conf"
   chmod 600 "$CTX_PROFILES_DIR/${profile}.conf"
   success "Profile config written"
 
   # 2. Git identity file (used by includeIf)
   mkdir -p "$HOME/.config/git"
-  cat > "$HOME/.config/git/ctx-${profile}" <<EOF
-[user]
-  name  = $git_name
-  email = $git_email
-EOF
+  local git_identity_file="$HOME/.config/git/ctx-${profile}"
+  : > "$git_identity_file"
+  git config --file "$git_identity_file" user.name "$git_name"
+  git config --file "$git_identity_file" user.email "$git_email"
   success "Git identity file: ~/.config/git/ctx-${profile}"
 
   # 3. ~/.gitconfig includeIf — only one line added, deduped

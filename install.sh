@@ -208,8 +208,6 @@ install_direnv() {
 
 # ─── Install: optional cloud CLIs ─────────────────────────────────────────────
 install_optional_tools() {
-  local installed_any=false
-
   # AWS CLI
   if ! command -v aws &>/dev/null; then
     info "Installing AWS CLI..."

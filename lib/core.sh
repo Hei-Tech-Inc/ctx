@@ -6,7 +6,7 @@ CTX_DIR="${CTX_DIR:-$HOME/.ctx}"
 CTX_CONFIG="${CTX_DIR}/config"
 CTX_PROFILES_DIR="${CTX_DIR}/profiles"
 CTX_LOG="${CTX_DIR}/ctx.log"
-# CTX_SSH_CONFIG is derived dynamically at call time (see ensure_ssh_include / ctx_ssh_add_host)
+CTX_SSH_CONFIG="${HOME}/.ssh/ctx_config"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -252,6 +252,10 @@ latest_backup() {
 # ─── macOS Keychain ───────────────────────────────────────────────────────────
 keychain_set() {
   local profile="$1" key="$2" value="$3"
+  [[ "$(uname -s)" == "Darwin" ]] || {
+    warn "Keychain is unavailable on this OS; cannot store secret '$key'."
+    return 1
+  }
   local svc="ctx-${profile}-${key}"
   security delete-generic-password -a "$USER" -s "$svc" &>/dev/null || true
   security add-generic-password -a "$USER" -s "$svc" -w "$value" -T "" -U 2>/dev/null
@@ -259,14 +263,17 @@ keychain_set() {
 
 keychain_get() {
   local profile="$1" key="$2"
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
   security find-generic-password -a "$USER" -s "ctx-${profile}-${key}" -w 2>/dev/null || echo ""
 }
 
 keychain_delete() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
   security delete-generic-password -a "$USER" -s "ctx-${1}-${2}" &>/dev/null || true
 }
 
 keychain_list_keys() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
   security dump-keychain 2>/dev/null \
     | grep -o "\"ctx-${1}-[^\"]*\"" \
     | sed "s/\"ctx-${1}-//;s/\"//" | sort
@@ -275,7 +282,6 @@ keychain_list_keys() {
 # ─── Safe SSH config (writes ONLY to ~/.ssh/ctx_config, never directly) ───────
 # One-time: add a single Include line to ~/.ssh/config pointing to our file
 ensure_ssh_include() {
-  local CTX_SSH_CONFIG="$HOME/.ssh/ctx_config"
   local ssh_main="$HOME/.ssh/config"
   mkdir -p "$HOME/.ssh"
   chmod 700 "$HOME/.ssh"
@@ -305,7 +311,6 @@ ensure_ssh_include() {
 # Write a host block to our ctx_config file, never to ~/.ssh/config
 ctx_ssh_add_host() {
   local host="$1" key_path="$2"
-  local CTX_SSH_CONFIG="$HOME/.ssh/ctx_config"
 
   ensure_ssh_include
 
@@ -328,7 +333,6 @@ ctx_ssh_add_host() {
 
 ctx_ssh_remove_host() {
   local host="$1"
-  local CTX_SSH_CONFIG="$HOME/.ssh/ctx_config"
   [[ -f "$CTX_SSH_CONFIG" ]] || return 0
   # Remove the 5-line block for this host
   local tmp; tmp=$(mktemp)
@@ -401,10 +405,12 @@ generate_mise_toml() {
     [[ -n "$kube_ctx"     ]] && echo "CTX_KUBE_CONTEXT = \"$kube_ctx\""
 
     if [[ -n "$extra_envs" ]]; then
-      for pair in $extra_envs; do
+      while IFS= read -r pair; do
+        [[ -z "$pair" ]] && continue
         local k="${pair%%=*}" v="${pair#*=}"
+        is_valid_env_key "$k" || continue
         echo "$k = \"$v\""
-      done
+      done <<< "$extra_envs"
     fi
 
     # Load secrets file if it exists (gitignored)
@@ -434,8 +440,9 @@ generate_mise_toml() {
       echo ""
       echo "  # Load secrets from macOS Keychain"
       for key in $secret_keys; do
+        is_valid_env_key "$key" || continue
         echo "  _val=\$(security find-generic-password -a \"\$USER\" -s \"ctx-${profile}-${key}\" -w 2>/dev/null || true)"
-        echo "  [[ -n \"\$_val\" ]] && export ${key}=\"\$_val\""
+        echo "  [[ -n \"\$_val\" ]] && declare -x ${key}=\"\$_val\""
       done
     fi
 
@@ -450,6 +457,7 @@ generate_mise_toml() {
     echo "  git config --unset user.email 2>/dev/null || true"
     if [[ -n "$secret_keys" ]]; then
       for key in $secret_keys; do
+        is_valid_env_key "$key" || continue
         echo "  unset $key 2>/dev/null || true"
       done
     fi
@@ -496,13 +504,45 @@ detect_kube_contexts() {
 
 detect_azure_subs() {
   command -v az &>/dev/null || return 0
-  az account list --query "[].name" -o tsv 2>/dev/null || true
+  run_with_timeout 8 az account list --query "[].name" -o tsv 2>/dev/null || true
 }
 
 detect_gcp_projects() {
   command -v gcloud &>/dev/null || return 0
-  gcloud projects list --format="value(projectId)" 2>/dev/null || true
+  run_with_timeout 8 gcloud projects list --format="value(projectId)" 2>/dev/null || true
 }
 
 # ─── Tool check ───────────────────────────────────────────────────────────────
 has() { command -v "$1" &>/dev/null; }
+
+run_with_timeout() {
+  local seconds="$1"
+  shift
+
+  if command -v timeout &>/dev/null; then
+    timeout "$seconds" "$@"
+    return $?
+  fi
+  if command -v gtimeout &>/dev/null; then
+    gtimeout "$seconds" "$@"
+    return $?
+  fi
+
+  "$@" &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( waited >= seconds )); then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
+is_valid_env_key() {
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}

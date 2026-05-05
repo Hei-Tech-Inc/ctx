@@ -75,10 +75,14 @@ cmd_use() {
   # 7. Secrets from Keychain → export to shell
   if [[ -n "${SECRET_KEYS:-}" ]]; then
     for key in $SECRET_KEYS; do
+      if ! is_valid_env_key "$key"; then
+        warn "Skipping invalid secret key name '$key'"
+        continue
+      fi
       local val
       val=$(keychain_get "$PROFILE_NAME" "$key")
       if [[ -n "$val" ]]; then
-        export "$key"="$val"
+        declare -x "$key=$val"
         [[ "$quiet" == "0" ]] && success "Secret → $key (Keychain)"
       else
         warn "Secret '$key' not in Keychain — run: ctx secret set $PROFILE_NAME $key"
@@ -390,14 +394,31 @@ cmd_doctor() {
     fi
   }
 
-  _chk git       "git"       "brew install git"
+  local install_hint_git="brew install git"
+  local install_hint_gum="brew install gum"
+  local install_hint_gh="brew install gh"
+  local install_hint_aws="brew install awscli"
+  local install_hint_az="brew install azure-cli"
+  local install_hint_gcloud="brew install --cask google-cloud-sdk"
+  local install_hint_kubectl="brew install kubectl"
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    install_hint_git="sudo apt-get install -y git"
+    install_hint_gum="brew install gum (or install from github.com/charmbracelet/gum)"
+    install_hint_gh="sudo apt-get install -y gh"
+    install_hint_aws="pipx install awscli"
+    install_hint_az="curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"
+    install_hint_gcloud="See: https://cloud.google.com/sdk/docs/install"
+    install_hint_kubectl="sudo apt-get install -y kubectl"
+  fi
+
+  _chk git       "git"       "$install_hint_git"
   _chk mise      "mise"      "curl https://mise.run | sh"
-  _chk gum       "gum"       "brew install gum"
-  _chk gh        "gh"        "brew install gh"
-  _chk aws       "AWS CLI"   "brew install awscli"
-  _chk az        "Azure CLI" "brew install azure-cli"
-  _chk gcloud    "gcloud"    "brew install --cask google-cloud-sdk"
-  _chk kubectl   "kubectl"   "brew install kubectl"
+  _chk gum       "gum"       "$install_hint_gum"
+  _chk gh        "gh"        "$install_hint_gh"
+  _chk aws       "AWS CLI"   "$install_hint_aws"
+  _chk az        "Azure CLI" "$install_hint_az"
+  _chk gcloud    "gcloud"    "$install_hint_gcloud"
+  _chk kubectl   "kubectl"   "$install_hint_kubectl"
 
   echo ""
   hr
@@ -406,6 +427,7 @@ cmd_doctor() {
   local shell_rc=""
   [[ "$SHELL" == *"zsh"*  ]] && shell_rc="$HOME/.zshrc"
   [[ "$SHELL" == *"bash"* ]] && shell_rc="$HOME/.bashrc"
+  [[ "$SHELL" == *"fish"* ]] && shell_rc="$HOME/.config/fish/config.fish"
 
   if [[ -n "$shell_rc" ]]; then
     grep -q "mise activate" "$shell_rc" 2>/dev/null \
@@ -496,6 +518,7 @@ cmd_init() {
   local shell_rc=""
   [[ "$SHELL" == *"zsh"*  ]] && shell_rc="$HOME/.zshrc"
   [[ "$SHELL" == *"bash"* ]] && shell_rc="$HOME/.bashrc"
+  [[ "$SHELL" == *"fish"* ]] && shell_rc="$HOME/.config/fish/config.fish"
 
   if [[ -n "$shell_rc" ]]; then
     if ! grep -q "mise activate" "$shell_rc" 2>/dev/null || \
@@ -527,6 +550,7 @@ cmd_install_hook() {
     case "$SHELL" in
       */zsh)  shell_rc="$HOME/.zshrc" ;;
       */bash) shell_rc="$HOME/.bashrc" ;;
+      */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
       *)      die "Unknown shell. Pass rc file: ctx install-hook ~/.zshrc" ;;
     esac
   fi
@@ -540,6 +564,7 @@ cmd_install_hook() {
     case "$(basename "$SHELL")" in
       zsh)  activate_line='eval "$(mise activate zsh)"' ;;
       bash) activate_line='eval "$(mise activate bash)"' ;;
+      fish) activate_line='mise activate fish | source' ;;
       *)    activate_line='eval "$(mise activate)"' ;;
     esac
     { echo ""; echo "# mise-en-place — added by ctx"; echo "$activate_line"; } >> "$shell_rc"
@@ -548,7 +573,35 @@ cmd_install_hook() {
 
   # 2. ctx auto-switch hook
   if ! grep -q "ctx auto-switch" "$shell_rc" 2>/dev/null; then
-    cat >> "$shell_rc" <<'HOOK'
+    if [[ "$shell_rc" == *"/config.fish" ]]; then
+      cat >> "$shell_rc" <<'HOOK'
+
+# ── ctx auto-switch ───────────────────────────────────────────────────────────
+function _ctx_auto_switch --on-variable PWD
+  command -v ctx >/dev/null 2>/dev/null; or return
+  set -l profiles_dir (set -q CTX_DIR; and echo "$CTX_DIR"; or echo "$HOME/.ctx")/profiles
+  set -l active_conf (set -q CTX_DIR; and echo "$CTX_DIR"; or echo "$HOME/.ctx")/config
+  test -d "$profiles_dir"; or return
+
+  for conf in "$profiles_dir"/*.conf
+    test -e "$conf"; or continue
+    set -l work_dir (grep "^WORK_DIR=" "$conf" | sed 's/^WORK_DIR=//')
+    set work_dir (string replace -r '^~' "$HOME" -- "$work_dir")
+    test -n "$work_dir"; and string match -q "$work_dir*" -- "$PWD"; or continue
+
+    set -l pname (basename "$conf" .conf)
+    set -l current (grep "^active=" "$active_conf" 2>/dev/null | cut -d= -f2)
+    if test "$pname" != "$current"
+      env CTX_QUIET=1 ctx use "$pname" 2>/dev/null
+      echo "[ctx] -> $pname"
+    end
+    return
+  end
+end
+# ─────────────────────────────────────────────────────────────────────────────
+HOOK
+    else
+      cat >> "$shell_rc" <<'HOOK'
 
 # ── ctx auto-switch ───────────────────────────────────────────────────────────
 _ctx_auto_switch() {
@@ -577,6 +630,7 @@ _ctx_auto_switch() {
 [[ -n "${BASH_VERSION:-}" ]] && PROMPT_COMMAND="_ctx_auto_switch;${PROMPT_COMMAND:+ $PROMPT_COMMAND}"
 # ─────────────────────────────────────────────────────────────────────────────
 HOOK
+    fi
     success "ctx auto-switch hook added to $shell_rc"
   fi
 
