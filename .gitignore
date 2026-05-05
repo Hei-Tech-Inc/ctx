@@ -1,3 +1,6 @@
 *.bak
 *.log
 .DS_Store
+
+# Cursor IDE (local-only; never commit project metadata or rely on it in CI)
+.cursor/
