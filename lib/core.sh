@@ -439,8 +439,13 @@ generate_mise_toml() {
 
     # Git identity
     echo "  # Set git identity for this directory"
-    echo "  git config user.name  \"$git_name\""
-    echo "  git config user.email \"$git_email\""
+    if is_sensible_git_email "$git_email"; then
+      echo "  git config user.name  \"$git_name\""
+      echo "  git config user.email \"$git_email\""
+    else
+      echo "  # Skipped invalid git email (looks like a username, not an address): \"$git_email\""
+      echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/${profile}.conf and re-run setup, or edit mise.toml."
+    fi
     echo ""
 
     # Cloud context switches
@@ -558,4 +563,9 @@ run_with_timeout() {
 
 is_valid_env_key() {
   [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}
+
+# Reject obvious mistakes like pasting a GitHub username into the email field.
+is_sensible_git_email() {
+  [[ "$1" =~ @ ]] && [[ "$1" != *..* ]] && [[ "$1" =~ ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+ ]]
 }

@@ -25,6 +25,21 @@ dim()     { echo -e "${DIM}$*${RESET}"; }
 die()     { error "$*"; exit 1; }
 step()    { echo ""; echo -e "${BOLD}  [$1]${RESET} $2"; echo ""; }
 
+print_ctx_banner() {
+  [[ -t 1 ]] || return 0
+  echo -e "${CYAN}"
+  cat <<'ART'
+   ██████╗████████╗██╗  ██╗
+  ██╔════╝╚══██╔══╝╚██╗██╔╝
+  ██║        ██║    ╚███╔╝
+  ██║        ██║    ██╔██╗
+  ╚██████╗   ██║   ██╔╝ ██╗
+   ╚═════╝   ╚═╝   ╚═╝  ╚═╝
+ART
+  echo -e "${RESET}${DIM}  client context switcher${RESET}"
+  echo ""
+}
+
 # ─── OS detection ─────────────────────────────────────────────────────────────
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -67,6 +82,7 @@ echo ""
 dim  "  OS      : $OS ($ARCH)"
 dim  "  Shell   : $SHELL_NAME → $SHELL_RC"
 echo ""
+print_ctx_banner
 
 # ─── Homebrew ─────────────────────────────────────────────────────────────────
 install_homebrew() {
@@ -381,8 +397,8 @@ _ctx_auto_switch() {
       fi
       if [[ "$pname" != "$current" ]]; then
         CTX_QUIET=1 ctx use "$pname" 2>/dev/null
-        echo -e "\033[2m[ctx] → $pname\033[0m"
       fi
+      echo -e "\033[2m[ctx] $pname\033[0m"
       return 0
     fi
   done

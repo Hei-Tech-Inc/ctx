@@ -625,11 +625,16 @@ function _ctx_auto_switch --on-variable PWD
     test -n "$work_dir"; and string match -q "$work_dir*" -- "$PWD"; or continue
 
     set -l pname (basename "$conf" .conf)
+    set -l repo_root (git rev-parse --show-toplevel 2>/dev/null; or echo "")
+    if test -n "$repo_root"; and test -f "$repo_root/.ctx"
+      set -l override (grep "^profile=" "$repo_root/.ctx" 2>/dev/null | cut -d= -f2)
+      test -n "$override"; and set pname "$override"
+    end
     set -l current (grep "^active=" "$active_conf" 2>/dev/null | cut -d= -f2)
     if test "$pname" != "$current"
       env CTX_QUIET=1 ctx use "$pname" 2>/dev/null
-      echo "[ctx] -> $pname"
     end
+    echo -e "\033[2m[ctx] $pname\033[0m"
     return
   end
 end
@@ -656,8 +661,8 @@ _ctx_auto_switch() {
       pname=$(grep "^profile=" "$repo_root/.ctx" 2>/dev/null | cut -d= -f2 || echo "$pname")
     if [[ "$pname" != "$current" ]]; then
       CTX_QUIET=1 ctx use "$pname" 2>/dev/null
-      echo -e "\033[2m[ctx] → $pname\033[0m"
     fi
+    echo -e "\033[2m[ctx] $pname\033[0m"
     return 0
   done
 }

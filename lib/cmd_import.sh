@@ -55,7 +55,15 @@ cmd_import() {
 
   local GIT_NAME GIT_EMAIL
   GIT_NAME=$(ask  "Git name for this client"  "$current_name")
-  GIT_EMAIL=$(ask "Git email for this client" "$current_email")
+  dim "  Use your real email (e.g. you@company.com), not your GitHub username."
+  while :; do
+    GIT_EMAIL=$(ask "Git email for this client" "$current_email")
+    [[ -z "$GIT_EMAIL" ]] && break
+    if is_sensible_git_email "$GIT_EMAIL"; then
+      break
+    fi
+    warn "That doesn't look like an email (expected user@domain.tld)."
+  done
   echo ""
 
   # ── Working directory ───────────────────────────────────────────────────
@@ -306,11 +314,15 @@ cmd_import() {
       --padding "0 2" --margin "1 0" \
       "Profile '${PROFILE_NAME}' created" \
       "$(dim "Activate: ctx use ${PROFILE_NAME}")" \
-      "$(dim "Check:    ctx status")"
+      "$(dim "Check:    ctx status")" \
+      "$(dim "Clone:    git clone git@github-${PROFILE_NAME}:OWNER/REPO.git")" \
+      "$(dim "Never:    git@github.com — uses the wrong SSH key for this profile")"
   else
     success "Profile '${BOLD}${PROFILE_NAME}${RESET}${GREEN}' created."
     info "Activate: ctx use $PROFILE_NAME"
     info "Check:    ctx status"
+    info "Clone:    git clone git@github-${PROFILE_NAME}:OWNER/REPO.git"
+    dim "  Avoid git@github.com here — it won't use this profile's key."
   fi
   echo ""
 }
@@ -379,8 +391,13 @@ _write_all() {
   local git_identity_file="$HOME/.config/git/ctx-${profile}"
   : > "$git_identity_file"
   git config --file "$git_identity_file" user.name "$git_name"
-  git config --file "$git_identity_file" user.email "$git_email"
-  success "Git identity file: ~/.config/git/ctx-${profile}"
+  if is_sensible_git_email "$git_email"; then
+    git config --file "$git_identity_file" user.email "$git_email"
+    success "Git identity file: ~/.config/git/ctx-${profile}"
+  else
+    warn "Skipped git email in identity file (invalid): $git_email"
+    success "Git identity file: ~/.config/git/ctx-${profile} (name only — fix email and re-run setup)"
+  fi
 
   # 3. ~/.gitconfig includeIf — only one line added, deduped
   if [[ -n "$work_dir" ]]; then

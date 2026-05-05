@@ -137,7 +137,7 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 After installation, `ctx` automatically activates the right profile when you `cd` into a client directory. You'll see a dim indicator in your terminal:
 
 ```
-[ctx] → acme
+[ctx] acme
 ```
 
 To override for a specific repo, add a `.ctx` file at the repo root:
@@ -145,6 +145,24 @@ To override for a specific repo, add a `.ctx` file at the repo root:
 ```
 profile=acme-staging
 ```
+
+### Git clone URLs (important)
+
+Each profile gets its own SSH host alias in `~/.ssh/ctx_config`, shaped like:
+
+```text
+github-<profile>
+```
+
+**Clone private repos using that host**, so Git uses the correct key:
+
+```bash
+git clone git@github-points-africa:Points-Africa/pa-pale.git
+```
+
+Avoid `git@github.com:...` for client work — it often picks your *default* SSH key and GitHub will respond with “repository not found” for private repos.
+
+Your git author identity for repos under the client folder comes from `~/.gitconfig` `includeIf` → `~/.config/git/ctx-<profile>`, and `mise.toml` hooks also set local `git config` when `mise` activates.
 
 ---
 
