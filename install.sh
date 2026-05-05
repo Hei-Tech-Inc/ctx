@@ -25,6 +25,17 @@ dim()     { echo -e "${DIM}$*${RESET}"; }
 die()     { error "$*"; exit 1; }
 step()    { echo ""; echo -e "${BOLD}  [$1]${RESET} $2"; echo ""; }
 
+strip_cr_inplace() {
+  local f="$1"
+  [[ -f "$f" ]] || return 0
+  if command -v perl &>/dev/null; then
+    perl -0777 -pi -e 's/\r\n/\n/g; s/\r/\n/g' "$f" 2>/dev/null && return 0
+  fi
+  local t
+  t="$(mktemp)" || return 1
+  tr -d '\r' < "$f" > "$t" && mv "$t" "$f"
+}
+
 print_ctx_banner() {
   [[ -t 1 ]] || return 0
   echo -e "${CYAN}"
@@ -344,10 +355,14 @@ install_ctx() {
         || wget -qO "$dest" "$url" 2>/dev/null \
         || die "Failed to download $url"
     }
-    _dl "$CTX_REPO/bin/ctx"            "$install_bin/ctx"
-    _dl "$CTX_REPO/lib/core.sh"        "$install_lib/core.sh"
-    _dl "$CTX_REPO/lib/cmd_import.sh"  "$install_lib/cmd_import.sh"
-    _dl "$CTX_REPO/lib/cmd_ops.sh"     "$install_lib/cmd_ops.sh"
+    _dl_text() {
+      _dl "$1" "$2"
+      strip_cr_inplace "$2"
+    }
+    _dl_text "$CTX_REPO/bin/ctx"            "$install_bin/ctx"
+    _dl_text "$CTX_REPO/lib/core.sh"        "$install_lib/core.sh"
+    _dl_text "$CTX_REPO/lib/cmd_import.sh"  "$install_lib/cmd_import.sh"
+    _dl_text "$CTX_REPO/lib/cmd_ops.sh"     "$install_lib/cmd_ops.sh"
   fi
 
   chmod +x "$install_bin/ctx"
@@ -459,7 +474,7 @@ print_next_steps() {
   echo -e "  ${DIM}Then get started:${RESET}"
   echo ""
   echo -e "    ${CYAN}ctx init${RESET}      ${DIM}# verify everything is wired up${RESET}"
-  echo -e "    ${CYAN}ctx import${RESET}    ${DIM}# detect your existing SSH keys, gh accounts, AWS profiles${RESET}"
+  echo -e "    ${CYAN}ctx setup${RESET}     ${DIM}# configure a client profile${RESET}"
   echo -e "    ${CYAN}ctx use <name>${RESET} ${DIM}# activate a client context${RESET}"
   echo ""
   dim "  Profiles live in: ~/.ctx/profiles/"

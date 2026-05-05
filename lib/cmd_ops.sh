@@ -419,6 +419,16 @@ cmd_upgrade() {
     die "Need curl or wget to download install.sh"
   fi
 
+  # Normalise line endings — CRLF payloads make bash treat `\r` as part of tokens,
+  # which surfaces as confusing errors like `n: command not found` at EOF.
+  if command -v perl &>/dev/null; then
+    perl -0777 -pi -e 's/\r\n/\n/g; s/\r/\n/g' "$tmp" 2>/dev/null || true
+  else
+    local tmp2
+    tmp2="$(mktemp)" || die "Could not create temp file"
+    tr -d '\r' < "$tmp" > "$tmp2" && mv "$tmp2" "$tmp"
+  fi
+
   export CTX_REPO="$repo"
   [[ -n "${install_bin:-}" ]] && export CTX_INSTALL_BIN="$install_bin"
   [[ -n "${install_lib:-}" ]] && export CTX_INSTALL_LIB="$install_lib"
