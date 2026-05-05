@@ -72,8 +72,10 @@ cmd_use() {
     fi
   fi
 
-  # 7. Secrets from Keychain → export to shell
+  # 7. Secrets → export to shell
   if [[ -n "${SECRET_KEYS:-}" ]]; then
+    local _sec_label="secret store"
+    [[ "$(uname -s)" == "Darwin" ]] && _sec_label="Keychain"
     for key in $SECRET_KEYS; do
       if ! is_valid_env_key "$key"; then
         warn "Skipping invalid secret key name '$key'"
@@ -83,9 +85,9 @@ cmd_use() {
       val=$(keychain_get "$PROFILE_NAME" "$key")
       if [[ -n "$val" ]]; then
         declare -x "$key=$val"
-        [[ "$quiet" == "0" ]] && success "Secret → $key (Keychain)"
+        [[ "$quiet" == "0" ]] && success "Secret → $key ($_sec_label)"
       else
-        warn "Secret '$key' not in Keychain — run: ctx secret set $PROFILE_NAME $key"
+        warn "Secret '$key' missing ($_sec_label) — run: ctx secret set $PROFILE_NAME $key"
       fi
     done
   fi
@@ -160,7 +162,7 @@ cmd_status() {
     echo "  Azure    : ${AZURE_SUBSCRIPTION:-—}"
     echo "  GCP      : ${GCP_PROJECT:-—}"
     echo "  kubectl  : ${KUBE_CONTEXT:-—}"
-    echo "  Secrets  : ${SECRET_KEYS:-none (in Keychain)}"
+    echo "  Secrets  : ${SECRET_KEYS:-none}"
     hr
   fi
 
@@ -281,19 +283,20 @@ cmd_remove() {
   echo "  Dir    : ${WORK_DIR:-—}"
   echo "  GitHub : ${GITHUB_USER:-—}"
   echo ""
-  warn "This removes the profile config, git identity file, SSH host block, and Keychain secrets."
+  warn "This removes the profile config, git identity file, SSH host block, and stored secrets."
   warn "Your code, SSH key files, and mise.toml are NOT deleted."
   echo ""
 
   ask_yn "Remove profile '$name'?" "n" || die "Aborted."
 
-  # Keychain secrets
+  # Stored secrets
   if [[ -n "${SECRET_KEYS:-}" ]]; then
     for key in $SECRET_KEYS; do
       keychain_delete "$name" "$key"
     done
-    success "Keychain secrets removed"
+    success "Profile secrets removed"
   fi
+  rm -rf "${CTX_DIR}/secrets/${name}" 2>/dev/null || true
 
   # SSH host block from ctx_config (not from ~/.ssh/config)
   ctx_ssh_remove_host "github-${name}"
@@ -317,7 +320,9 @@ cmd_secret() {
       [[ -z "$profile" || -z "$key" ]] && die "Usage: ctx secret set <profile> <KEY>"
       profile_exists "$profile" || die "Profile '$profile' not found."
       local val; val=$(ask_secret "Value for $key")
-      keychain_set "$profile" "$key" "$val" && success "$key stored in Keychain for $profile"
+      local _lbl="secret store"
+      [[ "$(uname -s)" == "Darwin" ]] && _lbl="Keychain"
+      keychain_set "$profile" "$key" "$val" && success "$key stored ($_lbl) for $profile"
       ;;
     get)
       [[ -z "$profile" || -z "$key" ]] && die "Usage: ctx secret get <profile> <KEY>"
@@ -328,7 +333,7 @@ cmd_secret() {
     list)
       [[ -z "$profile" ]] && die "Usage: ctx secret list <profile>"
       profile_exists "$profile" || die "Profile '$profile' not found."
-      bold "\n  Keychain secrets for: $profile\n"
+      bold "\n  Secrets for: $profile\n"
       local keys; keys=$(keychain_list_keys "$profile")
       if [[ -z "$keys" ]]; then
         info "No secrets stored for this profile."
@@ -341,7 +346,9 @@ cmd_secret() {
       ;;
     delete)
       [[ -z "$profile" || -z "$key" ]] && die "Usage: ctx secret delete <profile> <KEY>"
-      keychain_delete "$profile" "$key" && success "Deleted $key from Keychain"
+      local _lbl="secret store"
+      [[ "$(uname -s)" == "Darwin" ]] && _lbl="Keychain"
+      keychain_delete "$profile" "$key" && success "Deleted $key from $_lbl"
       ;;
     *) echo "Usage: ctx secret <set|get|list|delete> <profile> [KEY]" ;;
   esac
@@ -382,6 +389,197 @@ cmd_config() {
   esac
 }
 
+# ─── clone ────────────────────────────────────────────────────────────────────
+cmd_clone() {
+  local prof="" url="" clone_args=() rest=() seen_dd=false i idx="" tok
+
+  _clone_token_is_url() {
+    [[ "$1" == *://* ]] && return 0
+    [[ "$1" == git@*:*/* ]] && return 0
+    [[ "$1" == *:*/* ]] && return 0
+    return 1
+  }
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p|--profile)
+        prof="${2:-}"
+        [[ -n "$prof" ]] || die "Usage: ctx clone [-p|--profile <name>] [--] [<git-clone-args>...] <repo-url> [<dir>]"
+        shift 2
+        ;;
+      --)
+        seen_dd=true
+        shift
+        rest+=("$@")
+        break
+        ;;
+      *)
+        rest+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if $seen_dd; then
+    idx=""
+    for i in "${!rest[@]}"; do
+      tok="${rest[$i]}"
+      if _clone_token_is_url "$tok"; then
+        idx="$i"
+        break
+      fi
+    done
+    [[ -n "$idx" ]] || die "Could not find a repo URL in: ctx clone ... -- ${rest[*]}"
+    url="${rest[$idx]}"
+    clone_args=("${rest[@]}")
+  else
+    [[ ${#rest[@]} -ge 1 ]] || die "Usage: ctx clone [-p|--profile <name>] <repo-url> [git-clone-args...]"
+    url="${rest[0]}"
+    clone_args=("${rest[@]}")
+  fi
+
+  ctx_init_dirs
+  if [[ -z "$prof" ]]; then
+    prof="$(active_profile)"
+  fi
+  [[ -n "$prof" ]] || die "No active profile. Run: ctx use <profile> or ctx clone -p <profile> <url>"
+  load_profile "$prof"
+
+  local host="github-${prof}"
+  local clone_url="$url"
+
+  if [[ "$clone_url" == git@github.com:* ]]; then
+    clone_url="git@${host}:${clone_url#git@github.com:}"
+    info "Rewrote GitHub SSH URL → $clone_url"
+  elif [[ "$clone_url" == ssh://git@github.com/* ]]; then
+    local gh_path="${clone_url#ssh://git@github.com/}"
+    gh_path="${gh_path#/}"
+    gh_path="${gh_path%.git}.git"
+    clone_url="git@${host}:${gh_path}"
+    info "Rewrote GitHub SSH URL → $clone_url"
+  elif [[ "$clone_url" == https://github.com/* ]]; then
+    local path="${clone_url#https://github.com/}"
+    path="${path#/}"
+    path="${path%.git}.git"
+    if ask_yn "Use SSH clone via $host instead of HTTPS?" "y"; then
+      clone_url="git@${host}:${path}"
+      info "Using: $clone_url"
+    else
+      info "Keeping HTTPS URL (uses gh/credential helper, not ctx SSH host)."
+    fi
+  fi
+
+  git clone "$clone_url" "${clone_args[@]}"
+}
+
+# ─── verify ───────────────────────────────────────────────────────────────────
+cmd_verify() {
+  local name="${1:-}"
+  ctx_init_dirs
+  [[ -z "$name" ]] && name="$(active_profile)"
+  [[ -n "$name" ]] || die "Usage: ctx verify <profile> (or activate a profile first)"
+  profile_exists "$name" || die "Profile '$name' not found."
+  load_profile "$name"
+
+  bold "\n  ctx verify: $name\n"
+
+  local ok=true
+  local host="github-${name}"
+
+  [[ -n "${WORK_DIR:-}" && -d "$WORK_DIR" ]] && success "Work dir exists: $WORK_DIR" || {
+    warn "Work dir missing: ${WORK_DIR:-}"; ok=false
+  }
+
+  if [[ -n "${SSH_KEY_PATH:-}" ]]; then
+    [[ -f "$SSH_KEY_PATH" ]] && success "SSH private key: $SSH_KEY_PATH" || {
+      warn "SSH private key missing: $SSH_KEY_PATH"; ok=false
+    }
+    if [[ -f "$CTX_SSH_CONFIG" ]] && grep -q "^Host ${host}$" "$CTX_SSH_CONFIG" 2>/dev/null; then
+      success "SSH config has Host $host"
+    else
+      warn "SSH config missing Host $host in $CTX_SSH_CONFIG"; ok=false
+    fi
+    if has ssh && [[ -f "$SSH_KEY_PATH" ]]; then
+      local st
+      st=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T "git@${host}" 2>&1 || true)
+      if echo "$st" | grep -qi "successfully authenticated"; then
+        success "ssh -T git@${host}: OK"
+      else
+        warn "ssh -T git@${host} failed or unexpected: ${st//$'\n'/ }"
+        ok=false
+      fi
+    fi
+  else
+    warn "No SSH_KEY_PATH in profile"
+    ok=false
+  fi
+
+  if [[ -n "${GITHUB_USER:-}" ]] && has gh; then
+    local active_gh
+    active_gh=$(gh auth status 2>&1 | grep "Logged in to github.com account" \
+      | awk '{print $NF}' | tr -d '()' | head -1)
+    if [[ "$active_gh" == "$GITHUB_USER" ]]; then
+      success "gh active user matches: $GITHUB_USER"
+    else
+      warn "gh active: '$active_gh', profile expects: '$GITHUB_USER' — run: ctx use $name"
+      ok=false
+    fi
+  fi
+
+  if [[ -n "${GIT_EMAIL:-}" ]]; then
+    if is_sensible_git_email "$GIT_EMAIL"; then
+      success "GIT_EMAIL looks valid: $GIT_EMAIL"
+    else
+      warn "GIT_EMAIL looks invalid: $GIT_EMAIL"
+      ok=false
+    fi
+  fi
+
+  $ok && success "Profile verification passed." || warn "Profile verification found issues."
+  echo ""
+}
+
+# ─── uninstall ──────────────────────────────────────────────────────────────────
+cmd_uninstall() {
+  local purge_data=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --purge) purge_data=true; shift ;;
+      *) die "Usage: ctx uninstall [--purge]" ;;
+    esac
+  done
+
+  bold "\n  ctx uninstall\n"
+  warn "This removes the ctx binary and library scripts from your install location."
+  $purge_data && warn "Also deletes ~/.ctx (profiles, secrets, backups)."
+  echo ""
+  ask_yn "Continue?" "n" || die "Aborted."
+
+  local ctx_bin lib_line install_lib
+  ctx_bin="$(command -v ctx 2>/dev/null || true)"
+  [[ -z "$ctx_bin" ]] && die "ctx not found in PATH"
+
+  if [[ -f "$ctx_bin" ]]; then
+    lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
+    if [[ "$lib_line" =~ CTX_LIB=\"([^\"]+)\" ]]; then
+      install_lib="${BASH_REMATCH[1]}"
+    fi
+  fi
+
+  rm -f "$ctx_bin" && success "Removed $ctx_bin"
+  if [[ -n "${install_lib:-}" && -d "$install_lib" ]]; then
+    rm -rf "$install_lib" && success "Removed $install_lib"
+  fi
+
+  if $purge_data; then
+    rm -rf "$CTX_DIR" && success "Removed $CTX_DIR"
+  fi
+
+  echo ""
+  info "Remove ctx hook blocks from your shell rc if desired (search for 'ctx auto-switch')."
+  echo ""
+}
+
 # ─── upgrade ──────────────────────────────────────────────────────────────────
 cmd_upgrade() {
   local repo="${CTX_UPGRADE_REPO:-https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main}"
@@ -397,6 +595,35 @@ cmd_upgrade() {
       install_lib="${BASH_REMATCH[1]}"
       install_bin="$(dirname "$ctx_bin")"
     fi
+  fi
+
+  if [[ "${1:-}" == "--check" ]]; then
+    bold "\n  ctx upgrade --check\n"
+    dim "  Installed: ctx version $CTX_VERSION"
+    local remote_ver="" rtmp
+    rtmp="$(mktemp)" || die "Could not create temp file"
+    if command -v curl &>/dev/null; then
+      curl -fsSL "${repo}/lib/core.sh" -o "$rtmp" 2>/dev/null || true
+    elif command -v wget &>/dev/null; then
+      wget -qO "$rtmp" "${repo}/lib/core.sh" 2>/dev/null || true
+    fi
+    if [[ -s "$rtmp" ]]; then
+      command -v perl &>/dev/null && perl -0777 -pi -e 's/\r\n/\n/g; s/\r/\n/g' "$rtmp" 2>/dev/null || true
+      remote_ver="$(grep -m1 '^CTX_VERSION=' "$rtmp" 2>/dev/null | cut -d= -f2 | tr -d '"')"
+    fi
+    rm -f "$rtmp"
+    if [[ -n "$remote_ver" ]]; then
+      dim "  Remote main: ctx version $remote_ver"
+      if [[ "$CTX_VERSION" == "$remote_ver" ]]; then
+        success "Already on latest advertised version ($remote_ver)."
+      else
+        info "Update available: $CTX_VERSION → $remote_ver (run: ctx upgrade)"
+      fi
+    else
+      warn "Could not fetch remote version (offline?)."
+    fi
+    echo ""
+    return 0
   fi
 
   bold "\n  ctx upgrade\n"

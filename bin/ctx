@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ctx — client context switcher v3.0.0
+# ctx — client context switcher v3.1.0
 # https://github.com/Hei-Tech-Inc/ctx
 
 set -uo pipefail
@@ -50,8 +50,9 @@ cmd_help() {
       "  use  <name>      Activate a profile" \
       "  list             List all profiles" \
       "  status           Active profile + live checks" \
+      "  clone            git clone with GitHub host rewrite for this profile" \
       "" \
-      "$(gum style --faint "SECRETS  (macOS Keychain)")" \
+      "$(gum style --faint "SECRETS  (Keychain or ~/.ctx/secrets)")" \
       "  secret set   <profile> <KEY>" \
       "  secret get   <profile> <KEY>" \
       "  secret list  <profile>" \
@@ -60,11 +61,13 @@ cmd_help() {
       "$(gum style --faint "MAINTENANCE")" \
       "  config [show]    Show ctx config values" \
       "  config work-root Set default client directory root" \
+      "  verify [name]    Check profile paths, SSH, gh, email" \
       "  edit   <name>    Open profile in \$EDITOR" \
       "  remove <name>    Delete profile + secrets" \
       "  undo             Restore last backup" \
       "  install-hook     Install mise + ctx hooks into shell rc" \
-      "  upgrade          Re-run installer (update ctx binary + libs)" \
+      "  upgrade [--check] Re-run installer, or check for newer version" \
+      "  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe" \
       "  doctor           Full health check" \
       "  version          Print version" \
       "" \
@@ -86,8 +89,9 @@ ${BOLD}DAILY USE${RESET}
   use  <name>           Activate a profile (gh, SSH, AWS, Azure, GCP, kubectl)
   list                  List all profiles
   status                Active profile + live checks
+  clone                 git clone with GitHub host rewrite (see README)
 
-${BOLD}SECRETS  (macOS Keychain — never on disk)${RESET}
+${BOLD}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${RESET}
   secret set   <profile> <KEY>
   secret get   <profile> <KEY>
   secret list  <profile>
@@ -96,11 +100,13 @@ ${BOLD}SECRETS  (macOS Keychain — never on disk)${RESET}
 ${BOLD}MAINTENANCE${RESET}
   config [show]         Show ctx config values
   config work-root <p>  Set default client directory root
+  verify [name]         Check profile paths, SSH, gh, email
   edit   <name>         Open profile config in \$EDITOR
-  remove <name>         Delete profile + Keychain secrets
+  remove <name>         Delete profile + stored secrets
   undo                  Restore last backup
   install-hook [rc]     Install mise + ctx hooks into shell rc
-  upgrade               Re-run installer (update ctx binary + libs)
+  upgrade [--check]     Re-run installer, or compare to latest on main
+  uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
   doctor                Full health check
   completion <zsh|bash> Print shell completion script
   version               Print version
@@ -118,7 +124,7 @@ ${BOLD}HOW IT WORKS${RESET}
      - ~/.gitconfig                  (one includeIf line, deduped)
      - ~/.ssh/ctx_config             (SSH hosts — never ~/.ssh/config)
      - ~/clients/<name>/mise.toml    (env vars + hooks, auto-loads on cd)
-  3. Secrets → macOS Keychain, loaded by mise hooks.enter
+  3. Secrets → macOS Keychain (or ~/.ctx/secrets elsewhere), loaded by mise hooks.enter
 
 ${BOLD}INSTALL REQUIREMENTS${RESET}
   Everything is installed by install.sh:
@@ -144,13 +150,16 @@ _ctx() {
     'use:Activate a profile'
     'list:List all profiles'
     'status:Show active profile and live checks'
+    'clone:git clone with GitHub host rewrite'
     'config:Configure ctx defaults'
-    'secret:Manage Keychain secrets'
+    'secret:Manage profile secrets'
+    'verify:Verify profile wiring'
     'edit:Open profile config in $EDITOR'
     'remove:Delete a profile'
     'undo:Restore last backup'
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
+    'uninstall:Remove ctx install'
     'doctor:Health check'
     'completion:Print shell completion'
     'version:Print version'
@@ -161,12 +170,25 @@ _ctx() {
     2) _describe 'ctx commands' cmds ;;
     3)
       case ${words[2]} in
-        use|edit|remove) _describe 'profiles' profiles ;;
+        use|edit|remove|verify) _describe 'profiles' profiles ;;
+        clone) local sub=('-p' '--profile'); _describe 'clone flags' sub ;;
         secret) local sub=('set' 'get' 'list' 'delete'); _describe 'subcommands' sub ;;
         config) local sub=('show' 'work-root'); _describe 'subcommands' sub ;;
+        upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
+        uninstall) local sub=('--purge'); _describe 'uninstall flags' sub ;;
         completion) local sh=('zsh' 'bash'); _describe 'shells' sh ;;
       esac ;;
-    4) [[ ${words[2]} == secret ]] && _describe 'profiles' profiles ;;
+    4)
+      case ${words[2]} in
+        secret) _describe 'profiles' profiles ;;
+        clone)
+          case ${words[3]} in
+            -p|--profile) _describe 'profiles' profiles ;;
+          esac
+          ;;
+      esac
+      ;;
+    5) [[ ${words[2]} == secret && ${words[3]} =~ ^(set|get|delete)$ ]] && _describe 'profiles' profiles ;;
   esac
 }
 _ctx "$@"
@@ -175,14 +197,23 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use list status config secret edit remove undo install-hook upgrade doctor completion version help"
+  local cmds="init setup import add use list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   case "$prev" in
-    use|edit|remove) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    use|edit|remove|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     secret) COMPREPLY=($(compgen -W "set get list delete" -- "$cur")) ;;
     config) COMPREPLY=($(compgen -W "show work-root" -- "$cur")) ;;
+    upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
+    uninstall) COMPREPLY=($(compgen -W "--purge" -- "$cur")) ;;
     ctx) COMPREPLY=($(compgen -W "$cmds" -- "$cur")) ;;
   esac
+  if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
+    COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
+  fi
+  if [[ ${COMP_WORDS[1]} == secret && ${COMP_WORDS[COMP_CWORD-1]} =~ ^(set|get|delete)$ ]]; then
+    COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
+  fi
 }
 complete -F _ctx_comp ctx
 BASH
@@ -202,8 +233,10 @@ main() {
     use)              cmd_use "${1:-}" ;;
     list|ls)          cmd_list ;;
     status|st)        cmd_status ;;
+    clone)            cmd_clone "$@" ;;
     config)           cmd_config "$@" ;;
     secret)           cmd_secret "$@" ;;
+    verify)           cmd_verify "${1:-}" ;;
     edit)
       local pname="${1:-}"
       [[ -z "$pname" ]] && die "Usage: ctx edit <profile>"
@@ -213,7 +246,8 @@ main() {
     remove|rm|del)    cmd_remove "${1:-}" ;;
     undo)             cmd_undo ;;
     install-hook)     cmd_install_hook "${1:-}" ;;
-    upgrade)          cmd_upgrade ;;
+    upgrade)          cmd_upgrade "$@" ;;
+    uninstall)        cmd_uninstall "$@" ;;
     doctor)           cmd_doctor ;;
     completion)       cmd_completion "${1:-zsh}" ;;
     version|-v|--version) echo "ctx version $CTX_VERSION" ;;

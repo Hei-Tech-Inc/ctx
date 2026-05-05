@@ -5,7 +5,7 @@
 
 set -uo pipefail
 
-CTX_VERSION="3.0.0"
+CTX_VERSION="3.1.0"
 CTX_REPO="https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
@@ -478,7 +478,7 @@ print_next_steps() {
   echo -e "    ${CYAN}ctx use <name>${RESET} ${DIM}# activate a client context${RESET}"
   echo ""
   dim "  Profiles live in: ~/.ctx/profiles/"
-  dim "  Secrets live in:  macOS Keychain (never on disk)"
+  dim "  Secrets live in:  macOS Keychain, or ~/.ctx/secrets on other OSes (0600; encrypt disk)"
   dim "  Env vars live in: ~/clients/<name>/mise.toml (auto-loaded on cd)"
   echo ""
 }

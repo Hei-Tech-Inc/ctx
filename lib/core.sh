@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx/lib/core.sh — v3: adds mise.toml support, safe isolated SSH config
 
-CTX_VERSION="3.0.0"
+CTX_VERSION="3.1.0"
 CTX_DIR="${CTX_DIR:-$HOME/.ctx}"
 CTX_CONFIG="${CTX_DIR}/config"
 CTX_PROFILES_DIR="${CTX_DIR}/profiles"
@@ -262,34 +262,66 @@ latest_backup() {
   ls -1t "${CTX_DIR}/backups" 2>/dev/null | head -1
 }
 
-# ─── macOS Keychain ───────────────────────────────────────────────────────────
+# ─── Secrets storage ─────────────────────────────────────────────────────────
+# macOS: Keychain (preferred)
+# Other Unix: ~/.ctx/secrets/<profile>/<KEY> (0600) — not as strong as Keychain; keep disk encrypted.
+
+_secret_file() {
+  printf '%s/secrets/%s/%s' "$CTX_DIR" "$1" "$2"
+}
+
 keychain_set() {
   local profile="$1" key="$2" value="$3"
-  [[ "$(uname -s)" == "Darwin" ]] || {
-    warn "Keychain is unavailable on this OS; cannot store secret '$key'."
-    return 1
-  }
-  local svc="ctx-${profile}-${key}"
-  security delete-generic-password -a "$USER" -s "$svc" &>/dev/null || true
-  security add-generic-password -a "$USER" -s "$svc" -w "$value" -T "" -U 2>/dev/null
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local svc="ctx-${profile}-${key}"
+    security delete-generic-password -a "$USER" -s "$svc" &>/dev/null || true
+    security add-generic-password -a "$USER" -s "$svc" -w "$value" -T "" -U 2>/dev/null
+    return $?
+  fi
+  local f
+  f="$(_secret_file "$profile" "$key")"
+  mkdir -p "$(dirname "$f")" || return 1
+  chmod 700 "${CTX_DIR}/secrets" "${CTX_DIR}/secrets/${profile}" 2>/dev/null || true
+  printf '%s' "$value" > "$f" || return 1
+  chmod 600 "$f" 2>/dev/null || true
+  return 0
 }
 
 keychain_get() {
   local profile="$1" key="$2"
-  [[ "$(uname -s)" == "Darwin" ]] || return 1
-  security find-generic-password -a "$USER" -s "ctx-${profile}-${key}" -w 2>/dev/null || echo ""
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    security find-generic-password -a "$USER" -s "ctx-${profile}-${key}" -w 2>/dev/null || echo ""
+    return 0
+  fi
+  local f
+  f="$(_secret_file "$profile" "$key")"
+  [[ -f "$f" ]] && cat "$f" || echo ""
 }
 
 keychain_delete() {
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
-  security delete-generic-password -a "$USER" -s "ctx-${1}-${2}" &>/dev/null || true
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    security delete-generic-password -a "$USER" -s "ctx-${1}-${2}" &>/dev/null || true
+    return 0
+  fi
+  local f
+  f="$(_secret_file "$1" "$2")"
+  rm -f "$f" 2>/dev/null || true
 }
 
 keychain_list_keys() {
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
-  security dump-keychain 2>/dev/null \
-    | grep -o "\"ctx-${1}-[^\"]*\"" \
-    | sed "s/\"ctx-${1}-//;s/\"//" | sort
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    security dump-keychain 2>/dev/null \
+      | grep -o "\"ctx-${1}-[^\"]*\"" \
+      | sed "s/\"ctx-${1}-//;s/\"//" | sort
+    return 0
+  fi
+  local d="${CTX_DIR}/secrets/${1}"
+  [[ -d "$d" ]] || return 0
+  local f
+  for f in "$d"/*; do
+    [[ -e "$f" ]] || continue
+    basename "$f"
+  done | sort
 }
 
 # ─── Safe SSH config (writes ONLY to ~/.ssh/ctx_config, never directly) ───────
@@ -407,7 +439,7 @@ generate_mise_toml() {
   {
     echo "# mise.toml — ctx managed environment for: $profile"
     echo "# Edit freely. This file is safe to commit (no secrets here)."
-    echo "# Secrets are loaded from macOS Keychain by the [hooks.enter] block."
+    echo "# Secrets load in [hooks.enter]: macOS Keychain, or ~/.ctx/secrets on other OSes."
     echo ""
 
     # Environment variables
@@ -453,13 +485,18 @@ generate_mise_toml() {
     [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$gcp_project\" --quiet 2>/dev/null || true"
     [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$kube_ctx\" 2>/dev/null || true"
 
-    # Keychain secret injection
+    # Secret injection (Keychain on macOS, ~/.ctx/secrets elsewhere)
     if [[ -n "$secret_keys" ]]; then
       echo ""
-      echo "  # Load secrets from macOS Keychain"
+      echo "  # Load profile secrets"
       for key in $secret_keys; do
         is_valid_env_key "$key" || continue
-        echo "  _val=\$(security find-generic-password -a \"\$USER\" -s \"ctx-${profile}-${key}\" -w 2>/dev/null || true)"
+        echo "  if [[ \"\$(uname -s)\" == \"Darwin\" ]]; then"
+        echo "    _val=\$(security find-generic-password -a \"\$USER\" -s \"ctx-${profile}-${key}\" -w 2>/dev/null || true)"
+        echo "  else"
+        echo "    _f=\"\${CTX_DIR:-\$HOME/.ctx}/secrets/${profile}/${key}\""
+        echo "    [[ -f \"\$_f\" ]] && _val=\$(cat \"\$_f\") || _val=\"\""
+        echo "  fi"
         echo "  [[ -n \"\$_val\" ]] && declare -x ${key}=\"\$_val\""
       done
     fi

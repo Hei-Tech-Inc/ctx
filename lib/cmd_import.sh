@@ -209,34 +209,36 @@ cmd_import() {
   fi
   echo ""
 
-  # ── Secrets → Keychain ──────────────────────────────────────────────────
+  # ── Secrets ─────────────────────────────────────────────────────────────
   hr
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    bold "  Secrets (stored in macOS Keychain — never on disk)"
+    bold "  Secrets (macOS Keychain)"
   else
-    bold "  Secrets"
+    bold "  Secrets (~/.ctx/secrets, file per key — use full-disk encryption)"
   fi
   echo ""
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    dim "  Values you enter here go directly into Keychain."
-    dim "  They are exported to your shell by mise's hooks.enter."
+    dim "  Values you enter here go into Keychain."
   else
-    warn "Keychain storage is only supported on macOS. Secrets will be skipped."
+    dim "  Values you enter here go into ~/.ctx/secrets/<profile>/<KEY> (0600)."
   fi
+  dim "  They are exported by ctx use and by mise hooks.enter (when mise runs)."
   echo ""
 
   local SECRET_KEYS=()
 
   _maybe_secret() {
     local key="$1" prompt="$2"
+    local where="secrets"
+    [[ "$(uname -s)" == "Darwin" ]] && where="Keychain"
     is_valid_env_key "$key" || { warn "Skipping invalid key '$key'"; return 1; }
     if ask_yn "$prompt?" "n"; then
       local val
       val=$(ask_secret "Value for $key")
       if [[ -n "$val" ]]; then
         keychain_set "$PROFILE_NAME" "$key" "$val" \
-          && success "$key → Keychain" \
-          || warn "Could not store $key in Keychain"
+          && success "$key → $where" \
+          || warn "Could not store $key ($where)"
         SECRET_KEYS+=("$key")
       fi
     fi
@@ -257,8 +259,10 @@ cmd_import() {
     local cval
     cval=$(ask_secret "Value for $ckey")
     if [[ -n "$cval" ]]; then
+      local where="secrets"
+      [[ "$(uname -s)" == "Darwin" ]] && where="Keychain"
       keychain_set "$PROFILE_NAME" "$ckey" "$cval" \
-        && success "$ckey → Keychain"
+        && success "$ckey → $where"
       SECRET_KEYS+=("$ckey")
     fi
   done
@@ -367,7 +371,7 @@ _write_all() {
   {
     printf '# ctx profile: %s\n' "$profile"
     printf '# Generated: %s\n' "$(date)"
-    printf '# Secrets are in macOS Keychain. Env vars are in mise.toml.\n\n'
+    printf '# Secrets: macOS Keychain or ~/.ctx/secrets. Env vars are in mise.toml.\n\n'
     printf 'PROFILE_NAME=%q\n' "$profile"
     printf 'GIT_NAME=%q\n' "$git_name"
     printf 'GIT_EMAIL=%q\n' "$git_email"

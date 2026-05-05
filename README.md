@@ -108,8 +108,9 @@ ctx use <name>
 | `ctx use <name>` | Activate a profile (git, SSH, AWS, GCP, Azure, kubectl) |
 | `ctx list` | List all profiles |
 | `ctx status` | Show active profile + live service checks |
+| `ctx clone [-p <profile>] <url> [-- git-args...]` | `git clone` with GitHub URL rewrite for `github-<profile>` (see below) |
 
-### Secrets (macOS Keychain)
+### Secrets (Keychain or `~/.ctx/secrets`)
 
 | Command | Description |
 |---------|-------------|
@@ -118,17 +119,22 @@ ctx use <name>
 | `ctx secret list <profile>` | List secret keys for a profile |
 | `ctx secret delete <profile> <KEY>` | Delete a secret |
 
+On macOS, secrets prefer the Keychain. On Linux and other Unixes, values live under `~/.ctx/secrets/<profile>/` (file per key, `0600`) — use full-disk encryption.
+
 Secrets are exported into your shell session by `ctx use` and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
 
 ### Maintenance
 
 | Command | Description |
 |---------|-------------|
+| `ctx verify [name]` | Check work dir, SSH host block + `ssh -T`, `gh` user, and email shape |
 | `ctx edit <name>` | Open profile config in `$EDITOR` |
-| `ctx remove <name>` | Delete profile + Keychain secrets |
+| `ctx remove <name>` | Delete profile + stored secrets |
 | `ctx undo` | Restore last backup |
 | `ctx install-hook [rc]` | Install mise + ctx hooks into shell rc |
 | `ctx upgrade` | Re-run installer to update `ctx` (preserves `~/.ctx`) |
+| `ctx upgrade --check` | Compare installed version to `main` on GitHub (no install) |
+| `ctx uninstall [--purge]` | Remove `ctx` binary + lib from install location; `--purge` deletes `~/.ctx` |
 | `ctx doctor` | Full health check |
 | `ctx completion <zsh\|bash>` | Print shell completion script |
 | `ctx version` | Print version |
@@ -169,6 +175,22 @@ github-<profile>
 
 ```bash
 git clone git@github-points-africa:Points-Africa/pa-pale.git
+```
+
+Or use the helper (uses the active profile, or `-p`):
+
+```bash
+ctx clone git@github.com:Points-Africa/pa-pale.git
+# same effect as git@github-<active-profile>:...
+
+ctx clone -p points-africa https://github.com/Points-Africa/pa-pale.git
+# optional HTTPS → SSH rewrite (prompted)
+```
+
+For arbitrary `git clone` flags, pass them after `--`:
+
+```bash
+ctx clone -- -b main --depth 1 git@github.com:Points-Africa/pa-pale.git ./pa-pale
 ```
 
 Avoid `git@github.com:...` for client work — it often picks your *default* SSH key and GitHub will respond with “repository not found” for private repos.
