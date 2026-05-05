@@ -23,7 +23,7 @@ Profiles auto-activate when you `cd` into a client directory.
    - `~/.gitconfig` — one `includeIf` line per profile (deduped)
    - `~/.ssh/ctx_config` — SSH host aliases (never touches `~/.ssh/config` directly)
    - `~/clients/<name>/mise.toml` — env vars + enter/leave hooks (auto-loads on `cd`)
-3. Secrets → macOS Keychain only, never on disk
+3. Secrets → macOS Keychain when available; on Linux/other Unix, `~/.ctx/secrets/<profile>/` (file per key, `0600`) — encrypt your disk.
 
 ---
 
@@ -44,6 +44,16 @@ Everything else (`mise`, `gum`, `gh`, `git`, `awscli`) is installed automaticall
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash
 ```
+
+### Pin a release (recommended for CI / production)
+
+`main` moves; for reproducible installs use a [release tag](https://github.com/Hei-Tech-Inc/ctx/tags):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.1.1/install.sh | bash
+```
+
+Replace `v3.1.1` with the tag you trust (see [`lib/core.sh`](lib/core.sh) for `CTX_VERSION` on that ref). See [`packaging/README.md`](packaging/README.md) for Homebrew/Linux packaging notes.
 
 ### From source
 
@@ -68,6 +78,16 @@ ctx upgrade
 ```
 
 This re-runs `install.sh` from GitHub and refreshes the `ctx` binary + library scripts. Your `~/.ctx` profiles/config are preserved.
+
+---
+
+## Security
+
+**Threat model (short):** `ctx` is a shell-based installer and CLI. It writes configuration under your home directory (`~/.ctx`, `~/.ssh/ctx_config` plus an `Include` line in `~/.ssh/config`, `~/.gitconfig` includes, `~/.config/git/`, client work trees). It can store secrets in the macOS Keychain or in `~/.ctx/secrets/` on other OSes. It runs external tools you already use (`git`, `gh`, `ssh`, cloud CLIs).
+
+The default one-liner trusts **TLS to GitHub** and executes **`install.sh` from the ref you choose** (`main` or a tag). Pinning a **tagged** URL reduces moving-target risk.
+
+Report vulnerabilities privately: see [`SECURITY.md`](SECURITY.md).
 
 ---
 
@@ -127,7 +147,8 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 
 | Command | Description |
 |---------|-------------|
-| `ctx verify [name]` | Check work dir, SSH host block + `ssh -T`, `gh` user, and email shape |
+| `ctx verify [name]` | **One profile:** live `ssh -T` to `github-<profile>`, `gh` account vs profile, work dir, key file, email shape |
+| `ctx doctor` | **Whole machine:** required tools on `PATH`, mise/ctx shell hooks, SSH `Include` for `ctx_config`, quick sanity on every profile’s paths (no per-host `ssh -T`) |
 | `ctx edit <name>` | Open profile config in `$EDITOR` |
 | `ctx remove <name>` | Delete profile + stored secrets |
 | `ctx undo` | Restore last backup |
@@ -135,9 +156,11 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 | `ctx upgrade` | Re-run installer to update `ctx` (preserves `~/.ctx`) |
 | `ctx upgrade --check` | Compare installed version to `main` on GitHub (no install) |
 | `ctx uninstall [--purge]` | Remove `ctx` binary + lib from install location; `--purge` deletes `~/.ctx` |
-| `ctx doctor` | Full health check |
-| `ctx completion <zsh\|bash>` | Print shell completion script |
+| `ctx doctor` | Full health check (see **doctor vs verify** below) |
+| `ctx completion <zsh\|bash\|fish>` | Print shell completion script |
 | `ctx version` | Print version |
+
+**doctor vs verify:** run **`ctx doctor`** after install or when something feels “broken globally” (missing tools, hooks, SSH include). Run **`ctx verify`** (optional profile name) when Git/SSH/`gh` misbehave for **that client** — it performs a live GitHub SSH auth check for `github-<profile>`.
 
 ### Flags
 
@@ -211,6 +234,13 @@ ctx completion zsh > "${fpath[1]}/_ctx"
 
 ```bash
 ctx completion bash >> ~/.bashrc
+```
+
+### fish
+
+```fish
+mkdir -p ~/.config/fish/completions
+ctx completion fish > ~/.config/fish/completions/ctx.fish
 ```
 
 ---

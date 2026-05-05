@@ -5,7 +5,7 @@
 
 set -uo pipefail
 
-CTX_VERSION="3.1.0"
+CTX_VERSION="3.1.1"
 CTX_REPO="https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────

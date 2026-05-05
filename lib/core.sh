@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx/lib/core.sh — v3: adds mise.toml support, safe isolated SSH config
 
-CTX_VERSION="3.1.0"
+CTX_VERSION="3.1.1"
 CTX_DIR="${CTX_DIR:-$HOME/.ctx}"
 CTX_CONFIG="${CTX_DIR}/config"
 CTX_PROFILES_DIR="${CTX_DIR}/profiles"

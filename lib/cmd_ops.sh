@@ -478,6 +478,8 @@ cmd_verify() {
   load_profile "$name"
 
   bold "\n  ctx verify: $name\n"
+  dim "  One profile — live ssh -T to github-${name}, gh vs profile, paths, email."
+  echo ""
 
   local ok=true
   local host="github-${name}"
@@ -698,6 +700,10 @@ cmd_doctor() {
     bold "\n  ctx doctor\n"
   fi
 
+  dim "  Machine-wide — tools on PATH, shell hooks, SSH Include → ctx_config, profile files."
+  dim "  For live GitHub SSH auth for one client, run: ctx verify <name>"
+  echo ""
+
   local all_ok=true
 
   _chk() {
@@ -854,7 +860,7 @@ cmd_init() {
   bold "  Next steps:"
   echo ""
   echo "  ctx setup     Configure your first client profile"
-  echo "  ctx doctor    Full health check"
+  echo "  ctx doctor    Tools, hooks, SSH layout (see also: ctx verify <profile>)"
   echo ""
 }
 

@@ -4,14 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-05-05
+
 ### Added
-- Open-source project hygiene files, templates, and CI linting.
-- `ctx clone` helper for GitHub SSH host rewriting; `ctx verify`, `ctx uninstall`, and `ctx upgrade --check`.
+- CI runs `test/test.sh` on Ubuntu alongside ShellCheck.
+- `SECURITY.md`; fish completions (`ctx completion fish`); `packaging/README.md`.
 
 ### Changed
-- Hardened profile generation and git identity writes against injection.
-- Added Linux-aware keychain behavior and cloud CLI timeouts.
-- Improved shell hook support and doctor install hints.
+- README: security/threat-model summary, pinned release install URL, doctor vs verify guidance; CONTRIBUTING/PR template aligned with CI.
 
 ## [3.1.0] - 2026-05-05
 

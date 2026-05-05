@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ctx — client context switcher v3.1.0
+# ctx — client context switcher v3.1.1
 # https://github.com/Hei-Tech-Inc/ctx
 
 set -uo pipefail
@@ -61,14 +61,14 @@ cmd_help() {
       "$(gum style --faint "MAINTENANCE")" \
       "  config [show]    Show ctx config values" \
       "  config work-root Set default client directory root" \
-      "  verify [name]    Check profile paths, SSH, gh, email" \
+      "  verify [name]    One profile: live ssh -T, gh match, paths, email" \
       "  edit   <name>    Open profile in \$EDITOR" \
       "  remove <name>    Delete profile + secrets" \
       "  undo             Restore last backup" \
       "  install-hook     Install mise + ctx hooks into shell rc" \
       "  upgrade [--check] Re-run installer, or check for newer version" \
       "  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe" \
-      "  doctor           Full health check" \
+      "  doctor           Machine-wide: tools, hooks, SSH layout, profiles" \
       "  version          Print version" \
       "" \
       "$(gum style --faint "FLAGS")" \
@@ -100,15 +100,15 @@ ${BOLD}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${
 ${BOLD}MAINTENANCE${RESET}
   config [show]         Show ctx config values
   config work-root <p>  Set default client directory root
-  verify [name]         Check profile paths, SSH, gh, email
+  verify [name]         One profile: live ssh -T, gh match, paths, email
   edit   <name>         Open profile config in \$EDITOR
   remove <name>         Delete profile + stored secrets
   undo                  Restore last backup
   install-hook [rc]     Install mise + ctx hooks into shell rc
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
-  doctor                Full health check
-  completion <zsh|bash> Print shell completion script
+  doctor                Machine-wide: tools, hooks, SSH layout, all profiles
+  completion <zsh|bash|fish> Print shell completion script
   version               Print version
 
 ${BOLD}FLAGS${RESET}
@@ -176,7 +176,7 @@ _ctx() {
         config) local sub=('show' 'work-root'); _describe 'subcommands' sub ;;
         upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
         uninstall) local sub=('--purge'); _describe 'uninstall flags' sub ;;
-        completion) local sh=('zsh' 'bash'); _describe 'shells' sh ;;
+        completion) local sh=('zsh' 'bash' 'fish'); _describe 'shells' sh ;;
       esac ;;
     4)
       case ${words[2]} in
@@ -206,6 +206,7 @@ _ctx_comp() {
     config) COMPREPLY=($(compgen -W "show work-root" -- "$cur")) ;;
     upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     uninstall) COMPREPLY=($(compgen -W "--purge" -- "$cur")) ;;
+    completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
     ctx) COMPREPLY=($(compgen -W "$cmds" -- "$cur")) ;;
   esac
   if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
@@ -218,7 +219,34 @@ _ctx_comp() {
 complete -F _ctx_comp ctx
 BASH
     ;;
-    *) die "Unknown shell: $shell. Supported: zsh, bash" ;;
+    fish) cat <<'FISH'
+function __fish_ctx_profiles
+    ctx list 2>/dev/null | awk '/^  [a-z]/ {print $1}'
+end
+
+complete -c ctx -f
+
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
+
+complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx remove' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx verify' -a '(__fish_ctx_profiles)'
+
+complete -c ctx -n '__fish_seen_subcommand_from ctx secret' -a 'set get list delete'
+complete -c ctx -n '__fish_seen_subcommand_from ctx secret set' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx secret get' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx secret delete' -a '(__fish_ctx_profiles)'
+
+complete -c ctx -n '__fish_seen_subcommand_from ctx config' -a 'show work-root'
+complete -c ctx -n '__fish_seen_subcommand_from ctx upgrade' -a '--check'
+complete -c ctx -n '__fish_seen_subcommand_from ctx uninstall' -a '--purge'
+complete -c ctx -n '__fish_seen_subcommand_from ctx completion' -a 'zsh bash fish'
+
+complete -c ctx -n '__fish_seen_subcommand_from ctx clone' -s p -l profile -d 'Profile' -a '(__fish_ctx_profiles)'
+FISH
+    ;;
+    *) die "Unknown shell: $shell. Supported: zsh, bash, fish" ;;
   esac
 }
 
