@@ -14,10 +14,10 @@ Replace `v3.1.1` with the tag you want. Check `CTX_VERSION` in `lib/core.sh` on 
 
 Ready-made formula and publish steps live under **[`packaging/homebrew-tap/`](homebrew-tap/)**.
 
-That directory is designed to be copied into its **own** repo **`Hei-Tech-Inc/homebrew-tap`** so users can run:
+Publish into **`https://github.com/isaackumi/homebrew-tap`** so users can run:
 
 ```bash
-brew tap Hei-Tech-Inc/tap
+brew tap isaackumi/tap
 brew install ctx
 ```
 

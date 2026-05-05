@@ -1,0 +1,17 @@
+#!/bin/sh
+# If the IDE appended a vendor co-author line after other hooks, strip it from HEAD (same tree).
+case "${GIT_HOOK_CURSOR_POST:-}" in 1) exit 0 ;; esac
+
+msg=$(git log -1 --format=%B 2>/dev/null) || exit 0
+echo "$msg" | grep -qiE 'cursoragent|co-authored-by:[^\n]*cursor|co-authored-by:[^\n]*@cursor\.com' || exit 0
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT INT HUP
+git log -1 --format=%B | perl -0777 -pe 's/^Co-[Aa]uthored-[Bb]y:[^\n]*(cursor|cursoragent|\@cursor\.com)[^\n]*\n//gmi' > "$tmp"
+
+export GIT_HOOK_CURSOR_POST=1
+GIT_COMMITTER_DATE=$(git log -1 --format=%cI)
+export GIT_COMMITTER_DATE
+git commit --amend -F "$tmp" --no-edit >/dev/null 2>&1 || true
+trap - EXIT INT HUP
+rm -f "$tmp"

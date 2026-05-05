@@ -61,10 +61,10 @@ Replace `v3.1.1` with the tag you trust (see [`lib/core.sh`](lib/core.sh) for `C
 
 ### Homebrew (tap)
 
-After you publish the tap repo **`Hei-Tech-Inc/homebrew-tap`** (see [`packaging/homebrew-tap/README.md`](packaging/homebrew-tap/README.md)):
+After the tap repo is pushed (**[`isaackumi/homebrew-tap`](https://github.com/isaackumi/homebrew-tap)** — see [`packaging/homebrew-tap/README.md`](packaging/homebrew-tap/README.md)):
 
 ```bash
-brew tap Hei-Tech-Inc/tap
+brew tap isaackumi/tap
 brew install ctx
 ```
 

@@ -1,11 +1,11 @@
 #!/bin/sh
-# Strip automation co-author lines that mention Cursor before the message is finalized.
-# Pair with commit-msg (blocks any remaining 'cursor' substring).
+# Strip vendor automation co-author lines before the commit is recorded.
+# Cursor may inject trailers — remove any Co-authored-by line matching that vendor.
 # Enable: git config core.hooksPath scripts/git-hooks
 set -e
 msg_file="${1:?}"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT INT HUP
-perl -0777 -pe 's/^Co-authored-by:.*cursor.*\n//gmi' "$msg_file" > "$tmp"
+perl -0777 -pe 's/^Co-[Aa]uthored-[Bb]y:[^\n]*(cursor|cursoragent|\@cursor\.com)[^\n]*\n//gmi' "$msg_file" > "$tmp"
 mv "$tmp" "$msg_file"
 trap - EXIT INT HUP

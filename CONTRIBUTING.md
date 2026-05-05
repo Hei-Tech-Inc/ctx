@@ -22,7 +22,7 @@ Use clear, imperative messages describing user-facing value.
 
 - **Do not commit** local IDE metadata folders listed in `.gitignore`. Rely on repo scripts and CI, not editor-specific metadata.
 - **Contributors:** GitHub counts `Co-authored-by:` lines. Disable automated “co-author” / agent attribution in your editor so vendors do not appear as contributors.
-- **Hooks (recommended):** run `./scripts/install-git-hooks.sh` — installs `commit-msg` (blocks vendor-related wording) and `prepare-commit-msg` (strips vendor co-author lines). See `scripts/git-hooks/README.md`.
+- **Hooks (required if you use AI-assisted commits):** run `./scripts/install-git-hooks.sh` — installs `prepare-commit-msg`, `commit-msg`, and **`post-commit`** (amends off any trailer that still slips through). See `scripts/git-hooks/README.md`.
 - If your editor still injects automation trailers after `git commit`, use plain **`git`** from a terminal, turn off that editor’s Git integration for this repo, or ask a maintainer to record commits with `git commit-tree` so hooks cannot append trailers.
 
 ### GitHub still lists an IDE vendor under “Contributors”?
