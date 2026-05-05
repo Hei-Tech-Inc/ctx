@@ -1,10 +1,11 @@
 #!/bin/sh
-# Drop Cursor IDE co-author trailers so they never register as Git contributors.
-# Enable for this repo: git config core.hooksPath scripts/git-hooks
+# Strip automation co-author lines that mention Cursor before the message is finalized.
+# Pair with commit-msg (blocks any remaining 'cursor' substring).
+# Enable: git config core.hooksPath scripts/git-hooks
 set -e
 msg_file="${1:?}"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT INT HUP
-sed '/^Co-authored-by: Cursor <cursoragent@cursor.com>$/d' "$msg_file" > "$tmp"
+perl -0777 -pe 's/^Co-authored-by:.*cursor.*\n//gmi' "$msg_file" > "$tmp"
 mv "$tmp" "$msg_file"
 trap - EXIT INT HUP

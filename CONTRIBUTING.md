@@ -20,8 +20,22 @@ Use clear, imperative messages describing user-facing value.
 
 ## Git and automation tooling
 
-- **Do not commit** local IDE folders such as `.cursor/` (they are gitignored). Rely on repo scripts and CI, not editor-specific metadata.
-- **Contributors:** GitHub counts `Co-authored-by:` lines in commit messages. **Do not** add `Co-authored-by: Cursor <cursoragent@cursor.com>` (disable “add co-author” / agent attribution in Cursor’s Git settings). To strip that trailer automatically if your client adds it, enable `scripts/git-hooks` — see `scripts/git-hooks/README.md`.
+- **Do not commit** local IDE metadata folders listed in `.gitignore`. Rely on repo scripts and CI, not editor-specific metadata.
+- **Contributors:** GitHub counts `Co-authored-by:` lines. Disable automated “co-author” / agent attribution in your editor so vendors do not appear as contributors.
+- **Hooks (recommended):** run `./scripts/install-git-hooks.sh` — installs `commit-msg` (blocks vendor-related wording) and `prepare-commit-msg` (strips vendor co-author lines). See `scripts/git-hooks/README.md`.
+- If your editor still injects automation trailers after `git commit`, use plain **`git`** from a terminal, turn off that editor’s Git integration for this repo, or ask a maintainer to record commits with `git commit-tree` so hooks cannot append trailers.
+
+### GitHub still lists an IDE vendor under “Contributors”?
+
+The sidebar can lag **hours or days** after a history rewrite or force-push. This repo’s **`git-history-hygiene`** CI job proves current `main` has **no** vendor emails and **no** `Co-authored-by:` lines mentioning that IDE. To double-check locally:
+
+```bash
+git fetch origin
+git shortlog -sne origin/main
+git log origin/main --format='%B' | grep -iE '^co-authored-by:.*cursor' || echo 'no vendor co-author trailers'
+```
+
+If CI is green but the UI still shows the bot, wait for GitHub to refresh the graph or contact [GitHub Support](https://support.github.com/) — there is no per-user “remove contributor” button.
 
 ## Tests
 

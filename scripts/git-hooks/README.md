@@ -1,15 +1,21 @@
 # Git hooks (optional)
 
-## `prepare-commit-msg`
-
-Removes the trailer `Co-authored-by: Cursor <cursoragent@cursor.com>` if your editor adds it, so **Cursor does not appear as a contributor** on GitHub.
-
-Enable for this clone:
+Enable once per clone:
 
 ```bash
-git config core.hooksPath scripts/git-hooks
-chmod +x scripts/git-hooks/prepare-commit-msg
+./scripts/install-git-hooks.sh
 ```
+
+This sets `core.hooksPath` to `scripts/git-hooks` and marks hooks executable.
+
+## Hooks
+
+| Hook | Role |
+|------|------|
+| `prepare-commit-msg` | Drops `Co-authored-by:` lines that reference automation/agent vendors (pattern matches vendor emails). |
+| `commit-msg` | **Blocks** the substring linked to a commercial IDE **unless** allowlisted (gum `--…` flags and the `.…/` metadata folder path). |
+
+Together they prevent editor automation from appearing as a Git **contributor**.
 
 Disable:
 
@@ -17,4 +23,4 @@ Disable:
 git config --unset core.hooksPath
 ```
 
-GitHub contributor counts are driven by commit **authors** and **`Co-authored-by:`** lines in commit messages. This hook only strips that specific Cursor trailer.
+GitHub contributor graphs use commit authors plus **`Co-authored-by:`** trailers — keep hooks enabled when using AI-assisted commits.

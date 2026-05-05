@@ -1,0 +1,16 @@
+#!/bin/sh
+# Reject commit messages that contain "cursor" (case-insensitive), after allowlisting:
+#   - gum flags: --cursor.<suffix>
+#   - gitignored path: .cursor/
+set -e
+msg="${1:?}"
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT INT HUP
+perl -pe 's/--cursor\.[a-zA-Z0-9_.-]+/__gum__/g; s#\.cursor/#.__ide__/#g' "$msg" > "$tmp"
+if grep -qi 'cursor' "$tmp"; then
+  echo "Rejected: commit message contains a blocked IDE vendor substring." >&2
+  echo "Tip: describe IDE dirs without the vendor token; gum pointer flags are allowlisted." >&2
+  exit 1
+fi
+trap - EXIT INT HUP
+rm -f "$tmp"

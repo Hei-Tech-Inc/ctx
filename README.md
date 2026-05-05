@@ -1,5 +1,9 @@
 # ctx — client context switcher
 
+[![CI](https://github.com/Hei-Tech-Inc/ctx/actions/workflows/ci.yml/badge.svg)](https://github.com/Hei-Tech-Inc/ctx/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Hei-Tech-Inc/ctx?label=release)](https://github.com/Hei-Tech-Inc/ctx/releases)
+[![license](https://img.shields.io/github/license/Hei-Tech-Inc/ctx)](LICENSE)
+
 Switch between client environments in one command. `ctx use acme` rotates your git identity, GitHub account, SSH key, AWS profile, GCP project, Azure subscription, kubectl context, and Keychain secrets — instantly.
 
 ```

@@ -5,12 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- CI job **git-history-hygiene** rejects vendor-bot emails or `Co-authored-by:` lines mentioning the IDE on `main`.
 - Smoke test: `bin/ctx version` matches `CTX_VERSION` from `lib/core.sh`.
 - GitHub Actions publishes a GitHub Release when a `v*` tag is pushed.
-- Optional `scripts/git-hooks/prepare-commit-msg` to drop Cursor co-author trailers; `.cursor/` gitignored; CONTRIBUTING policy for contributor hygiene.
+- `commit-msg` hook rejects IDE vendor substrings in messages (with gum/path allowlists); `prepare-commit-msg` strips problematic `Co-authored-by:` lines; `./scripts/install-git-hooks.sh`; README badges for CI, release, license.
 
 ### Changed
-- Rewrote git history on `main` to remove `Co-authored-by: Cursor` trailers (no Cursor as contributor from past commits).
+- Rewrote git messages that referenced IDE tooling or gum pointer flags so `git log` no longer surfaces banned substrings; CONTRIBUTING updated for hooks + hygiene.
 
 ## [3.1.1] - 2026-05-05
 

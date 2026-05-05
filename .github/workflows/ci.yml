@@ -13,7 +13,7 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck
-        run: shellcheck -x -S warning bin/ctx lib/*.sh install.sh test/*.sh
+        run: shellcheck -x -S warning bin/ctx lib/*.sh install.sh test/*.sh scripts/install-git-hooks.sh scripts/git-hooks/commit-msg scripts/git-hooks/prepare-commit-msg
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -21,3 +21,28 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run unit tests
         run: bash test/test.sh
+
+  # Ensures default-branch history never credits the IDE vendor bot (GitHub Contributors graph keys off authors + Co-authored-by lines).
+  git-history-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fail if vendor bot appears in authors or co-author trailers
+        run: |
+          set -euo pipefail
+          if git log --format='%ae%n%ce' HEAD | grep -qiE 'cursoragent|@cursor\.com'; then
+            echo "Blocked: commit author/committer email references IDE vendor bot." >&2
+            git log --format='%h %ae %ce' HEAD | grep -iE 'cursoragent|@cursor\.com' >&2 || true
+            exit 1
+          fi
+          if git log --format='%an%n%cn' HEAD | grep -qi cursoragent; then
+            echo "Blocked: commit author/committer name references IDE vendor bot." >&2
+            exit 1
+          fi
+          if git log --format='%B' HEAD | grep -iE '^co-authored-by:.*cursor'; then
+            echo "Blocked: Co-authored-by trailer references IDE vendor." >&2
+            exit 1
+          fi
+          echo "OK: git history has no vendor-bot attribution."
