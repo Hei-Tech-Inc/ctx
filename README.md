@@ -59,6 +59,16 @@ bash install.sh
 source ~/.zshrc   # or ~/.bashrc
 ```
 
+### Upgrade
+
+After `ctx` is installed, you can update to the latest `main` release with:
+
+```bash
+ctx upgrade
+```
+
+This re-runs `install.sh` from GitHub and refreshes the `ctx` binary + library scripts. Your `~/.ctx` profiles/config are preserved.
+
 ---
 
 ## Getting started
@@ -118,6 +128,7 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 | `ctx remove <name>` | Delete profile + Keychain secrets |
 | `ctx undo` | Restore last backup |
 | `ctx install-hook [rc]` | Install mise + ctx hooks into shell rc |
+| `ctx upgrade` | Re-run installer to update `ctx` (preserves `~/.ctx`) |
 | `ctx doctor` | Full health check |
 | `ctx completion <zsh\|bash>` | Print shell completion script |
 | `ctx version` | Print version |

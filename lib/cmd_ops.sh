@@ -382,6 +382,55 @@ cmd_config() {
   esac
 }
 
+# ─── upgrade ──────────────────────────────────────────────────────────────────
+cmd_upgrade() {
+  local repo="${CTX_UPGRADE_REPO:-https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main}"
+  local url="${repo}/install.sh"
+  local ctx_bin install_bin install_lib lib_line
+
+  ctx_bin="$(command -v ctx 2>/dev/null || true)"
+  [[ -z "$ctx_bin" ]] && die "ctx not found in PATH — install first: curl -fsSL ${url} | bash"
+
+  if [[ -f "$ctx_bin" ]]; then
+    lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
+    if [[ "$lib_line" =~ CTX_LIB=\"([^\"]+)\" ]]; then
+      install_lib="${BASH_REMATCH[1]}"
+      install_bin="$(dirname "$ctx_bin")"
+    fi
+  fi
+
+  bold "\n  ctx upgrade\n"
+  dim "  Source: $url"
+  [[ -n "${install_bin:-}" && -n "${install_lib:-}" ]] \
+    && dim "  Target: $ctx_bin + $install_lib" \
+    || dim "  Target: default install paths (see installer output)"
+  echo ""
+  info "This re-runs the official installer. Your ~/.ctx profiles are kept."
+  ask_yn "Continue?" "y" || die "Aborted."
+
+  local tmp
+  tmp="$(mktemp)" || die "Could not create temp file"
+  if command -v curl &>/dev/null; then
+    curl -fsSL "$url" -o "$tmp" || die "Download failed: $url"
+  elif command -v wget &>/dev/null; then
+    wget -qO "$tmp" "$url" || die "Download failed: $url"
+  else
+    rm -f "$tmp"
+    die "Need curl or wget to download install.sh"
+  fi
+
+  export CTX_REPO="$repo"
+  [[ -n "${install_bin:-}" ]] && export CTX_INSTALL_BIN="$install_bin"
+  [[ -n "${install_lib:-}" ]] && export CTX_INSTALL_LIB="$install_lib"
+
+  bash "$tmp" || die "Upgrade installer failed"
+  rm -f "$tmp"
+
+  echo ""
+  success "Upgrade finished. Reload your shell if hooks changed: source ~/.zshrc"
+  echo ""
+}
+
 # ─── undo ─────────────────────────────────────────────────────────────────────
 cmd_undo() {
   local latest; latest=$(latest_backup)

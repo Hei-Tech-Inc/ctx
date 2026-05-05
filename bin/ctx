@@ -64,6 +64,7 @@ cmd_help() {
       "  remove <name>    Delete profile + secrets" \
       "  undo             Restore last backup" \
       "  install-hook     Install mise + ctx hooks into shell rc" \
+      "  upgrade          Re-run installer (update ctx binary + libs)" \
       "  doctor           Full health check" \
       "  version          Print version" \
       "" \
@@ -99,6 +100,7 @@ ${BOLD}MAINTENANCE${RESET}
   remove <name>         Delete profile + Keychain secrets
   undo                  Restore last backup
   install-hook [rc]     Install mise + ctx hooks into shell rc
+  upgrade               Re-run installer (update ctx binary + libs)
   doctor                Full health check
   completion <zsh|bash> Print shell completion script
   version               Print version
@@ -148,6 +150,7 @@ _ctx() {
     'remove:Delete a profile'
     'undo:Restore last backup'
     'install-hook:Install shell hooks'
+    'upgrade:Update ctx via installer'
     'doctor:Health check'
     'completion:Print shell completion'
     'version:Print version'
@@ -172,7 +175,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use list status config secret edit remove undo install-hook doctor completion version help"
+  local cmds="init setup import add use list status config secret edit remove undo install-hook upgrade doctor completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   case "$prev" in
     use|edit|remove) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
@@ -210,6 +213,7 @@ main() {
     remove|rm|del)    cmd_remove "${1:-}" ;;
     undo)             cmd_undo ;;
     install-hook)     cmd_install_hook "${1:-}" ;;
+    upgrade)          cmd_upgrade ;;
     doctor)           cmd_doctor ;;
     completion)       cmd_completion "${1:-zsh}" ;;
     version|-v|--version) echo "ctx version $CTX_VERSION" ;;
