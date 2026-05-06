@@ -212,23 +212,23 @@ github-<profile>
 **Clone private repos using that host**, so Git uses the correct key:
 
 ```bash
-git clone git@github-points-africa:Points-Africa/pa-pale.git
+git clone git@github-acme:Acme-Corp/example-app.git
 ```
 
 Or use the helper (uses the active profile, or `-p`):
 
 ```bash
-ctx clone git@github.com:Points-Africa/pa-pale.git
+ctx clone git@github.com:Acme-Corp/example-app.git
 # same effect as git@github-<active-profile>:...
 
-ctx clone -p points-africa https://github.com/Points-Africa/pa-pale.git
+ctx clone -p acme https://github.com/Acme-Corp/example-app.git
 # optional HTTPS → SSH rewrite (prompted)
 ```
 
 For arbitrary `git clone` flags, pass them after `--`:
 
 ```bash
-ctx clone -- -b main --depth 1 git@github.com:Points-Africa/pa-pale.git ./pa-pale
+ctx clone -- -b main --depth 1 git@github.com:Acme-Corp/example-app.git ./example-app
 ```
 
 Avoid `git@github.com:...` for client work — it often picks your *default* SSH key and GitHub will respond with “repository not found” for private repos.
