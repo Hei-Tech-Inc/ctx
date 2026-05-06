@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **`ctx upgrade`:** runs an **in-place** install (`CTX_UPGRADE_ONLY`) — updates only the `ctx` binary and `lib/*.sh`; skips Homebrew/mise/gum/gh steps, shell-rc snippets, and the auto-switch hook installer so existing profiles and client directories are not disturbed by noise or side effects.
 - **`ctx clone`:** stopped passing the repository URL twice to `git clone` (second argument was treated as the target directory, producing folders named like `git@github.com:…`).
 - **`ctx list`:** dim lines use `echo -e` so ANSI styling renders instead of literal `\033[…`.
 - **Installer:** patch `CTX_LIB` only on the bootstrap line of `bin/ctx` (not a broad `CTX_LIB=.*` replace) so the installed script cannot be corrupted during upgrade.

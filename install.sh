@@ -2,6 +2,8 @@
 # ctx installer — sets up everything so the user doesn't have to
 # Usage: bash install.sh
 # Remote: curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash
+#
+# In-place upgrade only (binary + lib — no Homebrew/mise/touch ~/.ctx): CTX_UPGRADE_ONLY=1 bash install.sh
 
 set -uo pipefail
 
@@ -81,19 +83,21 @@ detect_shell_rc() {
 SHELL_RC="$(detect_shell_rc)"
 SHELL_NAME="$(basename "$SHELL")"
 
-# ─── Header ───────────────────────────────────────────────────────────────────
-# Some terminals hide/garble output after forced clear; keep scrollback by default.
-if [[ -t 1 && "${CTX_NO_CLEAR:-0}" != "1" ]]; then
-  clear 2>/dev/null || true
+# ─── Header (skipped for CTX_UPGRADE_ONLY — no clear/banner noise) ────────────
+if [[ "${CTX_UPGRADE_ONLY:-0}" != "1" ]]; then
+  # Some terminals hide/garble output after forced clear; keep scrollback by default.
+  if [[ -t 1 && "${CTX_NO_CLEAR:-0}" != "1" ]]; then
+    clear 2>/dev/null || true
+  fi
+  echo ""
+  bold "  ctx v${CTX_VERSION} — client context switcher"
+  dim  "  Sets up everything you need. No manual steps."
+  echo ""
+  dim "  OS      : $OS ($ARCH)"
+  dim "  Shell   : $SHELL_NAME → $SHELL_RC"
+  echo ""
+  print_ctx_banner
 fi
-echo ""
-bold "  ctx v${CTX_VERSION} — client context switcher"
-dim  "  Sets up everything you need. No manual steps."
-echo ""
-dim  "  OS      : $OS ($ARCH)"
-dim  "  Shell   : $SHELL_NAME → $SHELL_RC"
-echo ""
-print_ctx_banner
 
 # ─── Homebrew ─────────────────────────────────────────────────────────────────
 install_homebrew() {
@@ -487,6 +491,19 @@ print_next_steps() {
 
 # ─── Main installation sequence ───────────────────────────────────────────────
 main() {
+  # Invoked by `ctx upgrade`: refresh ctx binary + libs only; do not install tools,
+  # append shell rc snippets, or touch ~/.ctx profiles / client directories.
+  if [[ "${CTX_UPGRADE_ONLY:-0}" == "1" ]]; then
+    echo ""
+    bold "  ctx upgrade (in-place)"
+    dim "  Updating the ctx program only (~/.ctx profiles and client trees are unchanged)."
+    echo ""
+    install_ctx
+    echo ""
+    dim "  Open a new terminal or: source $SHELL_RC"
+    return 0
+  fi
+
   step "1/7" "Homebrew"
   install_homebrew
 

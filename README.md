@@ -168,7 +168,7 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 | `ctx remove <name>` | Delete profile + stored secrets |
 | `ctx undo` | Restore last backup |
 | `ctx install-hook [rc]` | Install mise + ctx hooks into shell rc |
-| `ctx upgrade` | Re-run installer to update `ctx` (preserves `~/.ctx`) |
+| `ctx upgrade` | Update `ctx` binary + libs in place — leaves `~/.ctx` profiles and client dirs alone (no full installer pass) |
 | `ctx upgrade --check` | Compare installed version to `main` on GitHub (no install) |
 | `ctx uninstall [--purge]` | Remove `ctx` binary + lib from install location; `--purge` deletes `~/.ctx` |
 | `ctx doctor` | Full health check (see **doctor vs verify** below) |

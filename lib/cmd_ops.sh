@@ -644,7 +644,7 @@ cmd_upgrade() {
     && dim "  Target: $ctx_bin + $install_lib" \
     || dim "  Target: default install paths (see installer output)"
   echo ""
-  info "This re-runs the official installer. Your ~/.ctx profiles are kept."
+  info "Updates ctx binary + libraries only — ~/.ctx profiles, secrets, client dirs, and shell hooks are not modified."
   ask_yn "Continue?" "y" || die "Aborted."
 
   local tmp
@@ -669,14 +669,18 @@ cmd_upgrade() {
   fi
 
   export CTX_REPO="$repo"
+  export CTX_UPGRADE_ONLY=1
   [[ -n "${install_bin:-}" ]] && export CTX_INSTALL_BIN="$install_bin"
   [[ -n "${install_lib:-}" ]] && export CTX_INSTALL_LIB="$install_lib"
 
   bash "$tmp" || die "Upgrade installer failed"
   rm -f "$tmp"
 
+  unset CTX_UPGRADE_ONLY 2>/dev/null || true
+
   echo ""
-  success "Upgrade finished. Reload your shell if hooks changed: source ~/.zshrc"
+  success "Upgrade finished."
+  dim "  Open a new terminal or reload your shell if PATH looks stale."
   echo ""
 }
 
