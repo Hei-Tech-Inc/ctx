@@ -6,7 +6,7 @@ set -uo pipefail
 
 # ─── Locate libs ──────────────────────────────────────────────────────────────
 CTX_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CTX_LIB="$(cd "$CTX_BIN/../lib" 2>/dev/null && pwd || echo "$CTX_BIN")"
+CTX_LIB="$(cd "$CTX_BIN/../lib" 2>/dev/null && pwd || echo "$CTX_BIN")" # install.sh replaces this line when installing
 
 [[ -f "$CTX_LIB/core.sh"       ]] || CTX_LIB="$CTX_BIN"
 [[ -f "$CTX_LIB/core.sh"       ]] || { echo "ctx: cannot find lib/core.sh" >&2; exit 1; }

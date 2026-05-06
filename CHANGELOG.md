@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **`ctx clone`:** stopped passing the repository URL twice to `git clone` (second argument was treated as the target directory, producing folders named like `git@github.com:…`).
+- **`ctx list`:** dim lines use `echo -e` so ANSI styling renders instead of literal `\033[…`.
+- **Installer:** patch `CTX_LIB` only on the bootstrap line of `bin/ctx` (not a broad `CTX_LIB=.*` replace) so the installed script cannot be corrupted during upgrade.
+
 ### Changed
 - Git hooks: stronger vendor co-author stripping; **`post-commit`** amends `HEAD` if a trailer still appears; `install-git-hooks.sh` installs all hook scripts.
 

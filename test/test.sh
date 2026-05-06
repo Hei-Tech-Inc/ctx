@@ -28,6 +28,19 @@ test_timeout_helper() {
   pass "timeout helper"
 }
 
+test_clone_extra_args_drop_url() {
+  # Mirrors cmd_clone (non --): git clone <rewritten-url> only gets optional args after URL.
+  local rest=(git@github.com:Org/repo.git my-dir)
+  local url="${rest[0]}"
+  local after=() _i
+  for ((_i = 1; _i < ${#rest[@]}; _i++)); do
+    after+=("${rest[_i]}")
+  done
+  [[ "$url" == "git@github.com:Org/repo.git" ]] || fail "url token"
+  [[ ${#after[@]} -eq 1 && "${after[0]}" == "my-dir" ]] || fail "after argv: ${after[*]}"
+  pass "clone extra args (drop URL)"
+}
+
 test_github_clone_url_for_profile() {
   local o
   o="$(github_clone_url_for_profile "acme" "git@github.com:Org/repo.git" "n")"
@@ -89,6 +102,7 @@ test_ctx_cli_version() {
 
 test_valid_env_keys
 test_timeout_helper
+test_clone_extra_args_drop_url
 test_github_clone_url_for_profile
 test_parse_ctx_version_from_core_sh_file
 test_secret_file_path

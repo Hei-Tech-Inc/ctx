@@ -372,8 +372,10 @@ install_ctx() {
   local sed_inplace=(-i)
   $IS_MAC && sed_inplace=(-i '')
 
+  # Replace only line 9 of bin/ctx (CTX_LIB bootstrap probe; see comment on that line).
+  # A broad `CTX_LIB=.*` match across the whole file can corrupt completion blocks.
   sed "${sed_inplace[@]}" \
-    "s|CTX_LIB=.*|CTX_LIB=\"${install_lib}\"|" \
+    "9s|^CTX_LIB=.*|CTX_LIB=\"${install_lib}\"|" \
     "$install_bin/ctx" 2>/dev/null || true
 
   success "ctx: installed at $install_bin/ctx"

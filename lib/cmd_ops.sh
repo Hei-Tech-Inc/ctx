@@ -259,7 +259,7 @@ cmd_list() {
     [[ -n "${SECRET_KEYS:-}"       ]] && tags+=("$(echo "$SECRET_KEYS" | wc -w | tr -d ' ') secrets")
 
     echo -e "  ${BOLD}${pname}${RESET}${marker}"
-    echo    "  ${DIM}${GIT_NAME:-—} <${GIT_EMAIL:-—}>${RESET}"
+    echo -e "  ${DIM}${GIT_NAME:-—} <${GIT_EMAIL:-—}>${RESET}"
     [[ ${#tags[@]} -gt 0 ]] && echo -e "  ${DIM}$(IFS=' | '; echo "${tags[*]}")${RESET}"
     echo ""
   done
@@ -391,7 +391,7 @@ cmd_config() {
 
 # ─── clone ────────────────────────────────────────────────────────────────────
 cmd_clone() {
-  local prof="" url="" clone_args=() rest=() seen_dd=false i idx="" tok
+  local prof="" url="" rest=() seen_dd=false i idx="" tok
 
   _clone_token_is_url() {
     [[ "$1" == *://* ]] && return 0
@@ -431,11 +431,9 @@ cmd_clone() {
     done
     [[ -n "$idx" ]] || die "Could not find a repo URL in: ctx clone ... -- ${rest[*]}"
     url="${rest[$idx]}"
-    clone_args=("${rest[@]}")
   else
     [[ ${#rest[@]} -ge 1 ]] || die "Usage: ctx clone [-p|--profile <name>] <repo-url> [git-clone-args...]"
     url="${rest[0]}"
-    clone_args=("${rest[@]}")
   fi
 
   ctx_init_dirs
@@ -465,7 +463,24 @@ cmd_clone() {
     fi
   fi
 
-  git clone "$clone_url" "${clone_args[@]}"
+  # Do not pass the original <repo-url> to git again — a second arg is the target
+  # directory, so we would create a folder named like the full URL.
+  if $seen_dd; then
+    local before=() after=() _i
+    for ((_i = 0; _i < idx; _i++)); do
+      before+=("${rest[_i]}")
+    done
+    for ((_i = idx + 1; _i < ${#rest[@]}; _i++)); do
+      after+=("${rest[_i]}")
+    done
+    git clone "${before[@]}" "$clone_url" "${after[@]}"
+  else
+    local after=()
+    for ((_i = 1; _i < ${#rest[@]}; _i++)); do
+      after+=("${rest[_i]}")
+    done
+    git clone "$clone_url" "${after[@]}"
+  fi
 }
 
 # ─── verify ───────────────────────────────────────────────────────────────────
