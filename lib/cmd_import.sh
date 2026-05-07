@@ -73,11 +73,21 @@ cmd_import() {
   echo ""
 
   # ── Working directory / onboarding mode ────────────────────────────────
+  local WORK_DIR work_root work_slug selected_loc existing_path
+  work_root="$(ctx_work_root)"
   hr
   bold "  Project location"
   echo ""
-  local WORK_DIR work_root work_slug selected_loc existing_path
-  work_root="$(ctx_work_root)"
+  dim "  Where should this profile point for day-to-day work (git clones, repos)?"
+  dim "  You'll pick an option next (↑/↓ and Enter with gum; or type a number in plain bash)."
+  echo ""
+  dim "  • Current directory — use if you're already inside the project folder."
+  dim "    Example: you ran cd ~/work/acme-api and want this profile tied to that folder."
+  dim "  • Existing path — you already have a folder; you'll type or paste the full path next."
+  dim "    Example: $HOME/clients/acme or ~/src/globex-portal"
+  dim "  • Under $work_root — ctx will use (or create) a client folder there."
+  dim "    Example: choosing acme → $work_root/acme"
+  echo ""
   selected_loc=$(pick_one \
     "How do you want to onboard this client/project?" \
     "Use current working directory (default): $PWD" \
@@ -91,6 +101,10 @@ cmd_import() {
       success "Using current directory: $WORK_DIR"
       ;;
     "Use an existing path (you provide it)")
+      echo ""
+      dim "  Enter the directory that should be this client's workspace."
+      dim "  Absolute paths or ~ are fine. Examples: $HOME/clients/acme, ~/projects/northwind"
+      dim "  The line with > is ready for typing; use Enter to confirm (Ctrl+C to cancel)."
       existing_path=$(ask "Existing project path" "$PWD")
       existing_path="${existing_path/#\~/$HOME}"
       [[ -z "$existing_path" ]] && die "Path required."
@@ -102,7 +116,11 @@ cmd_import() {
       success "Using path: $WORK_DIR"
       ;;
     *)
+      echo ""
       info "Profiles default under: $work_root"
+      dim "  Folder name only (no slashes) — ctx will use $work_root/<name>."
+      dim "  Examples: acme, globex, northwind-api — letters, numbers, dots, dashes, underscores."
+      dim "  The > prompt is ready for input; Enter confirms, Ctrl+C cancels."
       work_slug=$(ask "Client folder name (not full path)" "$PROFILE_NAME")
       work_slug="${work_slug//\//-}"
       work_slug="$(echo "$work_slug" | sed 's/[^a-zA-Z0-9._-]/-/g')"

@@ -68,7 +68,9 @@ ask() {
       --placeholder "${default:-$prompt}" \
       --prompt "> " \
       --prompt.foreground 99 \
-      --width 60) || user_cancelled
+      --cursor.foreground 99 \
+      --width 60 \
+      < /dev/tty) || user_cancelled
     echo "${result:-$default}"
   else
     if [[ -n "$default" ]]; then
@@ -95,7 +97,9 @@ ask_secret() {
       --placeholder "$prompt" \
       --prompt "> " \
       --prompt.foreground 99 \
-      --width 60 || user_cancelled
+      --cursor.foreground 99 \
+      --width 60 \
+      < /dev/tty || user_cancelled
   else
     echo -e "${CYAN}?${RESET} $prompt ${DIM}(hidden)${RESET}: \c"
     local var
@@ -144,9 +148,10 @@ pick_one() {
     result=$(gum choose \
       --header "$prompt (Use arrows, Enter to confirm, Ctrl+C to cancel)" \
       --header.foreground 99 \
+      --cursor.foreground 99 \
       --selected.foreground 99 \
       "${items[@]}" \
-      2>/dev/null) || user_cancelled
+      < /dev/tty 2>/dev/null) || user_cancelled
     echo "$result"
   else
     echo ""
@@ -179,9 +184,10 @@ pick_many() {
     gum choose --no-limit \
       --header "$prompt (Space to select, Enter to confirm, Ctrl+C to cancel)" \
       --header.foreground 99 \
+      --cursor.foreground 99 \
       --selected.foreground 99 \
       "${items[@]}" \
-      2>/dev/null || user_cancelled
+      < /dev/tty 2>/dev/null || user_cancelled
   else
     echo ""
     for i in "${!items[@]}"; do
