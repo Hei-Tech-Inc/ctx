@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - **Prompt UX + cancel behavior:** interactive gum prompts now explicitly indicate when input is expected, and `Ctrl+C` cleanly aborts setup instead of continuing to the next question.
 - **Setup loading feedback:** `ctx setup` now announces credential/profile discovery up front and bounds `gh auth status` detection with a timeout to avoid appearing hung.
 - **Ctrl+C reliability:** non-gum prompt paths now treat interrupted reads as cancellation (`exit 130`) so setup cannot continue after user aborts.
+- **Ctrl+C propagation fix:** cancellation inside command-substitution prompts now signals the parent `ctx` process, preventing `"Cancelled by user"` text from being captured as field input.
 
 ## [3.2.0] - 2026-05-07
 

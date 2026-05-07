@@ -25,7 +25,16 @@ bold()    { echo -e "${BOLD}$*${RESET}"; }
 die()     { error "$*"; exit 1; }
 hr()      { echo -e "${DIM}────────────────────────────────────────${RESET}"; }
 log()     { mkdir -p "$CTX_DIR"; echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$CTX_LOG"; }
-user_cancelled() { warn "Cancelled by user."; exit 130; }
+user_cancelled() {
+  # Print to stderr so command substitutions never capture this as field input.
+  echo -e "${YELLOW}!${RESET} Cancelled by user." >&2
+  # If we're inside command substitution, exit only aborts the subshell.
+  # Bubble cancellation to the parent ctx process with INT.
+  if [[ ${BASH_SUBSHELL:-0} -gt 0 ]]; then
+    kill -INT "$PPID" 2>/dev/null || true
+  fi
+  exit 130
+}
 
 # ─── gum or plain fallback ────────────────────────────────────────────────────
 # All prompts go through these wrappers.
