@@ -44,7 +44,7 @@ cmd_import() {
   bold "  Profile identity"
   echo ""
   local PROFILE_NAME
-  PROFILE_NAME=$(ask "Profile name (e.g. hubtel, aifi, scalecap)")
+  PROFILE_NAME=$(ask "Profile name (e.g. acme, globex, northwind)")
   [[ -z "$PROFILE_NAME" ]] && die "Profile name required."
   PROFILE_NAME=$(echo "$PROFILE_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
 
