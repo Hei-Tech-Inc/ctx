@@ -14,8 +14,8 @@ Sets `core.hooksPath` to `scripts/git-hooks` and marks hooks executable.
 
 | Hook | Role |
 |------|------|
-| `prepare-commit-msg` | Deletes `Co-authored-by:` / `Co-Authored-By:` lines that reference the IDE vendor (`cursoragent`, `@cursor.com`, etc.). |
-| `commit-msg` | Rejects commit messages that still contain the blocked vendor substring (after allowlisting gum flags and `.cursor/` paths). |
+| `prepare-commit-msg` | Deletes `Co-authored-by:` / `Co-Authored-By:` lines that credit coding agents (Cursor, Claude/Anthropic, OpenAI-style noreply, Copilot, Gemini, Codeium, Windsurf, etc.) — see `scripts/git-history-strip-agent-trailers.pl`. |
+| `commit-msg` | Rejects disallowed agent `Co-authored-by:` lines and any remaining blocked IDE vendor substring (after allowlisting gum `--cursor.*` flags and `.cursor/` paths). |
 | `post-commit` | If a trailer still landed on `HEAD`, immediately **`git commit --amend`** with the same tree and a cleaned message. |
 
 Disable hooks (not recommended):
