@@ -20,14 +20,14 @@ Profiles auto-activate when you `cd` into a client directory.
 
 ## How it works
 
-1. `ctx setup` — wizard detects your existing SSH keys, `gh` accounts, AWS/GCP/Azure configs and configures a profile
+1. `ctx setup` — interactive wizard with onboarding modes: use current directory (default), provide an existing path, or create a new client folder; it can import existing SSH/GitHub/cloud references or run fully manual
 2. `ctx` writes:
    - `~/.ctx/profiles/<name>.conf` — profile metadata
    - `~/.config/git/ctx-<name>` — git identity
    - `~/.gitconfig` — one `includeIf` line per profile (deduped)
    - `~/.ssh/ctx_config` — SSH host aliases (never touches `~/.ssh/config` directly)
    - `~/clients/<name>/mise.toml` — env vars + enter/leave hooks (auto-loads on `cd`)
-3. Secrets → macOS Keychain when available; on Linux/other Unix, `~/.ctx/secrets/<profile>/` (file per key, `0600`) — encrypt your disk.
+3. Secrets → explicit opt-in during setup. On macOS they go to Keychain; on Linux/other Unix, `~/.ctx/secrets/<profile>/` (file per key, `0600`) — encrypt your disk.
 
 ---
 
@@ -155,6 +155,7 @@ ctx use <name>
 | `ctx secret delete <profile> <KEY>` | Delete a secret |
 
 On macOS, secrets prefer the Keychain. On Linux and other Unixes, values live under `~/.ctx/secrets/<profile>/` (file per key, `0600`) — use full-disk encryption.
+Setup defaults to **Skip secrets for now** and requires explicit opt-in to store any secret value.
 
 Secrets are exported into your shell session by `ctx use` and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
 

@@ -66,18 +66,61 @@ cmd_import() {
   done
   echo ""
 
-  # ── Working directory ───────────────────────────────────────────────────
+  # ── Working directory / onboarding mode ────────────────────────────────
   hr
-  bold "  Working directory"
+  bold "  Project location"
   echo ""
-  local WORK_DIR work_root work_slug
+  local WORK_DIR work_root work_slug selected_loc existing_path
   work_root="$(ctx_work_root)"
-  info "Profiles default under: $work_root"
-  work_slug=$(ask "Client folder name (not full path)" "$PROFILE_NAME")
-  work_slug="${work_slug//\//-}"
-  work_slug="$(echo "$work_slug" | sed 's/[^a-zA-Z0-9._-]/-/g')"
-  [[ -z "$work_slug" ]] && die "Client folder name required."
-  WORK_DIR="${work_root}/${work_slug}"
+  selected_loc=$(pick_one \
+    "How do you want to onboard this client/project?" \
+    "Use current working directory (default): $PWD" \
+    "Use an existing path (you provide it)" \
+    "Create/select a client folder under $work_root")
+  [[ -z "$selected_loc" ]] && selected_loc="Use current working directory (default): $PWD"
+
+  case "$selected_loc" in
+    "Use current working directory (default): $PWD")
+      WORK_DIR="$PWD"
+      success "Using current directory: $WORK_DIR"
+      ;;
+    "Use an existing path (you provide it)")
+      existing_path=$(ask "Existing project path" "$PWD")
+      existing_path="${existing_path/#\~/$HOME}"
+      [[ -z "$existing_path" ]] && die "Path required."
+      if [[ ! -d "$existing_path" ]]; then
+        ask_yn "Path does not exist. Create it now?" "y" || die "Aborted."
+        mkdir -p "$existing_path" || die "Could not create: $existing_path"
+      fi
+      WORK_DIR="$existing_path"
+      success "Using path: $WORK_DIR"
+      ;;
+    *)
+      info "Profiles default under: $work_root"
+      work_slug=$(ask "Client folder name (not full path)" "$PROFILE_NAME")
+      work_slug="${work_slug//\//-}"
+      work_slug="$(echo "$work_slug" | sed 's/[^a-zA-Z0-9._-]/-/g')"
+      [[ -z "$work_slug" ]] && die "Client folder name required."
+      WORK_DIR="${work_root}/${work_slug}"
+      success "Using client folder: $WORK_DIR"
+      ;;
+  esac
+  echo ""
+
+  # ── Import strategy ─────────────────────────────────────────────────────
+  local import_existing=true import_choice
+  import_choice=$(pick_one \
+    "Config import mode for this profile?" \
+    "Import detected existing config references (recommended)" \
+    "Manual entry only (skip auto-detected references)")
+  [[ -z "$import_choice" ]] && import_choice="Import detected existing config references (recommended)"
+  [[ "$import_choice" == "Manual entry only (skip auto-detected references)" ]] && import_existing=false
+  if $import_existing; then
+    dim "  Importing references only (SSH key paths, account/profile names)."
+    dim "  Secret values are never auto-imported."
+  else
+    dim "  Manual mode selected. You will type all values explicitly."
+  fi
   echo ""
 
   # ── SSH key ─────────────────────────────────────────────────────────────
@@ -88,7 +131,7 @@ cmd_import() {
   local SSH_KEY_PATH=""
   local SSH_KEY_GENERATED=0
 
-  if [[ ${#ssh_keys[@]} -gt 0 ]]; then
+  if $import_existing && [[ ${#ssh_keys[@]} -gt 0 ]]; then
     local key_choices=() picked choice_label
     local idx=1
     for key_path in "${ssh_keys[@]}"; do
@@ -123,7 +166,30 @@ cmd_import() {
       success "Using existing key: $(basename "$SSH_KEY_PATH")"
     fi
   else
-    if ask_yn "No SSH keys found. Generate one for this profile?" "y"; then
+    if ! $import_existing; then
+      local key_mode
+      key_mode=$(pick_one \
+        "SSH key setup?" \
+        "Use an existing key path" \
+        "Generate a new key for this profile" \
+        "Skip SSH key for now")
+      case "$key_mode" in
+        "Use an existing key path")
+          SSH_KEY_PATH=$(ask "Path to private SSH key (e.g. ~/.ssh/id_ed25519)")
+          SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
+          [[ -n "$SSH_KEY_PATH" && ! -f "$SSH_KEY_PATH" ]] && die "SSH key not found: $SSH_KEY_PATH"
+          [[ -n "$SSH_KEY_PATH" ]] && success "Using existing key: $(basename "$SSH_KEY_PATH")"
+          ;;
+        "Generate a new key for this profile")
+          SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
+          _gen_ssh_key "$SSH_KEY_PATH" "$GIT_EMAIL"
+          SSH_KEY_GENERATED=1
+          ;;
+        *)
+          SSH_KEY_PATH=""
+          ;;
+      esac
+    elif ask_yn "No SSH keys found. Generate one for this profile?" "y"; then
       SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
       _gen_ssh_key "$SSH_KEY_PATH" "$GIT_EMAIL"
       SSH_KEY_GENERATED=1
@@ -140,7 +206,7 @@ cmd_import() {
     while IFS= read -r a; do [[ -n "$a" ]] && gh_accounts+=("$a"); done < <(detect_gh_accounts)
   fi
 
-  if [[ ${#gh_accounts[@]} -gt 0 ]]; then
+  if $import_existing && [[ ${#gh_accounts[@]} -gt 0 ]]; then
     GITHUB_USER=$(pick_one "Which GitHub account for '$PROFILE_NAME'?" "None / skip" "${gh_accounts[@]}")
     [[ "$GITHUB_USER" == "None / skip" ]] && GITHUB_USER=""
     [[ -n "$GITHUB_USER" ]] && success "GitHub account: $GITHUB_USER"
@@ -169,7 +235,7 @@ cmd_import() {
   echo ""
 
   local AWS_PROFILE_NAME=""
-  if [[ ${#aws_profiles[@]} -gt 0 ]]; then
+  if $import_existing && [[ ${#aws_profiles[@]} -gt 0 ]]; then
     AWS_PROFILE_NAME=$(pick_one "AWS profile for '$PROFILE_NAME'?" "None / skip" "${aws_profiles[@]}")
     [[ "$AWS_PROFILE_NAME" == "None / skip" ]] && AWS_PROFILE_NAME=""
     [[ -n "$AWS_PROFILE_NAME" ]] && success "AWS profile: $AWS_PROFILE_NAME"
@@ -178,7 +244,7 @@ cmd_import() {
 
   # ── Azure ───────────────────────────────────────────────────────────────
   local AZURE_SUBSCRIPTION="" AZURE_TENANT=""
-  if [[ ${#azure_subs[@]} -gt 0 ]]; then
+  if $import_existing && [[ ${#azure_subs[@]} -gt 0 ]]; then
     AZURE_SUBSCRIPTION=$(pick_one "Azure subscription for '$PROFILE_NAME'?" "None / skip" "${azure_subs[@]}")
     [[ "$AZURE_SUBSCRIPTION" == "None / skip" ]] && AZURE_SUBSCRIPTION=""
     [[ -n "$AZURE_SUBSCRIPTION" ]] && AZURE_TENANT=$(ask "Azure tenant ID (leave blank to skip)")
@@ -189,7 +255,7 @@ cmd_import() {
 
   # ── GCP ─────────────────────────────────────────────────────────────────
   local GCP_PROJECT="" GCP_ACCOUNT=""
-  if [[ ${#gcp_projects[@]} -gt 0 ]]; then
+  if $import_existing && [[ ${#gcp_projects[@]} -gt 0 ]]; then
     GCP_PROJECT=$(pick_one "GCP project for '$PROFILE_NAME'?" "None / skip" "${gcp_projects[@]}")
     [[ "$GCP_PROJECT" == "None / skip" ]] && GCP_PROJECT=""
     [[ -n "$GCP_PROJECT" ]] && GCP_ACCOUNT=$(ask "GCP account email (leave blank to skip)")
@@ -200,7 +266,7 @@ cmd_import() {
 
   # ── kubectl ─────────────────────────────────────────────────────────────
   local KUBE_CONTEXT=""
-  if [[ ${#kube_contexts[@]} -gt 0 ]]; then
+  if $import_existing && [[ ${#kube_contexts[@]} -gt 0 ]]; then
     KUBE_CONTEXT=$(pick_one "kubectl context for '$PROFILE_NAME'?" "None / skip" "${kube_contexts[@]}")
     [[ "$KUBE_CONTEXT" == "None / skip" ]] && KUBE_CONTEXT=""
     [[ -n "$KUBE_CONTEXT" ]] && success "kubectl context: $KUBE_CONTEXT"
@@ -217,6 +283,9 @@ cmd_import() {
     bold "  Secrets (~/.ctx/secrets, file per key — use full-disk encryption)"
   fi
   echo ""
+  dim "  Security note: if your machine is compromised while unlocked, local secrets can still be exfiltrated."
+  dim "  Best practice: add only what this client/project needs, rotate regularly, and avoid broad long-lived tokens."
+  echo ""
   if [[ "$(uname -s)" == "Darwin" ]]; then
     dim "  Values you enter here go into Keychain."
   else
@@ -225,47 +294,57 @@ cmd_import() {
   dim "  They are exported by ctx use and by mise hooks.enter (when mise runs)."
   echo ""
 
-  local SECRET_KEYS=()
+  local SECRET_KEYS=() secret_mode where
+  secret_mode=$(pick_one \
+    "How should secrets be handled for this setup?" \
+    "Skip for now (recommended on shared/untrusted machines)" \
+    "Add selected secrets now (manual, one by one)")
+  [[ -z "$secret_mode" ]] && secret_mode="Skip for now (recommended on shared/untrusted machines)"
 
-  _maybe_secret() {
-    local key="$1" prompt="$2"
-    local where="secrets"
-    [[ "$(uname -s)" == "Darwin" ]] && where="Keychain"
-    is_valid_env_key "$key" || { warn "Skipping invalid key '$key'"; return 1; }
-    if ask_yn "$prompt?" "n"; then
-      local val
-      val=$(ask_secret "Value for $key")
-      if [[ -n "$val" ]]; then
-        keychain_set "$PROFILE_NAME" "$key" "$val" \
-          && success "$key → $where" \
-          || warn "Could not store $key ($where)"
-        SECRET_KEYS+=("$key")
-      fi
-    fi
-  }
-
-  _maybe_secret "GH_TOKEN"      "Store a GitHub personal access token"
-  _maybe_secret "NPM_TOKEN"     "Store an npm registry token"
-  _maybe_secret "DOCKER_TOKEN"  "Store a Docker Hub token"
-
-  while ask_yn "Add another secret key?" "n"; do
-    local ckey
-    ckey=$(ask "Key name (e.g. STRIPE_SECRET_KEY)")
-    [[ -z "$ckey" ]] && break
-    if ! is_valid_env_key "$ckey"; then
-      warn "Invalid key '$ckey'. Use [A-Za-z_][A-Za-z0-9_]*."
-      continue
-    fi
-    local cval
-    cval=$(ask_secret "Value for $ckey")
-    if [[ -n "$cval" ]]; then
-      local where="secrets"
+  if [[ "$secret_mode" == "Add selected secrets now (manual, one by one)" ]]; then
+    _maybe_secret() {
+      local key="$1" prompt="$2"
+      where="secrets"
       [[ "$(uname -s)" == "Darwin" ]] && where="Keychain"
-      keychain_set "$PROFILE_NAME" "$ckey" "$cval" \
-        && success "$ckey → $where"
-      SECRET_KEYS+=("$ckey")
-    fi
-  done
+      is_valid_env_key "$key" || { warn "Skipping invalid key '$key'"; return 1; }
+      if ask_yn "$prompt?" "n"; then
+        local val
+        val=$(ask_secret "Value for $key")
+        if [[ -n "$val" ]]; then
+          keychain_set "$PROFILE_NAME" "$key" "$val" \
+            && success "$key → $where" \
+            || warn "Could not store $key ($where)"
+          SECRET_KEYS+=("$key")
+        fi
+      fi
+    }
+
+    _maybe_secret "GH_TOKEN"      "Store a GitHub personal access token"
+    _maybe_secret "NPM_TOKEN"     "Store an npm registry token"
+    _maybe_secret "DOCKER_TOKEN"  "Store a Docker Hub token"
+
+    while ask_yn "Add another secret key?" "n"; do
+      local ckey
+      ckey=$(ask "Key name (e.g. STRIPE_SECRET_KEY)")
+      [[ -z "$ckey" ]] && break
+      if ! is_valid_env_key "$ckey"; then
+        warn "Invalid key '$ckey'. Use [A-Za-z_][A-Za-z0-9_]*."
+        continue
+      fi
+      local cval
+      cval=$(ask_secret "Value for $ckey")
+      if [[ -n "$cval" ]]; then
+        where="secrets"
+        [[ "$(uname -s)" == "Darwin" ]] && where="Keychain"
+        keychain_set "$PROFILE_NAME" "$ckey" "$cval" \
+          && success "$ckey → $where"
+        SECRET_KEYS+=("$ckey")
+      fi
+    done
+  else
+    dim "  Skipping secret storage for now."
+    dim "  You can add later with: ctx secret set ${PROFILE_NAME} <KEY>"
+  fi
   echo ""
 
   # ── Non-secret env vars ─────────────────────────────────────────────────
