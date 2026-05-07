@@ -849,9 +849,12 @@ cmd_doctor() {
   local all_ok=true
 
   _chk() {
-    local cmd="$1" label="$2" install="$3"
+    local cmd="$1" label="$2" install="$3" ver_cmd="${4:-}"
+    [[ -z "$ver_cmd" ]] && ver_cmd="$cmd --version"
     if has "$cmd"; then
-      success "$label: $($cmd --version 2>&1 | head -1)"
+      local ver
+      ver="$(bash -lc "$ver_cmd" 2>&1 | sed -n '1p')"
+      success "$label: ${ver:-installed}"
     else
       warn "$label: not found  →  $install"
       all_ok=false
@@ -880,9 +883,9 @@ cmd_doctor() {
   _chk gum       "gum"       "$install_hint_gum"
   _chk gh        "gh"        "$install_hint_gh"
   _chk aws       "AWS CLI"   "$install_hint_aws"
-  _chk az        "Azure CLI" "$install_hint_az"
+  _chk az        "Azure CLI" "$install_hint_az" "az --version"
   _chk gcloud    "gcloud"    "$install_hint_gcloud"
-  _chk kubectl   "kubectl"   "$install_hint_kubectl"
+  _chk kubectl   "kubectl"   "$install_hint_kubectl" "kubectl version --client=true"
 
   echo ""
   hr
@@ -924,11 +927,12 @@ cmd_doctor() {
   hr
 
   # SSH isolation check
-  if grep -qF "Include.*ctx_config" "$HOME/.ssh/config" 2>/dev/null; then
+  if grep -Eq '^[[:space:]]*Include[[:space:]]+.*ctx_config' "$HOME/.ssh/config" 2>/dev/null; then
     success "SSH isolation: ctx_config is included"
   else
     warn "SSH isolation: ~/.ssh/ctx_config not included in ~/.ssh/config"
-    info "Run: ctx install-hook"
+    info "Run: ctx setup (or any command that writes an SSH host) to auto-add Include, or add manually:"
+    info "  Include $CTX_SSH_CONFIG"
     all_ok=false
   fi
 
