@@ -122,12 +122,14 @@ pick_one() {
 
   if $HAS_GUM; then
     local result
-    result=$(printf '%s\n' "${items[@]}" \
-      | gum choose \
-          --header "$prompt" \
-          --header.foreground 99 \
-          --selected.foreground 99 \
-          2>/dev/null) || true
+    # Pass items as argv instead of stdin piping; some terminals can render a blank
+    # chooser when fed via pipe, making it look stuck.
+    result=$(gum choose \
+      --header "$prompt" \
+      --header.foreground 99 \
+      --selected.foreground 99 \
+      "${items[@]}" \
+      2>/dev/null) || true
     echo "$result"
   else
     echo ""
@@ -156,12 +158,12 @@ pick_many() {
   [[ ${#items[@]} -eq 0 ]] && return 0
 
   if $HAS_GUM; then
-    printf '%s\n' "${items[@]}" \
-      | gum choose --no-limit \
-          --header "$prompt (space to select, enter to confirm)" \
-          --header.foreground 99 \
-          --selected.foreground 99 \
-          2>/dev/null || true
+    gum choose --no-limit \
+      --header "$prompt (space to select, enter to confirm)" \
+      --header.foreground 99 \
+      --selected.foreground 99 \
+      "${items[@]}" \
+      2>/dev/null || true
   else
     echo ""
     for i in "${!items[@]}"; do
