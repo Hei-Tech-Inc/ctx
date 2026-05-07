@@ -936,6 +936,19 @@ cmd_doctor() {
     all_ok=false
   fi
 
+  # ~/.ssh directory must not be group/other writable or OpenSSH may ignore keys/config
+  if [[ -d "$HOME/.ssh" ]]; then
+    if find "$HOME/.ssh" -maxdepth 0 \( -perm -020 -o -perm -002 \) 2>/dev/null | grep -q .; then
+      warn "SSH: ~/.ssh is group- or world-writable (OpenSSH may refuse to use keys here)"
+      info "Run: chmod 700 $HOME/.ssh"
+      all_ok=false
+    else
+      success "SSH: ~/.ssh directory permissions are strict enough"
+    fi
+  else
+    dim "  SSH: ~/.ssh not present yet (normal before first key or setup)"
+  fi
+
   echo ""
   hr
 

@@ -190,6 +190,22 @@ You can force this behavior with `ctx config secret-provider <auto|keychain|file
 When using `pass`, entries are stored as `ctx/<profile>/<KEY>` in your password store.
 Run `ctx doctor` to verify your selected provider is available on the machine.
 
+### Enterprise secrets (Vault / 1Password)
+
+ctx integrates **four storage backends only**: `auto`, `keychain`, `file`, and `pass` (see `ctx config secret-provider`). There are **no** built-in providers for HashiCorp Vault, 1Password CLI (`op`), Redis, SQLite, or other databases — Redis and SQLite are also poor fits as primary secret stores for typical dev workflows.
+
+**How env injection works:** For each name in `SECRET_KEYS`, the generated `mise.toml` **[hooks.enter]** script reads the **stored value** from the active provider (Keychain, `~/.ctx/secrets/…`, or `pass`) and runs `export KEY=value`. The shell therefore receives the **literal string** in the backend — not a Vault path or `op://` reference unless you deliberately stored such a string as the value (most apps expect a real secret in `$VAR`; they do not resolve 1Password URIs for you).
+
+**Pointers vs committed files:** Profile files list **key names** only; secret material is meant to live in the provider above, not in git. ctx does **not** resolve indirection like `vault kv get` or `op read` at hook time today.
+
+**Practical patterns without changing ctx:**
+
+- **1Password:** Run commands under `op run -- …`, or use **1Password Connect** / sidecars where your stack already injects env. You can still use ctx for Git, SSH, and profile switching while API keys come from `op`.
+- **Vault:** Use **Vault Agent** templates, `vault kv get` in project scripts/CI, or env from your orchestrator; pair with ctx for shell identity and repo layout.
+- **Unix-native secret store:** `pass` (GPG-backed paths under `ctx/<profile>/<KEY>`) is the closest built-in “centralized” option among ctx providers.
+
+**Operations note:** `ctx secret migrate` copies **plaintext** between `keychain`, `file`, and `pass` — run only on trusted machines. For audit, rotation, and team policy, standardize on Vault or 1Password at the organization layer and treat ctx as **local shell + SSH + Git orchestration**, not the system of record for every API key.
+
 ### Moving to a new laptop safely
 
 Use config export/import for non-secret state:

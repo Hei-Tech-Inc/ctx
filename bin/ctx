@@ -36,6 +36,12 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 cmd_help() {
+  case "${1-}" in
+    setup|import|add|wizard)
+      cmd_setup_help
+      return 0
+      ;;
+  esac
   if $HAS_GUM; then
     gum style --border rounded --border-foreground 99 \
       --padding "1 3" --margin "1 0" \
@@ -43,7 +49,7 @@ cmd_help() {
       "" \
       "$(gum style --faint "SETUP")" \
       "  init             Check deps, install hooks" \
-      "  setup            Configure a new client profile (recommended)" \
+      "  setup            Configure a new client profile (see: --config FILE)" \
       "  import / add     Alias for setup" \
       "" \
       "$(gum style --faint "DAILY USE")" \
@@ -72,11 +78,17 @@ cmd_help() {
       "  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe" \
       "  doctor           Machine-wide: tools, hooks, SSH layout, profiles" \
       "  version          Print version" \
+      "  help setup       Full setup wizard + --config reference" \
       "" \
       "$(gum style --faint "FLAGS")" \
       "  --dry-run        Preview changes without writing files" \
       "  --quiet          Suppress output (used by auto-switch)" \
-      "  --no-gum         Force plain text prompts"
+      "  --no-gum         Force plain text prompts" \
+      "" \
+      "$(gum style --faint "SETUP FLAGS")" \
+      "  --config FILE    Non-interactive wizard (see examples/setup.noninteractive.conf.example)" \
+      "  -y / --yes       With --config: skip final confirmation prompt" \
+      "  setup --help     Same as: ctx help setup"
   else
     cat <<EOF
 
@@ -84,7 +96,7 @@ ${BOLD}ctx${RESET} — client context switcher v${CTX_VERSION}
 
 ${BOLD}SETUP${RESET}
   init                  Check deps, install hooks
-  setup                 Configure a new client profile (recommended)
+  setup                 Configure a new profile (optional: --config FILE -y)
   import / add          Alias for setup
 
 ${BOLD}DAILY USE${RESET}
@@ -100,6 +112,7 @@ ${BOLD}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${
   secret delete <profile> <KEY>
 
 ${BOLD}MAINTENANCE${RESET}
+  help setup            Full setup wizard + --config reference
   config [show]         Show ctx config values
   config work-root <p>  Set default client directory root
   config export <dir>   Export config for laptop migration (no secrets)
@@ -119,8 +132,12 @@ ${BOLD}FLAGS${RESET}
   --dry-run             Preview changes, write nothing
   --quiet               Suppress output (auto-switch hook uses this)
   --no-gum              Force plain text prompts
+  setup --config FILE   Non-interactive wizard (KEY=value file)
+  setup -y              With --config: confirm without prompting
+  setup --help          Same as: ctx help setup
 
-${BOLD}HOW IT WORKS${RESET}
+${BOLD}SETUP CONFIG FILE${RESET}
+  See ${BOLD}examples/setup.noninteractive.conf.example${RESET} in the repo.
   1. ctx setup           → wizard detects your existing keys/accounts
   2. ctx writes:
      - ~/.ctx/profiles/<name>.conf   (metadata)
@@ -170,12 +187,21 @@ _ctx() {
     'help:Show help'
   )
   profiles=("${(@f)$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}')}")
+  local setup_flags=(
+    '--config:Non-interactive KEY=value file'
+    '-y:Skip final confirm'
+    '--yes:Skip final confirm'
+    '--help:Full setup reference'
+    '-h:Full setup reference'
+  )
+  local help_topics=('setup:Wizard and --config reference')
   case $CURRENT in
     2) _describe 'ctx commands' cmds ;;
     3)
       case ${words[2]} in
         use|edit|remove|verify) _describe 'profiles' profiles ;;
-        clone) local sub=('-p' '--profile'); _describe 'clone flags' sub ;;
+        setup|import|add) _describe 'setup options' setup_flags ;;
+        help) _describe 'help topics' help_topics ;;
         secret) local sub=('set' 'get' 'list' 'delete' 'migrate'); _describe 'subcommands' sub ;;
         config) local sub=('show' 'work-root' 'secret-provider' 'export' 'import'); _describe 'subcommands' sub ;;
         upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
@@ -185,6 +211,13 @@ _ctx() {
     4)
       case ${words[2]} in
         secret) _describe 'profiles' profiles ;;
+        setup|import|add)
+          if [[ ${words[3]} == --config ]]; then
+            _files
+          else
+            _describe 'setup options' setup_flags
+          fi
+          ;;
         clone)
           case ${words[3]} in
             -p|--profile) _describe 'profiles' profiles ;;
@@ -192,7 +225,14 @@ _ctx() {
           ;;
       esac
       ;;
-    5) [[ ${words[2]} == secret && ${words[3]} =~ ^(set|get|delete)$ ]] && _describe 'profiles' profiles ;;
+    5)
+      case ${words[2]} in
+        setup|import|add) _describe 'setup options' setup_flags ;;
+        secret)
+          [[ ${words[3]} =~ ^(set|get|delete)$ ]] && _describe 'profiles' profiles
+          ;;
+      esac
+      ;;
   esac
 }
 _ctx "$@"
@@ -203,6 +243,20 @@ _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
   local cmds="init setup import add use list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
+  local w1="${COMP_WORDS[1]-}"
+  # ctx setup [--config FILE] [-y|--yes]
+  if [[ "$w1" =~ ^(setup|import|add)$ ]]; then
+    if [[ "$prev" == "--config" ]]; then
+      COMPREPLY=($(compgen -f -- "$cur"))
+      return
+    fi
+    COMPREPLY=($(compgen -W "--config -y --yes --help -h" -- "$cur"))
+    return
+  fi
+  if [[ "$prev" == "help" ]]; then
+    COMPREPLY=($(compgen -W "setup" -- "$cur"))
+    return
+  fi
   case "$prev" in
     use|edit|remove|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
@@ -232,6 +286,8 @@ complete -c ctx -f
 
 complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
 
+complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
+
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx remove' -a '(__fish_ctx_profiles)'
@@ -246,6 +302,11 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx config' -a 'show work-root s
 complete -c ctx -n '__fish_seen_subcommand_from ctx upgrade' -a '--check'
 complete -c ctx -n '__fish_seen_subcommand_from ctx uninstall' -a '--purge'
 complete -c ctx -n '__fish_seen_subcommand_from ctx completion' -a 'zsh bash fish'
+
+complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -s y -l yes -d 'Skip final review confirm'
+complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -s h -l help -d 'Full setup reference'
+complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -l config -d 'Non-interactive KEY=value file' -r
+complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add; and __fish_prev_arg_in --config' -f -a '(__fish_complete_path)'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx clone' -s p -l profile -d 'Profile' -a '(__fish_ctx_profiles)'
 FISH
@@ -283,7 +344,7 @@ main() {
     doctor)           cmd_doctor ;;
     completion)       cmd_completion "${1:-zsh}" ;;
     version|-v|--version) echo "ctx version $CTX_VERSION" ;;
-    help|-h|--help)   cmd_help ;;
+    help|-h|--help)   cmd_help "$@" ;;
     *)
       error "Unknown command: $cmd"
       echo ""

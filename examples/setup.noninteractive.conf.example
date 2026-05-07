@@ -1,0 +1,43 @@
+# Non-interactive profile creation:
+#   ctx setup --config /path/to/this-file --yes
+# Full flag/key reference: ctx setup --help  or  ctx help setup
+# Without -y (or AUTO_CONFIRM=true below), you still get the final review on a TTY.
+# In CI / non-TTY, you must pass --yes or set AUTO_CONFIRM=true.
+
+PROFILE_NAME=acme
+GIT_NAME="Jane Doe"
+GIT_EMAIL=jane@acme.com
+
+# ── Work directory (pick one style) ─────────────────────────────────────
+# A) Set explicitly:
+# WORK_DIR=/Users/you/clients/acme
+
+# B) Or use a mode (default client root from `ctx config work-root`):
+WORK_MODE=new
+WORK_SLUG=acme
+# WORK_MODE=current   → uses $PWD at run time
+# WORK_MODE=path       → requires EXISTING_PATH=/full/path
+
+IMPORT_MODE=auto
+# IMPORT_MODE=manual   → same as "manual entry only" in the wizard
+
+SSH_MODE=generate
+# SSH_MODE=existing   → set SSH_KEY_PATH=~/.ssh/id_ed25519
+# SSH_MODE=skip        → no per-profile key
+
+GITHUB_USER=
+
+AWS_PROFILE_NAME=
+AZURE_SUBSCRIPTION=
+AZURE_TENANT=
+GCP_PROJECT=
+GCP_ACCOUNT=
+KUBE_CONTEXT=
+
+# Batch setup only supports skipping secrets here; add later:
+#   ctx secret set <profile> GH_TOKEN
+SECRETS_MODE=skip
+
+AUTO_CONFIRM=true
+# If profile exists:
+# OVERWRITE=true

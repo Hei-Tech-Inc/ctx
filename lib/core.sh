@@ -58,19 +58,31 @@ ctx_header() {
 }
 
 # Text input — gum input or read
-# Usage: ask "Prompt text" [default]
+# Usage: ask "Prompt text" [default] [placeholder_when_empty]
+# With gum: default becomes visible --value; characters show as you type. TUI draws on stderr — never hide stderr.
 ask() {
-  local prompt="$1" default="${2:-}"
+  local prompt="$1" default="${2:-}" empty_hint="${3:-}"
   if $HAS_GUM; then
     local result
-    echo -e "${DIM}  Waiting for input — type and press Enter (Ctrl+C to cancel).${RESET}" >&2
-    result=$(gum input \
-      --placeholder "${default:-$prompt}" \
-      --prompt "> " \
-      --prompt.foreground 99 \
-      --cursor.foreground 99 \
-      --width 60 \
-      < /dev/tty) || user_cancelled
+    echo -e "${DIM}  Your text appears after > as you type. Enter confirms, Ctrl+C cancels. (? for gum shortcuts)${RESET}" >&2
+    local -a _gin=(
+      gum input
+      --header "$prompt"
+      --header.foreground 99
+      --prompt "> "
+      --prompt.foreground 99
+      --placeholder.foreground 245
+      --cursor.foreground 99
+      --cursor.mode blink
+      --width 72
+      --show-help
+    )
+    if [[ -n "$default" ]]; then
+      _gin+=(--value "$default" --placeholder "${empty_hint:-Press Enter to keep, or edit}")
+    else
+      _gin+=(--placeholder "${empty_hint:-Type here, then Enter}")
+    fi
+    result=$("${_gin[@]}" < /dev/tty) || user_cancelled
     echo "${result:-$default}"
   else
     if [[ -n "$default" ]]; then
@@ -145,13 +157,16 @@ pick_one() {
     local result
     # Pass items as argv instead of stdin piping; some terminals can render a blank
     # chooser when fed via pipe, making it look stuck.
+    # gum draws its list on stderr; do not redirect stderr or the menu is invisible when stdout is captured.
     result=$(gum choose \
-      --header "$prompt (Use arrows, Enter to confirm, Ctrl+C to cancel)" \
+      --height 10 \
+      --show-help \
+      --header "$prompt (↑/↓ move, Enter picks, ? shortcuts, Ctrl+C cancel)" \
       --header.foreground 99 \
       --cursor.foreground 99 \
       --selected.foreground 99 \
       "${items[@]}" \
-      < /dev/tty 2>/dev/null) || user_cancelled
+      < /dev/tty) || user_cancelled
     echo "$result"
   else
     echo ""
@@ -182,12 +197,14 @@ pick_many() {
 
   if $HAS_GUM; then
     gum choose --no-limit \
-      --header "$prompt (Space to select, Enter to confirm, Ctrl+C to cancel)" \
+      --height 10 \
+      --show-help \
+      --header "$prompt (Space toggles, Enter confirms, ? shortcuts, Ctrl+C cancel)" \
       --header.foreground 99 \
       --cursor.foreground 99 \
       --selected.foreground 99 \
       "${items[@]}" \
-      < /dev/tty 2>/dev/null || user_cancelled
+      < /dev/tty || user_cancelled
   else
     echo ""
     for i in "${!items[@]}"; do
@@ -217,6 +234,116 @@ spin() {
     info "$msg"
     "$@"
   fi
+}
+
+# ─── ctx setup wizard (steps + review + optional --config file) ─────────────
+# KEY=value config lines; # comments; last KEY= wins. No bash assoc arrays (macOS bash 3 safe).
+
+ctx_setup_cfg_get() {
+  local file="$1" key="$2"
+  local default="${3:-}"
+  [[ -f "$file" ]] || { printf '%s' "$default"; return 0; }
+  local line val
+  line="$(grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null | tail -1)" || true
+  [[ -z "$line" ]] && { printf '%s' "$default"; return 0; }
+  val="${line#*=}"
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  val="${val%$'\r'}"
+  if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
+    val="${val:1:-1}"
+  elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
+    val="${val:1:-1}"
+  fi
+  printf '%s' "${val:-$default}"
+}
+
+# Normalise common truthy strings to 1 or 0.
+ctx_setup_cfg_truthy() {
+  local v
+  v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case "$v" in
+    1|true|yes|y|on) printf '1' ;;
+    *) printf '0' ;;
+  esac
+}
+
+# Banner for interactive setup (step 1-based).
+ctx_setup_step() {
+  local step="$1" total="$2" title="$3"
+  local why="${4-}"
+  hr
+  if $HAS_GUM; then
+    gum style \
+      --border normal --border-foreground 240 \
+      --padding "0 1" --margin "0 0" \
+      "$(gum style --bold "Step ${step} / ${total} — ${title}")"
+  else
+    bold "  Step ${step} / ${total} — ${title}"
+  fi
+  [[ -n "$why" ]] && dim "  ${why}"
+  echo ""
+}
+
+# Review table + confirm. Sets exit 0 to proceed, 1 to abort (caller calls die).
+# Args: auto_yes(0|1) profile git_name git_email work_dir import_existing(0|1) ssh_key gh_user aws az_sub az_ten gcp_proj gcp_acct kube
+ctx_setup_review_confirm() {
+  local auto_yes="${1:-0}"; shift
+  local profile="$1" git_name="$2" git_email="$3" work_dir="$4"
+  local import_existing="$5" ssh_key="$6" gh_user="$7"
+  local aws_p="$8" az_sub="$9" az_ten="${10}" gcp_proj="${11}" gcp_acct="${12}" kube="${13}"
+  if [[ "$(ctx_setup_cfg_truthy "$auto_yes")" == "1" ]]; then
+    info "Confirming automatically (--yes or AUTO_CONFIRM in config)."
+    return 0
+  fi
+  local imp_l="Import detected references"
+  [[ "$import_existing" == "1" ]] || imp_l="Manual entry only"
+  local ssh_d="${ssh_key:-—}"
+  [[ -z "$ssh_key" ]] && ssh_d="(none)"
+
+  hr
+  bold "  Step 8 / 8 — Review"
+  dim "  Nothing is written until you confirm. No = exit without changes."
+  echo ""
+
+  if $HAS_GUM; then
+    {
+      printf '%s\t%s\n' "Profile" "$profile"
+      printf '%s\t%s\n' "Git name" "$git_name"
+      printf '%s\t%s\n' "Git email" "${git_email:-—}"
+      printf '%s\t%s\n' "Work directory" "$work_dir"
+      printf '%s\t%s\n' "Config import" "$imp_l"
+      printf '%s\t%s\n' "SSH private key" "$ssh_d"
+      printf '%s\t%s\n' "GitHub user" "${gh_user:-—}"
+      printf '%s\t%s\n' "AWS profile" "${aws_p:-—}"
+      printf '%s\t%s\n' "Azure subscription" "${az_sub:-—}"
+      printf '%s\t%s\n' "Azure tenant" "${az_ten:-—}"
+      printf '%s\t%s\n' "GCP project" "${gcp_proj:-—}"
+      printf '%s\t%s\n' "GCP account" "${gcp_acct:-—}"
+      printf '%s\t%s\n' "kubectl context" "${kube:-—}"
+    } | gum table --print -c "Setting,Value" -w 20,58 --border rounded
+  else
+    printf '  %-16s %s\n' "Profile" "$profile"
+    printf '  %-16s %s\n' "Git name" "$git_name"
+    printf '  %-16s %s\n' "Git email" "${git_email:-—}"
+    printf '  %-16s %s\n' "Work directory" "$work_dir"
+    printf '  %-16s %s\n' "Config import" "$imp_l"
+    printf '  %-16s %s\n' "SSH key" "$ssh_d"
+    printf '  %-16s %s\n' "GitHub user" "${gh_user:-—}"
+    printf '  %-16s %s\n' "AWS profile" "${aws_p:-—}"
+    printf '  %-16s %s\n' "Azure sub" "${az_sub:-—}"
+    printf '  %-16s %s\n' "Azure tenant" "${az_ten:-—}"
+    printf '  %-16s %s\n' "GCP project" "${gcp_proj:-—}"
+    printf '  %-16s %s\n' "GCP account" "${gcp_acct:-—}"
+    printf '  %-16s %s\n' "kubectl" "${kube:-—}"
+  fi
+  echo ""
+  ask_yn "Write this profile to disk now?" "y"
+}
+
+# Shown after setup errors so users know where to diagnose tools / hooks.
+ctx_setup_hint_doctor() {
+  dim "  Tools, hooks, SSH layout: run ${BOLD}ctx doctor${RESET}${DIM}.${RESET}" >&2
 }
 
 # ─── Directory init ────────────────────────────────────────────────────────────
