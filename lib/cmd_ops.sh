@@ -407,6 +407,7 @@ cmd_config() {
       echo ""
       info "Set with: ctx config work-root <path>"
       info "      or: ctx config secret-provider <auto|keychain|file|pass>"
+      info "      or: ctx config export <dir> / ctx config import <dir>"
       ;;
     work-root)
       if [[ -z "$value" ]]; then
@@ -445,8 +446,68 @@ cmd_config() {
       fi
       success "secret_provider set to: $value (effective: $(ctx_effective_secret_provider))"
       ;;
+    export)
+      [[ -z "$value" ]] && die "Usage: ctx config export <directory>"
+      local outdir
+      outdir="${value/#\~/$HOME}"
+      mkdir -p "$outdir" || die "Could not create export directory: $outdir"
+      mkdir -p "$outdir/profiles" "$outdir/git-identities" || die "Could not prepare export structure"
+
+      [[ -f "$CTX_CONFIG" ]] && cp "$CTX_CONFIG" "$outdir/config"
+      cp "$CTX_PROFILES_DIR"/*.conf "$outdir/profiles/" 2>/dev/null || true
+      cp "$HOME/.config/git"/ctx-* "$outdir/git-identities/" 2>/dev/null || true
+      [[ -f "$CTX_SSH_CONFIG" ]] && cp "$CTX_SSH_CONFIG" "$outdir/ctx_ssh_config"
+
+      {
+        echo "ctx_export_version=1"
+        echo "created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        echo "created_host=$(hostname)"
+        echo "includes_secrets=no"
+        echo "notes=Secrets are intentionally excluded. Use secret backend migration or manual re-entry."
+      } > "$outdir/manifest.env"
+
+      success "Config exported to: $outdir"
+      warn "Secrets were NOT exported."
+      info "Move this directory to the new laptop securely (encrypted transfer)."
+      ;;
+    import)
+      [[ -z "$value" ]] && die "Usage: ctx config import <directory>"
+      local indir
+      indir="${value/#\~/$HOME}"
+      [[ -d "$indir" ]] || die "Import directory not found: $indir"
+      [[ -f "$indir/manifest.env" ]] || warn "No manifest found in import directory (continuing)."
+
+      backup_file "$CTX_CONFIG"
+      backup_file "$CTX_SSH_CONFIG"
+      backup_file "$HOME/.gitconfig"
+
+      [[ -f "$indir/config" ]] && cp "$indir/config" "$CTX_CONFIG"
+      mkdir -p "$CTX_PROFILES_DIR" "$HOME/.config/git"
+      cp "$indir/profiles"/*.conf "$CTX_PROFILES_DIR/" 2>/dev/null || true
+      cp "$indir/git-identities"/ctx-* "$HOME/.config/git/" 2>/dev/null || true
+      [[ -f "$indir/ctx_ssh_config" ]] && cp "$indir/ctx_ssh_config" "$CTX_SSH_CONFIG"
+
+      ensure_ssh_include
+
+      local f pname work_dir git_identity
+      for f in "$CTX_PROFILES_DIR"/*.conf; do
+        [[ -e "$f" ]] || continue
+        pname=$(basename "$f" .conf)
+        unset WORK_DIR
+        # shellcheck source=/dev/null
+        source "$f"
+        work_dir="${WORK_DIR:-}"
+        git_identity="$HOME/.config/git/ctx-${pname}"
+        if [[ -n "$work_dir" && -f "$git_identity" ]]; then
+          gitconfig_add_include "$work_dir" "$git_identity" >/dev/null 2>&1 || true
+        fi
+      done
+
+      success "Config imported from: $indir"
+      warn "Secrets are not included in exports; rehydrate via your provider (keychain/file/pass) or 'ctx secret'."
+      ;;
     *)
-      die "Usage: ctx config [show|work-root <path>|secret-provider <auto|keychain|file|pass>]"
+      die "Usage: ctx config [show|work-root <path>|secret-provider <auto|keychain|file|pass>|export <dir>|import <dir>]"
       ;;
   esac
 }

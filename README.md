@@ -159,6 +159,8 @@ ctx use <name>
 | `ctx config [show]` | Show current ctx config values |
 | `ctx config work-root <path>` | Set default root used by `ctx setup` for client folders |
 | `ctx config secret-provider <auto\|keychain\|file\|pass>` | Choose where `ctx secret` stores values (reuse existing OS-backed defaults) |
+| `ctx config export <dir>` | Export portable profile/config bundle for laptop migration (no secrets) |
+| `ctx config import <dir>` | Import portable profile/config bundle on a new machine |
 | `ctx setup` | Configure a new client profile (recommended) |
 | `ctx import` / `ctx add` | Alias for `ctx setup` |
 
@@ -186,6 +188,22 @@ Setup defaults to **Skip secrets for now** and requires explicit opt-in to store
 You can force this behavior with `ctx config secret-provider <auto|keychain|file|pass>`.
 When using `pass`, entries are stored as `ctx/<profile>/<KEY>` in your password store.
 Run `ctx doctor` to verify your selected provider is available on the machine.
+
+### Moving to a new laptop safely
+
+Use config export/import for non-secret state:
+
+```bash
+# old machine
+ctx config export ~/ctx-migration-$(date +%Y%m%d)
+
+# new machine
+ctx config import ~/ctx-migration-YYYYMMDD
+ctx doctor
+```
+
+Export includes profiles, git identities, and ctx SSH host config.  
+Secrets are intentionally excluded; restore with your provider (`keychain`/`pass`/file) or `ctx secret set`.
 
 Secrets are exported into your shell session by `ctx use` and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
 
