@@ -354,7 +354,43 @@ cmd_secret() {
       fi
       success "Deleted $key from $_lbl"
       ;;
-    *) echo "Usage: ctx secret <set|get|list|delete> <profile> [KEY]" ;;
+    migrate)
+      [[ -z "$profile" ]] && die "Usage: ctx secret migrate <profile> <to-provider> [from-provider]"
+      profile_exists "$profile" || die "Profile '$profile' not found."
+      local to_provider="${3:-}" from_provider="${4:-}"
+      [[ -z "$to_provider" ]] && die "Usage: ctx secret migrate <profile> <to-provider> [from-provider]"
+      [[ -z "$from_provider" ]] && from_provider="$(ctx_effective_secret_provider)"
+      to_provider="$(echo "$to_provider" | tr '[:upper:]' '[:lower:]')"
+      from_provider="$(echo "$from_provider" | tr '[:upper:]' '[:lower:]')"
+      case "$to_provider" in keychain|file|pass) ;; *) die "Invalid to-provider: $to_provider" ;; esac
+      case "$from_provider" in keychain|file|pass) ;; *) die "Invalid from-provider: $from_provider" ;; esac
+      [[ "$to_provider" == "$from_provider" ]] && die "Source and destination providers are the same: $to_provider"
+
+      local keys copied=0 missing=0
+      keys="$(secret_list_with_provider "$from_provider" "$profile")"
+      [[ -z "$keys" ]] && die "No secrets found for '$profile' in provider '$from_provider'."
+      while IFS= read -r mkey; do
+        [[ -z "$mkey" ]] && continue
+        local mval
+        mval="$(secret_get_with_provider "$from_provider" "$profile" "$mkey")"
+        if [[ -z "$mval" ]]; then
+          missing=$((missing+1))
+          continue
+        fi
+        if secret_set_with_provider "$to_provider" "$profile" "$mkey" "$mval"; then
+          copied=$((copied+1))
+        fi
+      done <<< "$keys"
+      success "Migrated $copied secret(s) for '$profile' from $from_provider to $to_provider."
+      [[ $missing -gt 0 ]] && warn "$missing key(s) were empty/unreadable and skipped."
+      if ask_yn "Delete migrated keys from source provider '$from_provider'?" "n"; then
+        while IFS= read -r mkey; do
+          [[ -n "$mkey" ]] && secret_delete_with_provider "$from_provider" "$profile" "$mkey" >/dev/null 2>&1 || true
+        done <<< "$keys"
+        success "Removed source keys from '$from_provider'."
+      fi
+      ;;
+    *) echo "Usage: ctx secret <set|get|list|delete|migrate> <profile> [KEY]" ;;
   esac
 }
 
@@ -786,6 +822,23 @@ cmd_doctor() {
   _chk az        "Azure CLI" "$install_hint_az"
   _chk gcloud    "gcloud"    "$install_hint_gcloud"
   _chk kubectl   "kubectl"   "$install_hint_kubectl"
+
+  echo ""
+  hr
+
+  local sp eff
+  sp="$(ctx_secret_provider)"
+  eff="$(ctx_effective_secret_provider)"
+  if ctx_secret_provider_available; then
+    success "secret provider: $sp (effective: $eff)"
+  else
+    warn "secret provider unavailable: $sp (effective: $eff)"
+    case "$eff" in
+      keychain) info "Install/enable macOS security Keychain tooling, or set: ctx config secret-provider file" ;;
+      pass) info "Install pass (and initialize it), or set: ctx config secret-provider auto" ;;
+    esac
+    all_ok=false
+  fi
 
   echo ""
   hr

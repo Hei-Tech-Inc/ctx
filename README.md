@@ -179,11 +179,13 @@ ctx use <name>
 | `ctx secret get <profile> <KEY>` | Retrieve a secret |
 | `ctx secret list <profile>` | List secret keys for a profile |
 | `ctx secret delete <profile> <KEY>` | Delete a secret |
+| `ctx secret migrate <profile> <to-provider> [from-provider]` | Copy secrets between backends (`keychain`, `file`, `pass`) |
 
 On macOS, secrets prefer the Keychain. On Linux and other Unixes, values live under `~/.ctx/secrets/<profile>/` (file per key, `0600`) — use full-disk encryption.
 Setup defaults to **Skip secrets for now** and requires explicit opt-in to store any secret value.
 You can force this behavior with `ctx config secret-provider <auto|keychain|file|pass>`.
 When using `pass`, entries are stored as `ctx/<profile>/<KEY>` in your password store.
+Run `ctx doctor` to verify your selected provider is available on the machine.
 
 Secrets are exported into your shell session by `ctx use` and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
 

@@ -452,6 +452,90 @@ keychain_list_keys() {
   esac
 }
 
+secret_set_with_provider() {
+  local provider="$1"; shift
+  case "$provider" in
+    keychain)
+      [[ "$(uname -s)" == "Darwin" ]] || return 1
+      command -v security &>/dev/null || return 1
+      _secret_keychain_set "$@"
+      ;;
+    file)
+      _secret_file_set "$@"
+      ;;
+    pass)
+      command -v pass &>/dev/null || return 1
+      _secret_pass_set "$@"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+secret_get_with_provider() {
+  local provider="$1"; shift
+  case "$provider" in
+    keychain)
+      [[ "$(uname -s)" == "Darwin" ]] || { echo ""; return 0; }
+      command -v security &>/dev/null || { echo ""; return 0; }
+      _secret_keychain_get "$@"
+      ;;
+    file)
+      _secret_file_get "$@"
+      ;;
+    pass)
+      command -v pass &>/dev/null || { echo ""; return 0; }
+      _secret_pass_get "$@"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+secret_delete_with_provider() {
+  local provider="$1"; shift
+  case "$provider" in
+    keychain)
+      [[ "$(uname -s)" == "Darwin" ]] || return 1
+      command -v security &>/dev/null || return 1
+      _secret_keychain_delete "$@"
+      ;;
+    file)
+      _secret_file_delete "$@"
+      ;;
+    pass)
+      command -v pass &>/dev/null || return 1
+      _secret_pass_delete "$@"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+secret_list_with_provider() {
+  local provider="$1"; shift
+  case "$provider" in
+    keychain)
+      [[ "$(uname -s)" == "Darwin" ]] || return 0
+      command -v security &>/dev/null || return 0
+      _secret_keychain_list_keys "$@"
+      ;;
+    file)
+      _secret_file_list_keys "$@"
+      ;;
+    pass)
+      command -v pass &>/dev/null || return 0
+      _secret_pass_list_keys "$@"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 # Read CTX_VERSION= from a lib/core.sh payload (handles CRLF).
 parse_ctx_version_from_core_sh_file() {
   local f="$1" line val
