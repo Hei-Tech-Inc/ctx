@@ -54,7 +54,7 @@ ask() {
   local prompt="$1" default="${2:-}"
   if $HAS_GUM; then
     local result
-    dim "  Waiting for input — type and press Enter (Ctrl+C to cancel)."
+    echo -e "${DIM}  Waiting for input — type and press Enter (Ctrl+C to cancel).${RESET}" >&2
     result=$(gum input \
       --placeholder "${default:-$prompt}" \
       --prompt "> " \
@@ -81,7 +81,7 @@ ask() {
 ask_secret() {
   local prompt="$1"
   if $HAS_GUM; then
-    dim "  Waiting for secret input — press Enter to confirm (Ctrl+C to cancel)."
+    echo -e "${DIM}  Waiting for secret input — press Enter to confirm (Ctrl+C to cancel).${RESET}" >&2
     gum input --password \
       --placeholder "$prompt" \
       --prompt "> " \
