@@ -382,6 +382,9 @@ install_ctx() {
     "9s|^CTX_LIB=.*|CTX_LIB=\"${install_lib}\"|" \
     "$install_bin/ctx" 2>/dev/null || true
 
+  # Fail fast if download or patching left an invalid shell script.
+  bash -n "$install_bin/ctx" 2>/dev/null || die "Installed ctx failed syntax validation ($install_bin/ctx). Re-run install or pin a release tag."
+
   success "ctx: installed at $install_bin/ctx"
 }
 

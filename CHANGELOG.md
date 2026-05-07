@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Installer safety check:** `install.sh` now validates the installed `ctx` script with `bash -n` and aborts fast if syntax is invalid (prevents silent broken upgrades).
+
 ## [3.2.0] - 2026-05-07
 
 ### Fixed
