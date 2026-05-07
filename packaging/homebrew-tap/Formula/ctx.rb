@@ -1,10 +1,10 @@
 class Ctx < Formula
   desc "Client context switcher for git, SSH, cloud CLIs, and per-client environments"
   homepage "https://github.com/Hei-Tech-Inc/ctx"
-  url "https://github.com/Hei-Tech-Inc/ctx/archive/refs/tags/v3.1.1.tar.gz"
-  sha256 "36a8f6d00282afb211746a6a319d0cbb4a8d9cd11f0ba42359b6d9101f28c868"
+  url "https://github.com/Hei-Tech-Inc/ctx/archive/refs/tags/v3.2.0.tar.gz"
+  sha256 "eefc86e28c5b6c9700dd25f0a38e5b01ab4b1f2c1a2788b0741d7e2e157291c2"
   license "MIT"
-  version "3.1.1"
+  version "3.2.0"
 
   depends_on "bash"
   depends_on "git"
