@@ -309,6 +309,7 @@ install_ctx() {
   local install_lib="${CTX_INSTALL_LIB:-/usr/local/lib/ctx}"
   local fallback_bin="$HOME/.local/bin"
   local fallback_lib="$HOME/.local/lib/ctx"
+  local stage_dir stage_bin stage_lib
 
   _ensure_path_on_shell_rc() {
     local path_dir="$1"
@@ -337,6 +338,10 @@ install_ctx() {
   fi
 
   mkdir -p "$install_bin" "$install_lib" || die "Unable to create install paths: $install_bin and $install_lib"
+  stage_dir="$(mktemp -d)" || die "Unable to create staging directory"
+  stage_bin="$stage_dir/ctx"
+  stage_lib="$stage_dir/lib"
+  mkdir -p "$stage_lib" || die "Unable to prepare staging files"
 
   # Locate source — local install vs remote
   local script_dir
@@ -344,10 +349,10 @@ install_ctx() {
 
   if [[ -f "$script_dir/bin/ctx" && -d "$script_dir/lib" ]]; then
     info "Installing ctx from local source..."
-    cp "$script_dir/bin/ctx"            "$install_bin/ctx"
-    cp "$script_dir/lib/core.sh"        "$install_lib/core.sh"
-    cp "$script_dir/lib/cmd_import.sh"  "$install_lib/cmd_import.sh"
-    cp "$script_dir/lib/cmd_ops.sh"     "$install_lib/cmd_ops.sh"
+    cp "$script_dir/bin/ctx"            "$stage_bin"
+    cp "$script_dir/lib/core.sh"        "$stage_lib/core.sh"
+    cp "$script_dir/lib/cmd_import.sh"  "$stage_lib/cmd_import.sh"
+    cp "$script_dir/lib/cmd_ops.sh"     "$stage_lib/cmd_ops.sh"
   else
     info "Downloading ctx..."
     _dl() {
@@ -363,14 +368,14 @@ install_ctx() {
       _dl "$1" "$2"
       strip_cr_inplace "$2"
     }
-    _dl_text "$CTX_REPO/bin/ctx"            "$install_bin/ctx"
-    _dl_text "$CTX_REPO/lib/core.sh"        "$install_lib/core.sh"
-    _dl_text "$CTX_REPO/lib/cmd_import.sh"  "$install_lib/cmd_import.sh"
-    _dl_text "$CTX_REPO/lib/cmd_ops.sh"     "$install_lib/cmd_ops.sh"
+    _dl_text "$CTX_REPO/bin/ctx"            "$stage_bin"
+    _dl_text "$CTX_REPO/lib/core.sh"        "$stage_lib/core.sh"
+    _dl_text "$CTX_REPO/lib/cmd_import.sh"  "$stage_lib/cmd_import.sh"
+    _dl_text "$CTX_REPO/lib/cmd_ops.sh"     "$stage_lib/cmd_ops.sh"
   fi
 
-  chmod +x "$install_bin/ctx"
-  chmod 644 "$install_lib"/*.sh
+  chmod +x "$stage_bin"
+  chmod 644 "$stage_lib"/*.sh
 
   # Patch the lib path in the binary so it finds its libs after install
   local sed_inplace=(-i)
@@ -380,10 +385,17 @@ install_ctx() {
   # A broad `CTX_LIB=.*` match across the whole file can corrupt completion blocks.
   sed "${sed_inplace[@]}" \
     "9s|^CTX_LIB=.*|CTX_LIB=\"${install_lib}\"|" \
-    "$install_bin/ctx" 2>/dev/null || true
+    "$stage_bin" 2>/dev/null || true
 
   # Fail fast if download or patching left an invalid shell script.
-  bash -n "$install_bin/ctx" 2>/dev/null || die "Installed ctx failed syntax validation ($install_bin/ctx). Re-run install or pin a release tag."
+  bash -n "$stage_bin" 2>/dev/null || die "Installed ctx failed syntax validation ($stage_bin). Re-run install or pin a release tag."
+
+  # Atomic swap: move validated staged files into final locations.
+  cp "$stage_lib/core.sh"       "$install_lib/core.sh"
+  cp "$stage_lib/cmd_import.sh" "$install_lib/cmd_import.sh"
+  cp "$stage_lib/cmd_ops.sh"    "$install_lib/cmd_ops.sh"
+  mv "$stage_bin" "$install_bin/ctx"
+  rm -rf "$stage_dir"
 
   success "ctx: installed at $install_bin/ctx"
 }
