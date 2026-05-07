@@ -60,13 +60,15 @@ cmd_import() {
   local GIT_NAME GIT_EMAIL
   GIT_NAME=$(ask  "Git name for this client"  "$current_name")
   dim "  Use your real email (e.g. you@company.com), not your GitHub username."
+  dim "  Press Enter to accept the suggested value."
   while :; do
     GIT_EMAIL=$(ask "Git email for this client" "$current_email")
+    GIT_EMAIL="$(printf '%s' "$GIT_EMAIL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [[ -z "$GIT_EMAIL" ]] && break
     if is_sensible_git_email "$GIT_EMAIL"; then
       break
     fi
-    warn "That doesn't look like an email (expected user@domain.tld)."
+    warn "That doesn't look like an email (expected user@domain.tld). You entered: '$GIT_EMAIL'"
   done
   echo ""
 
