@@ -39,6 +39,31 @@ Profiles auto-activate when you `cd` into a client directory.
 
 Everything else (`mise`, `gum`, `gh`, `git`, `awscli`) is installed automatically.
 
+### Windows support
+
+`ctx` does not currently support native PowerShell/CMD usage. On Windows, use **WSL2** (Ubuntu recommended) and run `ctx` inside WSL.
+
+Quick start on Windows:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Then in the Ubuntu shell:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash
+source ~/.bashrc
+ctx init
+ctx setup
+```
+
+Notes for WSL users:
+
+- Keep your `ctx` workflow in WSL (`git`, `ssh`, `gh`, `ctx`) for consistent identity/key behavior.
+- `~/.ctx`, `~/.ssh`, and shell hooks live in the WSL Linux home, not Windows user directories.
+- Secret storage follows Linux behavior (`~/.ctx/secrets/...`, file mode `0600`) — use device/disk encryption.
+
 ---
 
 ## Installation
