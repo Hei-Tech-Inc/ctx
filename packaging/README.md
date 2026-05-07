@@ -5,10 +5,10 @@
 Instead of tracking `main`, pin `install.sh` to a [release tag](https://github.com/Hei-Tech-Inc/ctx/tags):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.1.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.2.0/install.sh | bash
 ```
 
-Replace `v3.1.1` with the tag you want. Check `CTX_VERSION` in `lib/core.sh` on that tag if you need to confirm the advertised CLI version.
+Replace `v3.2.0` with the tag you want. Check `CTX_VERSION` in `lib/core.sh` on that tag if you need to confirm the advertised CLI version.
 
 ## Homebrew tap
 

@@ -79,10 +79,10 @@ curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | 
 `main` moves; for reproducible installs use a [release tag](https://github.com/Hei-Tech-Inc/ctx/tags):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.1.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.2.0/install.sh | bash
 ```
 
-Replace `v3.1.1` with the tag you trust (see [`lib/core.sh`](lib/core.sh) for `CTX_VERSION` on that ref). See [`packaging/README.md`](packaging/README.md) for Homebrew/Linux packaging notes.
+Replace `v3.2.0` with the tag you trust (see [`lib/core.sh`](lib/core.sh) for `CTX_VERSION` on that ref). See [`packaging/README.md`](packaging/README.md) for Homebrew/Linux packaging notes.
 
 ### Homebrew (tap)
 

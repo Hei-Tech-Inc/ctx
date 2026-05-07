@@ -41,4 +41,4 @@ If CI is green but the UI still shows the bot, wait for GitHub to refresh the gr
 
 `test/test.sh` covers pure helpers (env keys, timeouts, clone URL rewrite, version parsing, secret paths), plus a smoke check that `bin/ctx version` prints the version from `lib/core.sh`. Interactive flows (`ctx setup`, real `git clone`) are not automated yet — exercise those manually when changing onboarding or clone behavior.
 
-Pushing a tag matching `v*` (for example `v3.1.1`) triggers the release workflow, which creates a GitHub Release with auto-generated notes.
+Pushing a tag matching `v*` (for example `v3.2.0`) triggers the release workflow, which creates a GitHub Release with auto-generated notes.

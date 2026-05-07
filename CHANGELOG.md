@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-05-07
+
 ### Fixed
 - **Secrets backend adapters:** added provider-aware storage with `ctx config secret-provider <auto|keychain|file|pass>` and a first community-backed adapter for `pass` (`ctx/<profile>/<KEY>`), while preserving existing defaults.
 - **Provider operations:** added `ctx secret migrate` to copy profile secrets between backends and extended `ctx doctor` to validate provider availability (`keychain`/`file`/`pass`).
