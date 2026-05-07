@@ -158,7 +158,7 @@ ctx use <name>
 | `ctx init` | Check deps, install hooks |
 | `ctx config [show]` | Show current ctx config values |
 | `ctx config work-root <path>` | Set default root used by `ctx setup` for client folders |
-| `ctx config secret-provider <auto\|keychain\|file>` | Choose where `ctx secret` stores values (reuse existing OS-backed defaults) |
+| `ctx config secret-provider <auto\|keychain\|file\|pass>` | Choose where `ctx secret` stores values (reuse existing OS-backed defaults) |
 | `ctx setup` | Configure a new client profile (recommended) |
 | `ctx import` / `ctx add` | Alias for `ctx setup` |
 
@@ -182,7 +182,8 @@ ctx use <name>
 
 On macOS, secrets prefer the Keychain. On Linux and other Unixes, values live under `~/.ctx/secrets/<profile>/` (file per key, `0600`) — use full-disk encryption.
 Setup defaults to **Skip secrets for now** and requires explicit opt-in to store any secret value.
-You can force this behavior with `ctx config secret-provider <auto|keychain|file>`.
+You can force this behavior with `ctx config secret-provider <auto|keychain|file|pass>`.
+When using `pass`, entries are stored as `ctx/<profile>/<KEY>` in your password store.
 
 Secrets are exported into your shell session by `ctx use` and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
 

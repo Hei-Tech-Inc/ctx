@@ -107,6 +107,9 @@ test_secret_provider_resolution() {
     echo "secret_provider=file" >> "$CTX_CONFIG"
     p="$(ctx_secret_provider)"
     [[ "$p" == "file" ]] || exit 1
+    echo "secret_provider=pass" > "$CTX_CONFIG"
+    p="$(ctx_secret_provider)"
+    [[ "$p" == "pass" ]] || exit 1
     rm -rf "$td"
   ) || fail "secret provider resolution"
   pass "secret provider resolution"

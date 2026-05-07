@@ -277,21 +277,22 @@ cmd_import() {
 
   # ── Secrets ─────────────────────────────────────────────────────────────
   hr
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    bold "  Secrets (macOS Keychain)"
-  else
-    bold "  Secrets (~/.ctx/secrets, file per key — use full-disk encryption)"
-  fi
+  local _sec_label
+  _sec_label="$(ctx_secret_store_label)"
+  bold "  Secrets ($_sec_label)"
   echo ""
   dim "  Security note: if your machine is compromised while unlocked, local secrets can still be exfiltrated."
   dim "  Best practice: add only what this client/project needs, rotate regularly, and avoid broad long-lived tokens."
   echo ""
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    dim "  Values you enter here go into Keychain."
-  else
-    dim "  Values you enter here go into ~/.ctx/secrets/<profile>/<KEY> (0600)."
-  fi
+  case "$(ctx_effective_secret_provider)" in
+    keychain) dim "  Values you enter here go into Keychain." ;;
+    pass) dim "  Values you enter here go into pass (ctx/<profile>/<KEY>)." ;;
+    *) dim "  Values you enter here go into ~/.ctx/secrets/<profile>/<KEY> (0600)." ;;
+  esac
   dim "  They are exported by ctx use and by mise hooks.enter (when mise runs)."
+  if [[ "$(ctx_effective_secret_provider)" == "pass" ]] && ! command -v pass &>/dev/null; then
+    warn "  'pass' CLI not found. Install pass or set: ctx config secret-provider auto"
+  fi
   echo ""
 
   local SECRET_KEYS=() secret_mode where
@@ -304,16 +305,15 @@ cmd_import() {
   if [[ "$secret_mode" == "Add selected secrets now (manual, one by one)" ]]; then
     _maybe_secret() {
       local key="$1" prompt="$2"
-      where="secrets"
-      [[ "$(uname -s)" == "Darwin" ]] && where="Keychain"
+      where="$(ctx_secret_store_label)"
       is_valid_env_key "$key" || { warn "Skipping invalid key '$key'"; return 1; }
       if ask_yn "$prompt?" "n"; then
         local val
         val=$(ask_secret "Value for $key")
         if [[ -n "$val" ]]; then
-          keychain_set "$PROFILE_NAME" "$key" "$val" \
-            && success "$key → $where" \
-            || warn "Could not store $key ($where)"
+        keychain_set "$PROFILE_NAME" "$key" "$val" \
+          && success "$key → $where" \
+          || warn "Could not store $key ($where)"
           SECRET_KEYS+=("$key")
         fi
       fi
@@ -334,8 +334,7 @@ cmd_import() {
       local cval
       cval=$(ask_secret "Value for $ckey")
       if [[ -n "$cval" ]]; then
-        where="secrets"
-        [[ "$(uname -s)" == "Darwin" ]] && where="Keychain"
+        where="$(ctx_secret_store_label)"
         keychain_set "$PROFILE_NAME" "$ckey" "$cval" \
           && success "$ckey → $where"
         SECRET_KEYS+=("$ckey")
@@ -450,7 +449,7 @@ _write_all() {
   {
     printf '# ctx profile: %s\n' "$profile"
     printf '# Generated: %s\n' "$(date)"
-    printf '# Secrets: macOS Keychain or ~/.ctx/secrets. Env vars are in mise.toml.\n\n'
+    printf '# Secrets: configured provider (auto/keychain/file/pass). Env vars are in mise.toml.\n\n'
     printf 'PROFILE_NAME=%q\n' "$profile"
     printf 'GIT_NAME=%q\n' "$git_name"
     printf 'GIT_EMAIL=%q\n' "$git_email"

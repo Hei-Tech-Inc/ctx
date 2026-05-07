@@ -253,7 +253,7 @@ ctx_secret_provider() {
   [[ -z "$configured" ]] && configured="auto"
   configured="$(echo "$configured" | tr '[:upper:]' '[:lower:]')"
   case "$configured" in
-    auto|keychain|file) ;;
+    auto|keychain|file|pass) ;;
     *) configured="auto" ;;
   esac
   echo "$configured"
@@ -265,6 +265,7 @@ ctx_effective_secret_provider() {
   case "$selected" in
     keychain) echo "keychain" ;;
     file) echo "file" ;;
+    pass) echo "pass" ;;
     auto)
       if [[ "$(uname -s)" == "Darwin" ]]; then
         echo "keychain"
@@ -272,6 +273,22 @@ ctx_effective_secret_provider() {
         echo "file"
       fi
       ;;
+  esac
+}
+
+ctx_secret_store_label() {
+  case "$(ctx_effective_secret_provider)" in
+    keychain) echo "Keychain" ;;
+    pass) echo "pass password store" ;;
+    *) echo "file store" ;;
+  esac
+}
+
+ctx_secret_provider_available() {
+  case "$(ctx_effective_secret_provider)" in
+    keychain) [[ "$(uname -s)" == "Darwin" ]] && command -v security &>/dev/null ;;
+    pass) command -v pass &>/dev/null ;;
+    file) return 0 ;;
   esac
 }
 
@@ -356,39 +373,82 @@ _secret_file_list_keys() {
   done | sort
 }
 
+_secret_pass_path() {
+  printf 'ctx/%s/%s' "$1" "$2"
+}
+
+_secret_pass_set() {
+  local profile="$1" key="$2" value="$3"
+  local p
+  p="$(_secret_pass_path "$profile" "$key")"
+  printf '%s\n' "$value" | pass insert -m -f "$p" >/dev/null 2>&1
+}
+
+_secret_pass_get() {
+  local profile="$1" key="$2"
+  local p out
+  p="$(_secret_pass_path "$profile" "$key")"
+  out="$(pass show "$p" 2>/dev/null || true)"
+  [[ -n "$out" ]] && printf '%s\n' "$out" | sed -n '1p' || echo ""
+}
+
+_secret_pass_delete() {
+  local p
+  p="$(_secret_pass_path "$1" "$2")"
+  pass rm -f "$p" >/dev/null 2>&1 || true
+}
+
+_secret_pass_list_keys() {
+  local base="${PASSWORD_STORE_DIR:-$HOME/.password-store}/ctx/${1}"
+  [[ -d "$base" ]] || return 0
+  local f
+  for f in "$base"/*.gpg; do
+    [[ -e "$f" ]] || continue
+    basename "${f%.gpg}"
+  done | sort
+}
+
 keychain_set() {
+  ctx_secret_provider_available || return 1
   local provider
   provider="$(ctx_effective_secret_provider)"
   case "$provider" in
     keychain) _secret_keychain_set "$@" ;;
     file) _secret_file_set "$@" ;;
+    pass) _secret_pass_set "$@" ;;
   esac
 }
 
 keychain_get() {
+  ctx_secret_provider_available || { echo ""; return 0; }
   local provider
   provider="$(ctx_effective_secret_provider)"
   case "$provider" in
     keychain) _secret_keychain_get "$@" ;;
     file) _secret_file_get "$@" ;;
+    pass) _secret_pass_get "$@" ;;
   esac
 }
 
 keychain_delete() {
+  ctx_secret_provider_available || return 1
   local provider
   provider="$(ctx_effective_secret_provider)"
   case "$provider" in
     keychain) _secret_keychain_delete "$@" ;;
     file) _secret_file_delete "$@" ;;
+    pass) _secret_pass_delete "$@" ;;
   esac
 }
 
 keychain_list_keys() {
+  ctx_secret_provider_available || return 0
   local provider
   provider="$(ctx_effective_secret_provider)"
   case "$provider" in
     keychain) _secret_keychain_list_keys "$@" ;;
     file) _secret_file_list_keys "$@" ;;
+    pass) _secret_pass_list_keys "$@" ;;
   esac
 }
 
@@ -587,14 +647,24 @@ generate_mise_toml() {
     [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$gcp_project\" --quiet 2>/dev/null || true"
     [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$kube_ctx\" 2>/dev/null || true"
 
-    # Secret injection (Keychain on macOS, ~/.ctx/secrets elsewhere)
+    # Secret injection (provider-aware: keychain/file/pass)
     if [[ -n "$secret_keys" ]]; then
       echo ""
       echo "  # Load profile secrets"
+      echo "  _ctx_sp=\"\${CTX_SECRET_PROVIDER:-}\""
+      echo "  if [[ -z \"\$_ctx_sp\" && -f \"\${CTX_DIR:-\$HOME/.ctx}/config\" ]]; then"
+      echo "    _ctx_sp=\$(grep '^secret_provider=' \"\${CTX_DIR:-\$HOME/.ctx}/config\" 2>/dev/null | tail -1 | cut -d= -f2-)"
+      echo "  fi"
+      echo "  [[ -z \"\$_ctx_sp\" ]] && _ctx_sp=\"auto\""
+      echo "  if [[ \"\$_ctx_sp\" == \"auto\" ]]; then"
+      echo "    [[ \"\$(uname -s)\" == \"Darwin\" ]] && _ctx_sp=\"keychain\" || _ctx_sp=\"file\""
+      echo "  fi"
       for key in $secret_keys; do
         is_valid_env_key "$key" || continue
-        echo "  if [[ \"\$(uname -s)\" == \"Darwin\" ]]; then"
+        echo "  if [[ \"\$_ctx_sp\" == \"keychain\" ]]; then"
         echo "    _val=\$(security find-generic-password -a \"\$USER\" -s \"ctx-${profile}-${key}\" -w 2>/dev/null || true)"
+        echo "  elif [[ \"\$_ctx_sp\" == \"pass\" ]]; then"
+        echo "    _val=\$(pass show \"ctx/${profile}/${key}\" 2>/dev/null | sed -n '1p' || true)"
         echo "  else"
         echo "    _f=\"\${CTX_DIR:-\$HOME/.ctx}/secrets/${profile}/${key}\""
         echo "    [[ -f \"\$_f\" ]] && _val=\$(cat \"\$_f\") || _val=\"\""
