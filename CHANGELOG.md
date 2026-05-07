@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - **Atomic installer writes:** `install.sh` now stages `ctx` files in a temp directory, validates syntax, then swaps into place to avoid partially-written binaries during upgrade.
 - **Doctor checks:** fixed SSH include detection, and updated command version probes so `kubectl` reports correctly instead of showing a false unknown-flag error.
 - **Prompt UX + cancel behavior:** interactive gum prompts now explicitly indicate when input is expected, and `Ctrl+C` cleanly aborts setup instead of continuing to the next question.
+- **Setup loading feedback:** `ctx setup` now announces credential/profile discovery up front and bounds `gh auth status` detection with a timeout to avoid appearing hung.
 
 ## [3.2.0] - 2026-05-07
 

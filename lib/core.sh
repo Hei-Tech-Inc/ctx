@@ -802,7 +802,7 @@ detect_ssh_keys() {
 
 detect_gh_accounts() {
   command -v gh &>/dev/null || return 0
-  gh auth status 2>&1 \
+  run_with_timeout 8 gh auth status 2>&1 \
     | grep "Logged in to github.com account" \
     | awk '{print $NF}' | tr -d '()'
 }

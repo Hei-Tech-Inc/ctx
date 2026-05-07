@@ -9,6 +9,7 @@ cmd_import() {
   local ssh_keys=() gh_accounts=() aws_profiles=() kube_contexts=()
   local azure_subs=() gcp_projects=()
 
+  info "Scanning local accounts/keys/profiles (this can take a few seconds)..."
   if $HAS_GUM; then
     spin "Scanning your machine for existing credentials..." \
       bash -c '
@@ -16,8 +17,11 @@ cmd_import() {
         ls ~/.ssh/*.pub &>/dev/null || true
         ls ~/.aws/credentials &>/dev/null || true
       ' &>/dev/null || true
+  else
+    dim "  Looking for SSH keys, gh auth, and cloud profile references..."
   fi
 
+  dim "  Detecting SSH keys / GitHub accounts / cloud profiles..."
   while IFS= read -r k; do [[ -n "$k" ]] && ssh_keys+=("$k");       done < <(detect_ssh_keys)
   while IFS= read -r a; do [[ -n "$a" ]] && gh_accounts+=("$a");     done < <(detect_gh_accounts)
   while IFS= read -r p; do [[ -n "$p" ]] && aws_profiles+=("$p");    done < <(detect_aws_profiles)
