@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Secrets backend foundation:** added `ctx config secret-provider <auto|keychain|file>` so storage backend selection is explicit and pluggable, while preserving existing defaults (macOS Keychain, file store elsewhere).
 - **`ctx setup`:** onboarding now provides three location modes (current directory default, existing path, or new client folder), supports manual-vs-imported reference selection, and defaults secrets to explicit opt-in with clearer local-compromise warnings.
 - **Docs:** added a Windows section clarifying WSL2 install/usage (`ctx` runs inside Linux shell, not native PowerShell/CMD).
 - **`ctx upgrade`:** runs an **in-place** install (`CTX_UPGRADE_ONLY`) — updates only the `ctx` binary and `lib/*.sh`; skips Homebrew/mise/gum/gh steps, shell-rc snippets, and the auto-switch hook installer so existing profiles and client directories are not disturbed by noise or side effects.

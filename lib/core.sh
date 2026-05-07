@@ -244,6 +244,37 @@ ctx_work_root() {
   echo "$configured"
 }
 
+ctx_secret_provider() {
+  local configured=""
+  configured="${CTX_SECRET_PROVIDER:-}"
+  if [[ -z "$configured" && -f "$CTX_CONFIG" ]]; then
+    configured="$(grep "^secret_provider=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  fi
+  [[ -z "$configured" ]] && configured="auto"
+  configured="$(echo "$configured" | tr '[:upper:]' '[:lower:]')"
+  case "$configured" in
+    auto|keychain|file) ;;
+    *) configured="auto" ;;
+  esac
+  echo "$configured"
+}
+
+ctx_effective_secret_provider() {
+  local selected
+  selected="$(ctx_secret_provider)"
+  case "$selected" in
+    keychain) echo "keychain" ;;
+    file) echo "file" ;;
+    auto)
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "keychain"
+      else
+        echo "file"
+      fi
+      ;;
+  esac
+}
+
 # ─── Backup ────────────────────────────────────────────────────────────────────
 backup_file() {
   local src="$1"
@@ -268,14 +299,31 @@ _secret_file() {
   printf '%s/secrets/%s/%s' "$CTX_DIR" "$1" "$2"
 }
 
-keychain_set() {
+_secret_keychain_set() {
   local profile="$1" key="$2" value="$3"
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    local svc="ctx-${profile}-${key}"
-    security delete-generic-password -a "$USER" -s "$svc" &>/dev/null || true
-    security add-generic-password -a "$USER" -s "$svc" -w "$value" -T "" -U 2>/dev/null
-    return $?
-  fi
+  local svc="ctx-${profile}-${key}"
+  security delete-generic-password -a "$USER" -s "$svc" &>/dev/null || true
+  security add-generic-password -a "$USER" -s "$svc" -w "$value" -T "" -U 2>/dev/null
+  return $?
+}
+
+_secret_keychain_get() {
+  local profile="$1" key="$2"
+  security find-generic-password -a "$USER" -s "ctx-${profile}-${key}" -w 2>/dev/null || echo ""
+}
+
+_secret_keychain_delete() {
+  security delete-generic-password -a "$USER" -s "ctx-${1}-${2}" &>/dev/null || true
+}
+
+_secret_keychain_list_keys() {
+  security dump-keychain 2>/dev/null \
+    | grep -o "\"ctx-${1}-[^\"]*\"" \
+    | sed "s/\"ctx-${1}-//;s/\"//" | sort
+}
+
+_secret_file_set() {
+  local profile="$1" key="$2" value="$3"
   local f
   f="$(_secret_file "$profile" "$key")"
   mkdir -p "$(dirname "$f")" || return 1
@@ -285,34 +333,20 @@ keychain_set() {
   return 0
 }
 
-keychain_get() {
+_secret_file_get() {
   local profile="$1" key="$2"
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    security find-generic-password -a "$USER" -s "ctx-${profile}-${key}" -w 2>/dev/null || echo ""
-    return 0
-  fi
   local f
   f="$(_secret_file "$profile" "$key")"
   [[ -f "$f" ]] && cat "$f" || echo ""
 }
 
-keychain_delete() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    security delete-generic-password -a "$USER" -s "ctx-${1}-${2}" &>/dev/null || true
-    return 0
-  fi
+_secret_file_delete() {
   local f
   f="$(_secret_file "$1" "$2")"
   rm -f "$f" 2>/dev/null || true
 }
 
-keychain_list_keys() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    security dump-keychain 2>/dev/null \
-      | grep -o "\"ctx-${1}-[^\"]*\"" \
-      | sed "s/\"ctx-${1}-//;s/\"//" | sort
-    return 0
-  fi
+_secret_file_list_keys() {
   local d="${CTX_DIR}/secrets/${1}"
   [[ -d "$d" ]] || return 0
   local f
@@ -320,6 +354,42 @@ keychain_list_keys() {
     [[ -e "$f" ]] || continue
     basename "$f"
   done | sort
+}
+
+keychain_set() {
+  local provider
+  provider="$(ctx_effective_secret_provider)"
+  case "$provider" in
+    keychain) _secret_keychain_set "$@" ;;
+    file) _secret_file_set "$@" ;;
+  esac
+}
+
+keychain_get() {
+  local provider
+  provider="$(ctx_effective_secret_provider)"
+  case "$provider" in
+    keychain) _secret_keychain_get "$@" ;;
+    file) _secret_file_get "$@" ;;
+  esac
+}
+
+keychain_delete() {
+  local provider
+  provider="$(ctx_effective_secret_provider)"
+  case "$provider" in
+    keychain) _secret_keychain_delete "$@" ;;
+    file) _secret_file_delete "$@" ;;
+  esac
+}
+
+keychain_list_keys() {
+  local provider
+  provider="$(ctx_effective_secret_provider)"
+  case "$provider" in
+    keychain) _secret_keychain_list_keys "$@" ;;
+    file) _secret_file_list_keys "$@" ;;
+  esac
 }
 
 # Read CTX_VERSION= from a lib/core.sh payload (handles CRLF).

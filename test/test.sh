@@ -92,6 +92,26 @@ test_secret_file_path() {
   pass "secret file path (_secret_file)"
 }
 
+test_secret_provider_resolution() {
+  (
+    set -euo pipefail
+    local ROOT td p
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(mktemp -d)"
+    export CTX_DIR="$td"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT/lib/core.sh"
+    ctx_init_dirs
+    p="$(ctx_secret_provider)"
+    [[ "$p" == "auto" ]] || exit 1
+    echo "secret_provider=file" >> "$CTX_CONFIG"
+    p="$(ctx_secret_provider)"
+    [[ "$p" == "file" ]] || exit 1
+    rm -rf "$td"
+  ) || fail "secret provider resolution"
+  pass "secret provider resolution"
+}
+
 test_ctx_cli_version() {
   local out want
   want="$CTX_VERSION"
@@ -106,6 +126,7 @@ test_clone_extra_args_drop_url
 test_github_clone_url_for_profile
 test_parse_ctx_version_from_core_sh_file
 test_secret_file_path
+test_secret_provider_resolution
 test_ctx_cli_version
 
 echo "All tests passed."

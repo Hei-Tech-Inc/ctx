@@ -320,8 +320,8 @@ cmd_secret() {
       [[ -z "$profile" || -z "$key" ]] && die "Usage: ctx secret set <profile> <KEY>"
       profile_exists "$profile" || die "Profile '$profile' not found."
       local val; val=$(ask_secret "Value for $key")
-      local _lbl="secret store"
-      [[ "$(uname -s)" == "Darwin" ]] && _lbl="Keychain"
+      local _lbl="file store"
+      [[ "$(ctx_effective_secret_provider)" == "keychain" ]] && _lbl="Keychain"
       keychain_set "$profile" "$key" "$val" && success "$key stored ($_lbl) for $profile"
       ;;
     get)
@@ -346,8 +346,8 @@ cmd_secret() {
       ;;
     delete)
       [[ -z "$profile" || -z "$key" ]] && die "Usage: ctx secret delete <profile> <KEY>"
-      local _lbl="secret store"
-      [[ "$(uname -s)" == "Darwin" ]] && _lbl="Keychain"
+      local _lbl="file store"
+      [[ "$(ctx_effective_secret_provider)" == "keychain" ]] && _lbl="Keychain"
       keychain_delete "$profile" "$key" && success "Deleted $key from $_lbl"
       ;;
     *) echo "Usage: ctx secret <set|get|list|delete> <profile> [KEY]" ;;
@@ -363,8 +363,10 @@ cmd_config() {
     ""|show)
       bold "\n  ctx config\n"
       echo "  work_root: $(ctx_work_root)"
+      echo "  secret_provider: $(ctx_secret_provider) (effective: $(ctx_effective_secret_provider))"
       echo ""
-      info "Set it with: ctx config work-root <path>"
+      info "Set with: ctx config work-root <path>"
+      info "      or: ctx config secret-provider <auto|keychain|file>"
       ;;
     work-root)
       if [[ -z "$value" ]]; then
@@ -383,8 +385,28 @@ cmd_config() {
       fi
       success "work_root set to: $value"
       ;;
+    secret-provider)
+      if [[ -z "$value" ]]; then
+        echo "  secret_provider: $(ctx_secret_provider) (effective: $(ctx_effective_secret_provider))"
+        echo ""
+        info "Usage: ctx config secret-provider <auto|keychain|file>"
+        return 0
+      fi
+      value="$(echo "$value" | tr '[:upper:]' '[:lower:]')"
+      case "$value" in
+        auto|keychain|file) ;;
+        *) die "Invalid secret provider '$value'. Use: auto, keychain, file" ;;
+      esac
+      if grep -q "^secret_provider=" "$CTX_CONFIG" 2>/dev/null; then
+        sed -i.bak "s|^secret_provider=.*|secret_provider=$value|" "$CTX_CONFIG"
+        rm -f "$CTX_CONFIG.bak"
+      else
+        echo "secret_provider=$value" >> "$CTX_CONFIG"
+      fi
+      success "secret_provider set to: $value (effective: $(ctx_effective_secret_provider))"
+      ;;
     *)
-      die "Usage: ctx config [show|work-root <path>]"
+      die "Usage: ctx config [show|work-root <path>|secret-provider <auto|keychain|file>]"
       ;;
   esac
 }
