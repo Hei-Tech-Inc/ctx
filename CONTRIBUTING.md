@@ -32,7 +32,7 @@ The sidebar can lag **hours or days** after a history rewrite or force-push. Thi
 ```bash
 git fetch origin
 git shortlog -sne origin/main
-git log origin/main --format='%B' | grep -iE '^co-authored-by:.*cursor' || echo 'no vendor co-author trailers'
+git log origin/main --format='%B' | grep -iE '^co-authored-by:.*(cursor|anthropic|openai|claude|copilot|gemini)' || echo 'no agent co-author trailers'
 ```
 
 If CI is green but the UI still shows the bot, wait for GitHub to refresh the graph or contact [GitHub Support](https://support.github.com/) — there is no per-user “remove contributor” button.

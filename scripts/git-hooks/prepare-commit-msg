@@ -1,11 +1,12 @@
 #!/bin/sh
-# Strip vendor automation co-author lines before the commit is recorded.
-# Cursor may inject trailers — remove any Co-authored-by line matching that vendor.
-# Enable: git config core.hooksPath scripts/git-hooks
+# Strip coding-agent Co-authored-by lines before the commit is recorded (IDEs may inject them).
+# Same patterns as scripts/git-history-strip-agent-trailers.pl and CI git-history-hygiene.
+# Enable: ./scripts/install-git-hooks.sh
 set -e
 msg_file="${1:?}"
+root="$(git rev-parse --show-toplevel)"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT INT HUP
-perl -0777 -pe 's/^Co-[Aa]uthored-[Bb]y:[^\n]*(cursor|cursoragent|\@cursor\.com)[^\n]*\n//gmi' "$msg_file" > "$tmp"
+perl "$root/scripts/git-history-strip-agent-trailers.pl" < "$msg_file" > "$tmp"
 mv "$tmp" "$msg_file"
 trap - EXIT INT HUP

@@ -32,17 +32,17 @@ jobs:
       - name: Fail if vendor bot appears in authors or co-author trailers
         run: |
           set -euo pipefail
-          if git log --format='%ae%n%ce' HEAD | grep -qiE 'cursoragent|@cursor\.com'; then
-            echo "Blocked: commit author/committer email references IDE vendor bot." >&2
-            git log --format='%h %ae %ce' HEAD | grep -iE 'cursoragent|@cursor\.com' >&2 || true
+          if git log --format='%ae%n%ce' HEAD | grep -qiE 'cursoragent|@cursor\.com|noreply@anthropic|@anthropic\.com|@openai\.com'; then
+            echo "Blocked: commit author/committer email references a coding-agent / vendor bot." >&2
+            git log --format='%h %ae %ce' HEAD | grep -iE 'cursoragent|@cursor\.com|noreply@anthropic|@anthropic\.com|@openai\.com' >&2 || true
             exit 1
           fi
-          if git log --format='%an%n%cn' HEAD | grep -qi cursoragent; then
-            echo "Blocked: commit author/committer name references IDE vendor bot." >&2
+          if git log --format='%an%n%cn' HEAD | grep -qiE 'cursoragent|claude[[:space:]]+sonnet|claude[[:space:]]+opus|claude[[:space:]]+haiku'; then
+            echo "Blocked: commit author/committer name references a coding-agent bot identity." >&2
             exit 1
           fi
-          if git log --format='%B' HEAD | grep -iE '^co-authored-by:.*cursor'; then
-            echo "Blocked: Co-authored-by trailer references IDE vendor." >&2
+          if git log --format='%B' HEAD | grep -iE '^co-authored-by:.*(cursoragent|@cursor\.com|anthropic|noreply@anthropic|openai\.com|@openai\.|chatgpt|gemini|codeium|windsurf|github[^\n]*copilot|copilot@|claude[[:space:]]+(sonnet|opus|haiku)|cursor[[:space:]]*<)'; then
+            echo "Blocked: Co-authored-by trailer credits a coding agent." >&2
             exit 1
           fi
           echo "OK: git history has no vendor-bot attribution."

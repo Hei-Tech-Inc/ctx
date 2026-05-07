@@ -7,6 +7,10 @@ msg="${1:?}"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT INT HUP
 perl -pe 's/--cursor\.[a-zA-Z0-9_.-]+/__gum__/g; s#\.cursor/#.__ide__/#g' "$msg" > "$tmp"
+if grep -qiE '^co-authored-by:.*(cursoragent|@cursor\.com|anthropic|noreply@anthropic|openai\.com|@openai\.|chatgpt|gemini|codeium|windsurf|github[^\n]*copilot|copilot@|claude[[:space:]]+(sonnet|opus|haiku)|cursor[[:space:]]*<)' "$tmp"; then
+  echo "Rejected: Co-authored-by credits a blocked coding agent (see CONTRIBUTING.md)." >&2
+  exit 1
+fi
 if grep -qi 'cursor' "$tmp"; then
   echo "Rejected: commit message contains a blocked IDE vendor substring." >&2
   echo "Tip: describe IDE dirs without the vendor token; gum pointer flags are allowlisted." >&2
