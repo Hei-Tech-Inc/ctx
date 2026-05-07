@@ -205,6 +205,8 @@ ctx doctor
 Export includes profiles, git identities, and ctx SSH host config.  
 Secrets are intentionally excluded; restore with your provider (`keychain`/`pass`/file) or `ctx secret set`.
 
+For ongoing cross-machine sync, see [`docs/chezmoi.md`](docs/chezmoi.md) for a `chezmoi`-based workflow.
+
 Secrets are exported into your shell session by `ctx use` and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
 
 ### Maintenance
