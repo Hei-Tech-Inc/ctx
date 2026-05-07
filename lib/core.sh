@@ -69,9 +69,9 @@ ask() {
     fi
     local var
     if [[ -t 0 ]]; then
-      read -r var
+      read -r var || user_cancelled
     else
-      read -r var < /dev/tty 2>/dev/null || var=""
+      read -r var < /dev/tty 2>/dev/null || user_cancelled
     fi
     echo "${var:-$default}"
   fi
@@ -89,7 +89,9 @@ ask_secret() {
       --width 60 || user_cancelled
   else
     echo -e "${CYAN}?${RESET} $prompt ${DIM}(hidden)${RESET}: \c"
-    local var; read -rs var; echo ""
+    local var
+    read -rs var || user_cancelled
+    echo ""
     echo "$var"
   fi
 }
@@ -111,7 +113,8 @@ ask_yn() {
   else
     local hint; [[ "$default" == "y" ]] && hint="Y/n" || hint="y/N"
     echo -e "${CYAN}?${RESET} $prompt ${DIM}[$hint]${RESET}: \c"
-    local answer; read -r answer
+    local answer
+    read -r answer || user_cancelled
     answer="${answer:-$default}"
     [[ "$answer" =~ ^[Yy]$ ]]
   fi
@@ -143,7 +146,8 @@ pick_one() {
     done
     echo ""
     echo -e "${CYAN}?${RESET} $prompt (1-${#items[@]}, 0 to skip): \c"
-    local choice; read -r choice
+    local choice
+    read -r choice || user_cancelled
     if [[ "$choice" =~ ^[0-9]+$ ]] \
        && [[ "$choice" -ge 1 ]] \
        && [[ "$choice" -le ${#items[@]} ]]; then
@@ -176,7 +180,8 @@ pick_many() {
     done
     echo ""
     echo -e "${CYAN}?${RESET} $prompt (comma-separated numbers, e.g. 1,3): \c"
-    local input; read -r input
+    local input
+    read -r input || user_cancelled
     for n in $(echo "$input" | tr ',' ' '); do
       n=$(echo "$n" | tr -d ' ')
       [[ "$n" =~ ^[0-9]+$ ]] \
