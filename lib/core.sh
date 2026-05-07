@@ -25,6 +25,7 @@ bold()    { echo -e "${BOLD}$*${RESET}"; }
 die()     { error "$*"; exit 1; }
 hr()      { echo -e "${DIM}────────────────────────────────────────${RESET}"; }
 log()     { mkdir -p "$CTX_DIR"; echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$CTX_LOG"; }
+user_cancelled() { warn "Cancelled by user."; exit 130; }
 
 # ─── gum or plain fallback ────────────────────────────────────────────────────
 # All prompts go through these wrappers.
@@ -53,11 +54,12 @@ ask() {
   local prompt="$1" default="${2:-}"
   if $HAS_GUM; then
     local result
+    dim "  Waiting for input — type and press Enter (Ctrl+C to cancel)."
     result=$(gum input \
       --placeholder "${default:-$prompt}" \
       --prompt "> " \
       --prompt.foreground 99 \
-      --width 60)
+      --width 60) || user_cancelled
     echo "${result:-$default}"
   else
     if [[ -n "$default" ]]; then
@@ -79,11 +81,12 @@ ask() {
 ask_secret() {
   local prompt="$1"
   if $HAS_GUM; then
+    dim "  Waiting for secret input — press Enter to confirm (Ctrl+C to cancel)."
     gum input --password \
       --placeholder "$prompt" \
       --prompt "> " \
       --prompt.foreground 99 \
-      --width 60
+      --width 60 || user_cancelled
   else
     echo -e "${CYAN}?${RESET} $prompt ${DIM}(hidden)${RESET}: \c"
     local var; read -rs var; echo ""
@@ -101,8 +104,10 @@ ask_yn() {
     gum confirm \
       --affirmative "$affirm" --negative "$deny" \
       --prompt.foreground 99 \
-      "$prompt"
-    return $?
+      "$prompt (Ctrl+C to cancel)"
+    local rc=$?
+    [[ $rc -eq 130 ]] && user_cancelled
+    return $rc
   else
     local hint; [[ "$default" == "y" ]] && hint="Y/n" || hint="y/N"
     echo -e "${CYAN}?${RESET} $prompt ${DIM}[$hint]${RESET}: \c"
@@ -125,11 +130,11 @@ pick_one() {
     # Pass items as argv instead of stdin piping; some terminals can render a blank
     # chooser when fed via pipe, making it look stuck.
     result=$(gum choose \
-      --header "$prompt" \
+      --header "$prompt (Use arrows, Enter to confirm, Ctrl+C to cancel)" \
       --header.foreground 99 \
       --selected.foreground 99 \
       "${items[@]}" \
-      2>/dev/null) || true
+      2>/dev/null) || user_cancelled
     echo "$result"
   else
     echo ""
@@ -159,11 +164,11 @@ pick_many() {
 
   if $HAS_GUM; then
     gum choose --no-limit \
-      --header "$prompt (space to select, enter to confirm)" \
+      --header "$prompt (Space to select, Enter to confirm, Ctrl+C to cancel)" \
       --header.foreground 99 \
       --selected.foreground 99 \
       "${items[@]}" \
-      2>/dev/null || true
+      2>/dev/null || user_cancelled
   else
     echo ""
     for i in "${!items[@]}"; do
