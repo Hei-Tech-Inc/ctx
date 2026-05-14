@@ -103,6 +103,12 @@ cmd_use() {
 
   set_active_profile "$name"
 
+  if [[ "${CTX_AUTO_SWITCH:-0}" == "1" ]]; then
+    ctx_activation_set_auto
+  else
+    ctx_activation_set_manual "${PWD:-$HOME}"
+  fi
+
   if [[ "$quiet" == "0" ]]; then
     echo ""
     if $HAS_GUM; then
@@ -114,6 +120,106 @@ cmd_use() {
   fi
 
   return $errors
+}
+
+# Emit shell code to unset profile env in the *current* shell (eval from a hook).
+# Usage: eval "$(ctx deactivate --eval bash)"  |  fish: ctx deactivate --eval fish | source
+_ctx_deactivate_emit_unsets() {
+  local shell_kind="${1:-bash}" wd="$2"
+  local key
+  case "$shell_kind" in
+    fish)
+      for key in $SECRET_KEYS; do
+        is_valid_env_key "$key" || continue
+        printf 'set -e %s\n' "$key"
+      done
+      printf 'set -e AWS_PROFILE AZURE_SUBSCRIPTION AZURE_TENANT GCLOUD_PROJECT GCP_PROJECT GCP_ACCOUNT\n'
+      printf 'set -e CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER\n'
+      if [[ -n "$wd" ]]; then
+        local qwd
+        qwd="${wd//\'/\'\\\'\'}"
+        printf "set -l __ctx_wd '%s'\n" "$qwd"
+        printf '%s\n' 'if string match "$__ctx_wd/*" "$PWD" >/dev/null 2>&1; or test "$PWD" = "$__ctx_wd"'
+        printf '%s\n' '  git config --unset user.name 2>/dev/null; or true'
+        printf '%s\n' '  git config --unset user.email 2>/dev/null; or true'
+        printf '%s\n' 'end'
+      fi
+      ;;
+    *)
+      for key in $SECRET_KEYS; do
+        is_valid_env_key "$key" || continue
+        printf 'unset %s 2>/dev/null || true\n' "$key"
+      done
+      printf 'unset AWS_PROFILE AZURE_SUBSCRIPTION AZURE_TENANT GCLOUD_PROJECT GCP_PROJECT GCP_ACCOUNT 2>/dev/null || true\n'
+      printf 'unset CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER 2>/dev/null || true\n'
+      if [[ -n "$wd" ]]; then
+        local q
+        q="$(printf '%q' "$wd")"
+        printf 'if [[ "$PWD" == %s* ]]; then git config --unset user.name 2>/dev/null || true; git config --unset user.email 2>/dev/null || true; fi\n' "$q"
+      fi
+      ;;
+  esac
+  if [[ -n "${EXTRA_ENVS:-}" ]]; then
+    local pair k
+    while IFS= read -r pair; do
+      [[ -z "$pair" ]] && continue
+      k="${pair%%=*}"
+      is_valid_env_key "$k" || continue
+      if [[ "$shell_kind" == "fish" ]]; then
+        printf 'set -e %s\n' "$k"
+      else
+        printf 'unset %s 2>/dev/null || true\n' "$k"
+      fi
+    done <<< "$EXTRA_ENVS"
+  fi
+}
+
+# ─── deactivate ───────────────────────────────────────────────────────────────
+# Clears ~/.ctx/config active marker and prints eval-able unsets for the parent shell.
+# Does not edit mise.toml, SSH, or secret stores.
+cmd_deactivate() {
+  local eval_shell="bash" want_eval=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --eval)
+        want_eval=true
+        if [[ -n "${2:-}" && "$2" != --* ]]; then
+          eval_shell="$2"
+          shift
+        fi
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  ctx_init_dirs
+  local current quiet="${CTX_QUIET:-0}"
+  current="$(active_profile)"
+  if [[ -z "$current" ]]; then
+    [[ "$quiet" == "0" ]] && dim "No active profile." >&2
+    return 0
+  fi
+
+  load_profile "$current"
+  local wd_use=""
+  if [[ -n "${WORK_DIR:-}" && "$PWD" == "${WORK_DIR}"* ]]; then
+    wd_use="$WORK_DIR"
+  fi
+
+  clear_active_profile_activation
+
+  eval_shell="$(echo "${eval_shell:-bash}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$eval_shell" == "fish" ]] || eval_shell="bash"
+  _ctx_deactivate_emit_unsets "$eval_shell" "$wd_use"
+
+  if ! $want_eval && [[ "$quiet" == "0" ]]; then
+    dim "Tip (fish): ctx deactivate --eval fish | source" >&2
+    dim "Tip (bash/zsh): eval \"\$(ctx deactivate)\"" >&2
+  fi
+  return 0
 }
 
 # ─── status ───────────────────────────────────────────────────────────────────
@@ -139,6 +245,21 @@ cmd_status() {
 
   load_profile "$current"
 
+  local act_src act_note
+  act_src="$(ctx_activation_get_source)"
+  if [[ "$act_src" == "manual" ]]; then
+    local mp=""
+    mp="$(ctx_activation_get_manual_pwd 2>/dev/null || true)"
+    if [[ -n "$mp" && "$PWD" == "$mp" ]]; then
+      act_note="Activation: manual (locked at this directory until you cd elsewhere)"
+    else
+      act_note="Activation: manual anchor cleared — directory auto-switch applies on cd"
+    fi
+  else
+    act_note="Activation: auto (directory hook + longest WORK_DIR prefix)"
+  fi
+  [[ -n "${CTX_ACTIVE_PROFILE:-}" ]] && act_note+=" · CTX_ACTIVE_PROFILE=$CTX_ACTIVE_PROFILE"
+
   if $HAS_GUM; then
     gum style --border normal --padding "0 1" \
       "Profile  : $(gum style --bold "$current")" \
@@ -151,6 +272,7 @@ cmd_status() {
       "GCP      : ${GCP_PROJECT:-—}" \
       "kubectl  : ${KUBE_CONTEXT:-—}" \
       "Secrets  : ${SECRET_KEYS:-none}"
+    dim "  $act_note"
   else
     hr
     echo "  Profile  : ${BOLD}$current${RESET}"
@@ -163,6 +285,7 @@ cmd_status() {
     echo "  GCP      : ${GCP_PROJECT:-—}"
     echo "  kubectl  : ${KUBE_CONTEXT:-—}"
     echo "  Secrets  : ${SECRET_KEYS:-none}"
+    dim "  $act_note"
     hr
   fi
 
@@ -306,6 +429,13 @@ cmd_remove() {
   gitconfig_remove_include "$HOME/.config/git/ctx-${name}"
   rm -f "$HOME/.config/git/ctx-${name}"
   success "Git identity removed"
+
+  local cur
+  cur="$(active_profile)"
+  if [[ "$cur" == "$name" ]]; then
+    clear_active_profile_activation
+    dim "Active profile was removed — run: eval \"\$(ctx deactivate)\" to clear shell env (or open a new terminal)."
+  fi
 
   rm -f "$CTX_PROFILES_DIR/${name}.conf"
   success "Profile '$name' removed."
@@ -566,9 +696,15 @@ cmd_clone() {
   [[ -n "$prof" ]] || die "No active profile. Run: ctx use <profile> or ctx clone -p <profile> <url>"
   load_profile "$prof"
 
+  if [[ "${CTX_QUIET:-0}" == "0" ]]; then
+    dim "[ctx] cloning as $prof (${GIT_EMAIL:-${GIT_NAME:-unknown}})"
+  fi
+
   local host="github-${prof}"
   local https_as_ssh="n"
-  if [[ "$url" == https://github.com/* ]]; then
+  if [[ "${CTX_QUIET:-0}" == "1" && "$url" == https://github.com/* ]]; then
+    https_as_ssh="y"
+  elif [[ "$url" == https://github.com/* ]]; then
     if ask_yn "Use SSH clone via $host instead of HTTPS?" "y"; then
       https_as_ssh="y"
     else
@@ -918,9 +1054,13 @@ cmd_doctor() {
       && success "mise shell hook: installed" \
       || { warn "mise activate: not in $shell_rc"; info "Run: ctx install-hook"; all_ok=false; }
 
-    grep -q "ctx auto-switch" "$shell_rc" 2>/dev/null \
-      && success "ctx auto-switch: installed" \
-      || { warn "ctx auto-switch: not in $shell_rc"; info "Run: ctx install-hook"; all_ok=false; }
+    if grep -q '_ctx_profile_autoswitch' "$shell_rc" 2>/dev/null || grep -q 'ctx auto-switch' "$shell_rc" 2>/dev/null; then
+      success "ctx profile autoswitch: installed in $shell_rc"
+    else
+      warn "ctx profile autoswitch: not in $shell_rc"
+      info "Run: ctx install-hook"
+      all_ok=false
+    fi
   fi
 
   echo ""
@@ -1020,7 +1160,7 @@ cmd_init() {
 
   if [[ -n "$shell_rc" ]]; then
     if ! grep -q "mise activate" "$shell_rc" 2>/dev/null || \
-       ! grep -q "ctx auto-switch" "$shell_rc" 2>/dev/null; then
+       ! grep -q '_ctx_profile_autoswitch' "$shell_rc" 2>/dev/null; then
       ask_yn "Install shell hooks (mise + ctx auto-switch) to $shell_rc?" "y" \
         && cmd_install_hook "$shell_rc" \
         || info "Skipped. Run: ctx install-hook"
@@ -1069,72 +1209,35 @@ cmd_install_hook() {
     success "mise activation added to $shell_rc"
   fi
 
-  # 2. ctx auto-switch hook
-  if ! grep -q "ctx auto-switch" "$shell_rc" 2>/dev/null; then
+  # 2. ctx profile autoswitch hook (longest WORK_DIR match + deactivate on exit)
+  local _as_lib
+  _as_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  _strip_legacy_ctx_autohook() {
+    local rc="$1"
+    [[ -f "$rc" ]] || return 0
+    grep -q '# ── ctx auto-switch' "$rc" 2>/dev/null || return 0
+    grep -q '_ctx_profile_autoswitch' "$rc" 2>/dev/null && return 0
+    local t
+    t="$(mktemp)" || return 1
+    awk '
+      /^# ── ctx auto-switch/ { skip=1; next }
+      skip && /^# ─{25,}$/ { skip=0; next }
+      skip { next }
+      { print }
+    ' "$rc" > "$t" && mv "$t" "$rc"
+  }
+
+  if ! grep -q '_ctx_profile_autoswitch' "$shell_rc" 2>/dev/null; then
+    _strip_legacy_ctx_autohook "$shell_rc"
     if [[ "$shell_rc" == *"/config.fish" ]]; then
-      cat >> "$shell_rc" <<'HOOK'
-
-# ── ctx auto-switch ───────────────────────────────────────────────────────────
-function _ctx_auto_switch --on-variable PWD
-  command -v ctx >/dev/null 2>/dev/null; or return
-  set -l profiles_dir (set -q CTX_DIR; and echo "$CTX_DIR"; or echo "$HOME/.ctx")/profiles
-  set -l active_conf (set -q CTX_DIR; and echo "$CTX_DIR"; or echo "$HOME/.ctx")/config
-  test -d "$profiles_dir"; or return
-
-  for conf in "$profiles_dir"/*.conf
-    test -e "$conf"; or continue
-    set -l work_dir (grep "^WORK_DIR=" "$conf" | sed 's/^WORK_DIR=//')
-    set work_dir (string replace -r '^~' "$HOME" -- "$work_dir")
-    test -n "$work_dir"; and string match -q "$work_dir*" -- "$PWD"; or continue
-
-    set -l pname (basename "$conf" .conf)
-    set -l repo_root (git rev-parse --show-toplevel 2>/dev/null; or echo "")
-    if test -n "$repo_root"; and test -f "$repo_root/.ctx"
-      set -l override (grep "^profile=" "$repo_root/.ctx" 2>/dev/null | cut -d= -f2)
-      test -n "$override"; and set pname "$override"
-    end
-    set -l current (grep "^active=" "$active_conf" 2>/dev/null | cut -d= -f2)
-    if test "$pname" != "$current"
-      env CTX_QUIET=1 ctx use "$pname" 2>/dev/null
-    end
-    echo -e "\033[2m[ctx] $pname\033[0m"
-    return
-  end
-end
-# ─────────────────────────────────────────────────────────────────────────────
-HOOK
+      [[ -f "$_as_lib/ctx_autoswitch.fish" ]] || die "Missing $_as_lib/ctx_autoswitch.fish — reinstall ctx."
+      cat "$_as_lib/ctx_autoswitch.fish" >> "$shell_rc"
     else
-      cat >> "$shell_rc" <<'HOOK'
-
-# ── ctx auto-switch ───────────────────────────────────────────────────────────
-_ctx_auto_switch() {
-  command -v ctx &>/dev/null || return 0
-  local profiles_dir="${CTX_DIR:-$HOME/.ctx}/profiles"
-  local active_conf="${CTX_DIR:-$HOME/.ctx}/config"
-  [[ -d "$profiles_dir" ]] || return 0
-  for conf in "$profiles_dir"/*.conf; do
-    [[ -e "$conf" ]] || continue
-    local work_dir; work_dir=$(grep "^WORK_DIR=" "$conf" | cut -d'"' -f2)
-    work_dir="${work_dir/#\~/$HOME}"
-    [[ -z "$work_dir" || "$PWD" != "$work_dir"* ]] && continue
-    local pname; pname=$(basename "$conf" .conf)
-    local current; current=$(grep "^active=" "$active_conf" 2>/dev/null | cut -d= -f2)
-    local repo_root; repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
-    [[ -n "$repo_root" && -f "$repo_root/.ctx" ]] && \
-      pname=$(grep "^profile=" "$repo_root/.ctx" 2>/dev/null | cut -d= -f2 || echo "$pname")
-    if [[ "$pname" != "$current" ]]; then
-      CTX_QUIET=1 ctx use "$pname" 2>/dev/null
+      [[ -f "$_as_lib/ctx_autoswitch.bash" ]] || die "Missing $_as_lib/ctx_autoswitch.bash — reinstall ctx."
+      cat "$_as_lib/ctx_autoswitch.bash" >> "$shell_rc"
     fi
-    echo -e "\033[2m[ctx] $pname\033[0m"
-    return 0
-  done
-}
-[[ -n "${ZSH_VERSION:-}" ]] && { autoload -Uz add-zsh-hook; add-zsh-hook chpwd _ctx_auto_switch; }
-[[ -n "${BASH_VERSION:-}" ]] && PROMPT_COMMAND="_ctx_auto_switch;${PROMPT_COMMAND:+ $PROMPT_COMMAND}"
-# ─────────────────────────────────────────────────────────────────────────────
-HOOK
-    fi
-    success "ctx auto-switch hook added to $shell_rc"
+    success "ctx profile autoswitch hook added to $shell_rc"
   fi
 
   # 3. Ensure SSH Include is wired up

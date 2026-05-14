@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 - **Setup reference in the CLI:** `ctx setup --help`, `ctx import --help`, and `ctx help setup` show the same reference (flags, `--config` keys, dry-run, example file URL). Completions advertise `help setup` and setup `-h` / `--help`.
 - **Example config:** header comment in `examples/setup.noninteractive.conf.example` points to `ctx help setup`.
 - **ctx doctor:** warns if `~/.ssh` is group- or world-writable and suggests `chmod 700` (OpenSSH may otherwise ignore keys).
+- **`ctx deactivate`:** clears `active=` / manual-lock fields in `~/.ctx/config` and prints eval-able unsets for secrets and profile env (`--eval bash|fish` for the hook).
+- **Directory-scoped auto-switch:** shell hook (`lib/ctx_autoswitch.bash` / `lib/ctx_autoswitch.fish`) picks the profile with the **longest `WORK_DIR` prefix** of `$PWD`, applies **`.ctx` / `profile=`** repo overrides, prints **`[ctx] ←/→`** transitions, runs **`eval "$(ctx deactivate --eval …)"`** before switching, and sets **`CTX_AUTO_SWITCH=1`** on hook-driven `ctx use`. **Manual `ctx use`** sets a **manual lock** until you `cd` away from that directory.
+- **`ctx clone`:** prints **`[ctx] cloning as <profile> (email)`**; with **`CTX_QUIET=1`** (auto-switch), HTTPS GitHub URLs default to SSH rewrite without prompting.
+- **`ctx status`:** shows **activation** mode (manual lock vs directory auto) and **`CTX_ACTIVE_PROFILE`** when set by the hook.
 
 ### Changed
 - **Installer** “next steps” after `install.sh` lists `ctx doctor`, `ctx help setup`, and `ctx verify` so the flow matches the docs and post-setup help text.

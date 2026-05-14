@@ -115,6 +115,19 @@ test_secret_provider_resolution() {
   pass "secret provider resolution"
 }
 
+test_ctx_profile_read_work_dir() {
+  local f wd
+  f="$(mktemp)"
+  {
+    printf 'PROFILE_NAME=%q\n' "acme"
+    printf 'WORK_DIR=%q\n' "/tmp/clients/acme corp"
+  } > "$f"
+  wd="$(ctx_profile_read_work_dir "$f")"
+  rm -f "$f"
+  [[ "$wd" == "/tmp/clients/acme corp" ]] || fail "ctx_profile_read_work_dir: got '$wd'"
+  pass "ctx_profile_read_work_dir"
+}
+
 test_ctx_cli_version() {
   local out want
   want="$CTX_VERSION"
@@ -130,6 +143,7 @@ test_github_clone_url_for_profile
 test_parse_ctx_version_from_core_sh_file
 test_secret_file_path
 test_secret_provider_resolution
+test_ctx_profile_read_work_dir
 test_ctx_cli_version
 
 echo "All tests passed."

@@ -170,6 +170,7 @@ ctx use <name>
 | Command | Description |
 |---------|-------------|
 | `ctx use <name>` | Activate a profile (git, SSH, AWS, GCP, Azure, kubectl) |
+| `ctx deactivate` | Clear `active=` in `~/.ctx/config`; stdout is `eval`-able unsets for secrets/env (run `eval "$(ctx deactivate)"` in bash/zsh) |
 | `ctx list` | List all profiles |
 | `ctx status` | Show active profile + live service checks |
 | `ctx clone [-p <profile>] <url> [-- git-args...]` | `git clone` with GitHub URL rewrite for `github-<profile>` (see below) |
@@ -257,11 +258,25 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 
 ## Auto-switch
 
-After installation, `ctx` automatically activates the right profile when you `cd` into a client directory. You'll see a dim indicator in your terminal:
+The shell hook (`ctx install-hook` / `install.sh`) appends **`lib/ctx_autoswitch.bash`** (bash/zsh) or **`lib/ctx_autoswitch.fish`** (fish) to your rc file. It:
 
+- Picks the profile whose **`WORK_DIR`** is the **longest path prefix** of `$PWD` (nested clients supported).
+- Applies a **repo override** when `$GIT_ROOT/.ctx` contains `profile=<name>` (must be a valid profile).
+- Prints **`[ctx] → name`**, **`[ctx] ← old → new`**, or **`[ctx] ← name`** on stderr when the active profile changes.
+- Runs **`eval "$(ctx deactivate --eval bash)"`** (or fish equivalent) before switching, so secrets and env vars from the previous profile are cleared in your shell.
+- Calls **`CTX_AUTO_SWITCH=1 ctx use <name>`** so `~/.ctx/config` marks activation as **auto** (not manual-lock).
+
+**Manual `ctx use`:** a normal `ctx use` sets **`active_source=manual`** and anchors to **`$PWD`** until you **`cd`** anywhere else; until then the hook will not replace your choice with directory inference.
+
+**Prompt / Starship:** the hook sets **`CTX_ACTIVE_PROFILE`** (and **`CTX_ACTIVATION_TRIGGER=auto`**) when a profile is active. Example Starship snippet:
+
+```toml
+[env_var]
+variable = "CTX_ACTIVE_PROFILE"
+format = "via [ctx:$env_value]($style) "
 ```
-[ctx] acme
-```
+
+**Deactivate:** `ctx deactivate` prints shell code to stdout — run **`eval "$(ctx deactivate)"`** (bash/zsh) or **`ctx deactivate --eval fish | source`** to clear the active marker and unset exported secrets for the **current** profile in that shell.
 
 To override for a specific repo, add a `.ctx` file at the repo root:
 
@@ -383,7 +398,7 @@ rm -rf /usr/local/lib/ctx
 rm -rf ~/.ctx
 ```
 
-Remove the `ctx auto-switch` and `mise activate` blocks from your shell rc file, then reload.
+Remove the `ctx profile autoswitch` block (or legacy `# ── ctx auto-switch`) and `mise activate` blocks from your shell rc file, then reload.
 
 ---
 

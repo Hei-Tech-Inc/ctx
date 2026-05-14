@@ -387,6 +387,81 @@ set_active_profile() {
   log "Switched to profile: $name"
 }
 
+# Remove active profile marker and auto-switch manual-lock metadata (~/.ctx/config).
+clear_active_profile_activation() {
+  ctx_init_dirs
+  [[ -f "$CTX_CONFIG" ]] || return 0
+  local tmp
+  tmp="$(mktemp)" || return 1
+  grep -vE '^(active|active_source|manual_pwd)=' "$CTX_CONFIG" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$CTX_CONFIG"
+}
+
+# Read WORK_DIR from a profile .conf (safe: file is assignment-only metadata).
+ctx_profile_read_work_dir() {
+  local conf="$1" wd
+  [[ -f "$conf" ]] || return 1
+  wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
+  wd="${wd/#\~/$HOME}"
+  [[ -n "$wd" ]] || return 1
+  printf '%s\n' "$wd"
+}
+
+ctx_activation_get_source() {
+  local v
+  v="$(grep "^active_source=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  v="$(echo "${v:-auto}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$v" == "manual" ]] && echo manual || echo auto
+}
+
+# Decoded manual anchor PWD (when active_source=manual), or empty.
+ctx_activation_get_manual_pwd() {
+  local raw dec
+  raw="$(grep "^manual_pwd=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  [[ -z "$raw" ]] && return 1
+  dec="$(printf '%s' "$raw" | base64 -d 2>/dev/null || printf '%s' "$raw" | base64 -D 2>/dev/null || printf '%s' "$raw" | base64 --decode 2>/dev/null || true)"
+  [[ -n "$dec" ]] && printf '%s\n' "$dec" && return 0
+  printf '%s\n' "$raw"
+}
+
+_ctx_config_upsert_line() {
+  local key="$1" val="$2"
+  ctx_init_dirs
+  [[ -f "$CTX_CONFIG" ]] || : >"$CTX_CONFIG"
+  if grep -q "^${key}=" "$CTX_CONFIG" 2>/dev/null; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      sed -i '' "s|^${key}=.*|${key}=${val}|" "$CTX_CONFIG"
+    else
+      sed -i "s|^${key}=.*|${key}=${val}|" "$CTX_CONFIG"
+    fi
+  else
+    echo "${key}=${val}" >> "$CTX_CONFIG"
+  fi
+}
+
+_ctx_config_rm_key() {
+  local key="$1"
+  [[ -f "$CTX_CONFIG" ]] || return 0
+  local tmp
+  tmp="$(mktemp)" || return 1
+  grep -vE "^${key}=" "$CTX_CONFIG" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$CTX_CONFIG"
+}
+
+# After explicit ctx use (not from directory hook): lock auto-switch until user cds.
+ctx_activation_set_manual() {
+  local pwd="$1" b64
+  b64="$(printf '%s' "$pwd" | base64 | tr -d '\n')"
+  _ctx_config_upsert_line active_source manual
+  _ctx_config_upsert_line manual_pwd "$b64"
+}
+
+# After hook-driven ctx use: follow directory inference on next cd.
+ctx_activation_set_auto() {
+  _ctx_config_rm_key active_source
+  _ctx_config_rm_key manual_pwd
+}
+
 ctx_work_root() {
   local configured=""
   configured="${CTX_WORK_ROOT:-}"

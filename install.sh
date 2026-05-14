@@ -353,6 +353,8 @@ install_ctx() {
     cp "$script_dir/lib/core.sh"        "$stage_lib/core.sh"
     cp "$script_dir/lib/cmd_import.sh"  "$stage_lib/cmd_import.sh"
     cp "$script_dir/lib/cmd_ops.sh"     "$stage_lib/cmd_ops.sh"
+    cp "$script_dir/lib/ctx_autoswitch.bash" "$stage_lib/ctx_autoswitch.bash"
+    cp "$script_dir/lib/ctx_autoswitch.fish" "$stage_lib/ctx_autoswitch.fish"
   else
     info "Downloading ctx..."
     _dl() {
@@ -372,10 +374,12 @@ install_ctx() {
     _dl_text "$CTX_REPO/lib/core.sh"        "$stage_lib/core.sh"
     _dl_text "$CTX_REPO/lib/cmd_import.sh"  "$stage_lib/cmd_import.sh"
     _dl_text "$CTX_REPO/lib/cmd_ops.sh"     "$stage_lib/cmd_ops.sh"
+    _dl_text "$CTX_REPO/lib/ctx_autoswitch.bash" "$stage_lib/ctx_autoswitch.bash"
+    _dl_text "$CTX_REPO/lib/ctx_autoswitch.fish" "$stage_lib/ctx_autoswitch.fish"
   fi
 
   chmod +x "$stage_bin"
-  chmod 644 "$stage_lib"/*.sh
+  chmod 644 "$stage_lib"/*.sh "$stage_lib"/*.bash "$stage_lib"/*.fish 2>/dev/null || chmod 644 "$stage_lib"/*.sh
 
   # Patch the lib path in the binary so it finds its libs after install
   local sed_inplace=(-i)
@@ -394,60 +398,58 @@ install_ctx() {
   cp "$stage_lib/core.sh"       "$install_lib/core.sh"
   cp "$stage_lib/cmd_import.sh" "$install_lib/cmd_import.sh"
   cp "$stage_lib/cmd_ops.sh"    "$install_lib/cmd_ops.sh"
+  cp "$stage_lib/ctx_autoswitch.bash" "$install_lib/ctx_autoswitch.bash"
+  cp "$stage_lib/ctx_autoswitch.fish" "$install_lib/ctx_autoswitch.fish"
   mv "$stage_bin" "$install_bin/ctx"
   rm -rf "$stage_dir"
+
+  CTX_INSTALLED_LIB="$install_lib"
 
   success "ctx: installed at $install_bin/ctx"
 }
 
 # ─── Install ctx auto-switch hook ────────────────────────────────────────────
 install_ctx_hook() {
-  if grep -q "ctx auto-switch" "$SHELL_RC" 2>/dev/null; then
-    success "ctx auto-switch hook: already in $SHELL_RC"
+  local script_dir hook_bash hook_fish
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+  hook_bash="$script_dir/lib/ctx_autoswitch.bash"
+  hook_fish="$script_dir/lib/ctx_autoswitch.fish"
+  if [[ ! -f "$hook_bash" && -n "${CTX_INSTALLED_LIB:-}" ]]; then
+    hook_bash="$CTX_INSTALLED_LIB/ctx_autoswitch.bash"
+    hook_fish="$CTX_INSTALLED_LIB/ctx_autoswitch.fish"
+  fi
+
+  _strip_legacy_ctx_autohook() {
+    local rc="$1"
+    [[ -f "$rc" ]] || return 0
+    grep -q '# ── ctx auto-switch' "$rc" 2>/dev/null || return 0
+    grep -q '_ctx_profile_autoswitch' "$rc" 2>/dev/null && return 0
+    local t
+    t="$(mktemp)" || return 1
+    awk '
+      /^# ── ctx auto-switch/ { skip=1; next }
+      skip && /^# ─{25,}$/ { skip=0; next }
+      skip { next }
+      { print }
+    ' "$rc" > "$t" && mv "$t" "$rc"
+  }
+
+  if grep -q '_ctx_profile_autoswitch' "$SHELL_RC" 2>/dev/null; then
+    success "ctx profile autoswitch: already in $SHELL_RC"
     return 0
   fi
 
-  cat >> "$SHELL_RC" <<'HOOK'
+  _strip_legacy_ctx_autohook "$SHELL_RC"
 
-# ── ctx auto-switch — added by ctx installer ─────────────────────────────────
-_ctx_auto_switch() {
-  command -v ctx &>/dev/null || return 0
-  local profiles_dir="${CTX_DIR:-$HOME/.ctx}/profiles"
-  local active_conf="${CTX_DIR:-$HOME/.ctx}/config"
-  [[ -d "$profiles_dir" ]] || return 0
+  if [[ "$SHELL_RC" == *"/config.fish" ]]; then
+    [[ -f "$hook_fish" ]] || die "Missing ctx_autoswitch.fish (re-run install from a full ctx checkout or release bundle)."
+    cat "$hook_fish" >> "$SHELL_RC"
+  else
+    [[ -f "$hook_bash" ]] || die "Missing ctx_autoswitch.bash (re-run install from a full ctx checkout or release bundle)."
+    cat "$hook_bash" >> "$SHELL_RC"
+  fi
 
-  for conf in "$profiles_dir"/*.conf; do
-    [[ -e "$conf" ]] || continue
-    local work_dir
-    work_dir=$(grep "^WORK_DIR=" "$conf" | cut -d'"' -f2)
-    work_dir="${work_dir/#\~/$HOME}"
-    [[ -z "$work_dir" ]] && continue
-    if [[ "$PWD" == "$work_dir"* ]]; then
-      local pname; pname=$(basename "$conf" .conf)
-      local current; current=$(grep "^active=" "$active_conf" 2>/dev/null | cut -d= -f2)
-      # Per-repo override: .ctx file in repo root
-      local repo_root; repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
-      if [[ -n "$repo_root" && -f "$repo_root/.ctx" ]]; then
-        local override; override=$(grep "^profile=" "$repo_root/.ctx" | cut -d= -f2)
-        [[ -n "$override" ]] && pname="$override"
-      fi
-      if [[ "$pname" != "$current" ]]; then
-        CTX_QUIET=1 ctx use "$pname" 2>/dev/null
-      fi
-      echo -e "\033[2m[ctx] $pname\033[0m"
-      return 0
-    fi
-  done
-}
-if [[ -n "${ZSH_VERSION:-}" ]]; then
-  autoload -Uz add-zsh-hook && add-zsh-hook chpwd _ctx_auto_switch
-elif [[ -n "${BASH_VERSION:-}" ]]; then
-  PROMPT_COMMAND="_ctx_auto_switch;${PROMPT_COMMAND:+ $PROMPT_COMMAND}"
-fi
-# ─────────────────────────────────────────────────────────────────────────────
-HOOK
-
-  success "ctx auto-switch hook: added to $SHELL_RC"
+  success "ctx profile autoswitch hook: added to $SHELL_RC"
 }
 
 # ─── Verify everything installed correctly ────────────────────────────────────

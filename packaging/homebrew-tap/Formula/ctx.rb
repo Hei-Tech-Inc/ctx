@@ -12,6 +12,8 @@ class Ctx < Formula
   def install
     bin.install "bin/ctx"
     lib.install Dir["lib/*.sh"]
+    lib.install Dir["lib/*.bash"]
+    lib.install Dir["lib/*.fish"]
   end
 
   def caveats

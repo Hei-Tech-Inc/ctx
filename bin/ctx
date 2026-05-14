@@ -54,6 +54,7 @@ cmd_help() {
       "" \
       "$(gum style --faint "DAILY USE")" \
       "  use  <name>      Activate a profile" \
+      "  deactivate       Clear active profile (prints eval for your shell)" \
       "  list             List all profiles" \
       "  status           Active profile + live checks" \
       "  clone            git clone with GitHub host rewrite for this profile" \
@@ -101,6 +102,7 @@ ${BOLD}SETUP${RESET}
 
 ${BOLD}DAILY USE${RESET}
   use  <name>           Activate a profile (gh, SSH, AWS, Azure, GCP, kubectl)
+  deactivate            Clear active profile from ~/.ctx/config; run eval \"\$(ctx deactivate)\"
   list                  List all profiles
   status                Active profile + live checks
   clone                 git clone with GitHub host rewrite (see README)
@@ -169,6 +171,7 @@ _ctx() {
     'import:Alias for setup'
     'add:Alias for setup'
     'use:Activate a profile'
+    'deactivate:Clear active profile (shell eval)'
     'list:List all profiles'
     'status:Show active profile and live checks'
     'clone:git clone with GitHub host rewrite'
@@ -241,7 +244,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
+  local cmds="init setup import add use deactivate list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx setup [--config FILE] [-y|--yes]
@@ -284,7 +287,7 @@ end
 
 complete -c ctx -f
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 
@@ -324,6 +327,7 @@ main() {
     init)             cmd_init ;;
     setup|import|add) cmd_import "$@" ;;
     use)              cmd_use "${1:-}" ;;
+    deactivate)      cmd_deactivate "$@" ;;
     list|ls)          cmd_list ;;
     status|st)        cmd_status ;;
     clone)            cmd_clone "$@" ;;

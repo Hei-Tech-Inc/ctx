@@ -13,7 +13,7 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck
-        run: shellcheck -x -S warning bin/ctx lib/*.sh install.sh test/*.sh scripts/install-git-hooks.sh scripts/git-hooks/commit-msg scripts/git-hooks/prepare-commit-msg scripts/git-hooks/post-commit
+        run: shellcheck -x -S warning bin/ctx lib/*.sh lib/*.bash install.sh test/*.sh scripts/install-git-hooks.sh scripts/git-hooks/commit-msg scripts/git-hooks/prepare-commit-msg scripts/git-hooks/post-commit
 
   unit-tests:
     runs-on: ubuntu-latest
