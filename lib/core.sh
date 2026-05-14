@@ -425,13 +425,14 @@ ctx_json_escape() {
   printf '%s' "$out"
 }
 
-# Longest WORK_DIR prefix of pwd under profiles_dir; optional repo .ctx profile= override.
+# Longest WORK_DIR prefix of pwd under profiles_dir; optional sibling profile by
+# first path segment under that prefix; then nearest .ctx (walk pwd → git root).
 # Prints profile basename (no .conf) or empty. pwd and profile paths are expanded (~ → HOME).
 ctx_resolve_path_profile() {
   local pwd="${1:?pwd required}" pdir="${2:?profiles dir required}"
   pwd="${pwd/#\~/$HOME}"
   [[ -d "$pdir" ]] || return 1
-  local best_pname="" best_len=0 conf work_dir len
+  local best_pname="" best_len=0 best_wd="" conf work_dir len
   for conf in "$pdir"/*.conf; do
     [[ -e "$conf" ]] || continue
     work_dir="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
@@ -442,10 +443,30 @@ ctx_resolve_path_profile() {
       if [[ $len -gt $best_len ]]; then
         best_len=$len
         best_pname="$(basename "$conf" .conf)"
+        best_wd="$work_dir"
       fi
     fi
   done
-  local path_profile="$best_pname"
+  local path_profile="$best_pname" best_work_dir="$best_wd"
+  # Broad WORK_DIR (e.g. …/clients) + sibling dir …/clients/hubtel → prefer hubtel.conf when
+  # that profile exists and PWD is under …/clients/hubtel (even if hubtel WORK_DIR was unset).
+  if [[ -n "$best_pname" && -n "$best_work_dir" && "$pwd" == "${best_work_dir}/"* ]]; then
+    local rel="${pwd#"${best_work_dir}"/}"
+    local first="${rel%%/*}"
+    if [[ -n "$first" && -f "${pdir}/${first}.conf" ]]; then
+      local wdc
+      wdc="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${first}.conf")"
+      wdc="${wdc/#\~/$HOME}"
+      [[ -z "$wdc" ]] && wdc="${best_work_dir%/}/$first"
+      if [[ -d "$wdc" && ( "$pwd" == "$wdc" || "$pwd" == "$wdc/"* ) ]]; then
+        local cand_len=${#wdc}
+        if [[ $cand_len -gt ${#best_work_dir} ]]; then
+          path_profile="$first"
+          best_work_dir="$wdc"
+        fi
+      fi
+    fi
+  fi
   if [[ -n "$path_profile" && -d "$pwd" ]]; then
     # Nearest .ctx wins (walk $pwd → repo root). Root-only .ctx was wrong for nested
     # client dirs inside one git worktree (every subfolder inherited the root profile).

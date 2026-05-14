@@ -9,6 +9,7 @@ function _ctx_profile_autoswitch --on-variable PWD
 
   set -l best_pname ""
   set -l best_len 0
+  set -l best_wd ""
   for conf in "$profiles_dir"/*.conf
     test -e "$conf"; or continue
     set -l work_dir (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")
@@ -24,6 +25,7 @@ function _ctx_profile_autoswitch --on-variable PWD
           if test "$plen" -gt "$best_len"
             set best_len "$plen"
             set best_pname (basename "$conf" .conf)
+            set best_wd "$work_dir"
           end
         end
       end
@@ -31,6 +33,38 @@ function _ctx_profile_autoswitch --on-variable PWD
   end
 
   set -l path_profile "$best_pname"
+  set -l best_work_dir "$best_wd"
+  if test -n "$best_pname"; and test -n "$best_work_dir"
+    set -l bl (string length -- "$best_work_dir")
+    if test (string length -- "$PWD") -gt "$bl"
+      set -l ch (string sub -s (math $bl + 1) -l 1 -- "$PWD")
+      if test "$ch" = /
+        set -l rel (string sub -s (math $bl + 2) -- "$PWD")
+        set -l first (printf '%s' "$rel" | cut -d/ -f1)
+        if test -n "$first"; and test -f "$profiles_dir/$first.conf"
+          set -l wdc (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$first.conf")
+          set wdc (string replace -r '^~' "$HOME" -- "$wdc")
+          test -z "$wdc"; and set wdc "$best_work_dir/$first"
+          if test -d "$wdc"
+            set -l wlen (string length -- "$wdc")
+            set -l pfx (string sub -s 1 -l "$wlen" -- "$PWD")
+            set -l ok 0
+            if test "$PWD" = "$wdc"
+              set ok 1
+            else if test (string length -- "$PWD") -gt "$wlen"; and test "$pfx" = "$wdc"
+              set -l mid (string sub -s (math $wlen + 1) -l 1 -- "$PWD")
+              test "$mid" = /; and set ok 1
+            end
+            if test "$ok" -eq 1; and test "$wlen" -gt "$bl"
+              set path_profile "$first"
+              set best_work_dir "$wdc"
+            end
+          end
+        end
+      end
+    end
+  end
+
   if test -n "$path_profile"
     set -l repo_root (git rev-parse --show-toplevel 2>/dev/null; or echo "")
     set repo_root (string trim -r / -- "$repo_root")
@@ -81,16 +115,29 @@ function _ctx_profile_autoswitch --on-variable PWD
   set -g __CTX_AS_STATE "$_as_key"
 
   if test -n "$target"
+    set -l _ctx_applied 0
     if test -n "$current"; and test "$current" != "$target"
       echo -e "\033[2m[ctx] ← $current → $target\033[0m" >&2
       env CTX_QUIET=1 ctx deactivate --eval fish 2>/dev/null | source
-      env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+      if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+        set _ctx_applied 1
+      else
+        echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
+      end
     else if test -z "$current"
       echo -e "\033[2m[ctx] → $target\033[0m" >&2
-      env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+      if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+        set _ctx_applied 1
+      else
+        echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
+      end
+    else
+      set _ctx_applied 1
     end
-    set -gx CTX_ACTIVE_PROFILE "$target"
-    set -gx CTX_ACTIVATION_TRIGGER auto
+    if test "$_ctx_applied" -eq 1
+      set -gx CTX_ACTIVE_PROFILE "$target"
+      set -gx CTX_ACTIVATION_TRIGGER auto
+    end
   else
     if test -n "$current"
       echo -e "\033[2m[ctx] ← $current\033[0m" >&2

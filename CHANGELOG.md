@@ -22,7 +22,7 @@ All notable changes to this project will be documented in this file.
 - **README:** added **Enterprise secrets (Vault / 1Password)** — built-in backends vs external vaults, how `mise` hooks inject values, and practical patterns (`op run`, Vault Agent, `pass`).
 
 ### Fixed
-- **Auto-switch `.ctx`:** profile override now uses the **nearest** `profile=` from `$PWD` up to the git root (not only the repo root). Nested client folders under one git worktree no longer inherit the wrong profile when only the monorepo root had a `.ctx`.
+- **Auto-switch (sibling clients):** when one profile’s **`WORK_DIR`** is a **parent** of several client dirs (e.g. `…/clients`), ctx now prefers **`…/clients/<segment>.conf`** named after the first path segment under that prefix when that profile exists and **`…/clients/<segment>`** is a directory (even if that `.conf` omits **`WORK_DIR`**).
 - **Installer safety check:** `install.sh` now validates the installed `ctx` script with `bash -n` and aborts fast if syntax is invalid (prevents silent broken upgrades).
 - **Atomic installer writes:** `install.sh` now stages `ctx` files in a temp directory, validates syntax, then swaps into place to avoid partially-written binaries during upgrade.
 - **Doctor checks:** fixed SSH include detection, and updated command version probes so `kubectl` reports correctly instead of showing a false unknown-flag error.

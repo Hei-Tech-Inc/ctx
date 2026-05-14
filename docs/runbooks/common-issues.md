@@ -18,6 +18,8 @@
 
 **Cause:** Common with **multiple client folders under one git root**: the old hook only read **`.ctx` at the repo root**, so `profile=deladetech` (for example) applied under `…/hubtel` too. Your prompt or aliases may still show that profile’s `WORK_DIR` while `ls` shows the correct tree.
 
+**Also common:** one profile uses a **broad `WORK_DIR`** (e.g. `~/clients`) so every subfolder matched that profile until you add **`~/clients/<name>.conf`** with a longer `WORK_DIR` or leave `WORK_DIR` unset — the hook then prefers the **sibling profile** named after the first directory under that prefix (`hubtel`, `acs`, …) when that `.conf` exists and `~/clients/<name>` is a real directory.
+
 **Fix:** Upgrade ctx, **`source ~/.zshrc`**, and either add a **nearest** `.ctx` (e.g. `clients/hubtel/.ctx` with `profile=hubtel`) or remove the root override if you do not want repo-wide defaults.
 
 ---

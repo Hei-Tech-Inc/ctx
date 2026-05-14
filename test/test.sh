@@ -139,9 +139,12 @@ test_ctx_cli_version() {
 test_ctx_resolve_path_profile() {
   (
     set -euo pipefail
-    local ROOT td prof want got
+    local ROOT td prof want got _git_tpl
     ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     td="$(mktemp -d)"
+    _git_tpl="$(mktemp -d)"
+    mkdir -p "$_git_tpl/hooks"
+    export GIT_TEMPLATE_DIR="$_git_tpl"
     prof="$td/profiles"
     mkdir -p "$prof"
     printf 'WORK_DIR=%q\n' "$td/root" >"$prof/short.conf"
@@ -168,12 +171,19 @@ test_ctx_resolve_path_profile() {
     got="$(ctx_resolve_path_profile "$td/m/repo/deep" "$prof")"
     [[ "$got" == "short" ]] || exit 1
 
+    rm -f "$prof"/*.conf
+    mkdir -p "$td/clients/hubtel/deep"
+    printf 'WORK_DIR=%q\n' "$td/clients" >"$prof/deladetech.conf"
+    printf 'PROFILE_NAME=hubtel\n' >"$prof/hubtel.conf"
+    got="$(ctx_resolve_path_profile "$td/clients/hubtel/deep" "$prof")"
+    [[ "$got" == "hubtel" ]] || exit 1
+
     got="$(ctx_resolve_path_profile "/nonexistent/nope/zz" "$prof")"
     [[ -z "$got" ]] || exit 1
 
-    rm -rf "$td"
+    rm -rf "$td" "${_git_tpl:-}"
   ) || fail "ctx_resolve_path_profile"
-  pass "ctx_resolve_path_profile (prefix, .ctx override, no match)"
+  pass "ctx_resolve_path_profile (prefix, sibling, .ctx, no match)"
 }
 
 test_generate_mise_toml_matches_fixture() {
