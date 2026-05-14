@@ -224,6 +224,46 @@ cmd_deactivate() {
 
 # ─── status ───────────────────────────────────────────────────────────────────
 cmd_status() {
+  if [[ "${CTX_JSON:-0}" == "1" ]]; then
+    ctx_init_dirs
+    local current
+    current=$(active_profile)
+    if [[ -z "$current" ]]; then
+      printf '{"version":"%s","command":"status","active":null}\n' "$(ctx_json_escape "$CTX_VERSION")"
+      return 0
+    fi
+    load_profile "$current"
+    local act_src act_note mp
+    act_src="$(ctx_activation_get_source)"
+    if [[ "$act_src" == "manual" ]]; then
+      mp="$(ctx_activation_get_manual_pwd 2>/dev/null || true)"
+      if [[ -n "$mp" && "$PWD" == "$mp" ]]; then
+        act_note="manual_locked_at_pwd"
+      else
+        act_note="manual_cleared_auto_applies"
+      fi
+    else
+      act_note="auto"
+    fi
+    printf '{"version":"%s","command":"status","active":"%s","activation":"%s","activation_note":"%s","git_name":"%s","git_email":"%s","work_dir":"%s","github_user":"%s","ssh_key_path":"%s","aws_profile":"%s","azure_subscription":"%s","gcp_project":"%s","kube_context":"%s","secret_keys":"%s","ctx_active_profile":"%s"}\n' \
+      "$(ctx_json_escape "$CTX_VERSION")" \
+      "$(ctx_json_escape "$current")" \
+      "$(ctx_json_escape "$act_src")" \
+      "$(ctx_json_escape "$act_note")" \
+      "$(ctx_json_escape "${GIT_NAME:-}")" \
+      "$(ctx_json_escape "${GIT_EMAIL:-}")" \
+      "$(ctx_json_escape "${WORK_DIR:-}")" \
+      "$(ctx_json_escape "${GITHUB_USER:-}")" \
+      "$(ctx_json_escape "${SSH_KEY_PATH:-}")" \
+      "$(ctx_json_escape "${AWS_PROFILE_NAME:-}")" \
+      "$(ctx_json_escape "${AZURE_SUBSCRIPTION:-}")" \
+      "$(ctx_json_escape "${GCP_PROJECT:-}")" \
+      "$(ctx_json_escape "${KUBE_CONTEXT:-}")" \
+      "$(ctx_json_escape "${SECRET_KEYS:-}")" \
+      "$(ctx_json_escape "${CTX_ACTIVE_PROFILE:-}")"
+    return 0
+  fi
+
   ctx_init_dirs
   local current
   current=$(active_profile)
@@ -352,6 +392,43 @@ cmd_status() {
 
 # ─── list ─────────────────────────────────────────────────────────────────────
 cmd_list() {
+  if [[ "${CTX_JSON:-0}" == "1" ]]; then
+    ctx_init_dirs
+    local current sep="" f pname found=false
+    current=$(active_profile)
+    printf '{"version":"%s","command":"list","profiles":[' "$(ctx_json_escape "$CTX_VERSION")"
+    for f in "$CTX_PROFILES_DIR"/*.conf; do
+      [[ -e "$f" ]] || continue
+      found=true
+      pname=$(basename "$f" .conf)
+      unset GIT_NAME GIT_EMAIL WORK_DIR GITHUB_USER AWS_PROFILE_NAME
+      unset AZURE_SUBSCRIPTION GCP_PROJECT KUBE_CONTEXT SECRET_KEYS SSH_KEY_PATH
+      # shellcheck source=/dev/null
+      source "$f"
+      local active_json="false"
+      [[ "$pname" == "$current" ]] && active_json="true"
+      printf '%s{"name":"%s","active":%s,"git_name":"%s","git_email":"%s","work_dir":"%s","github_user":"%s","aws_profile":"%s","azure_subscription":"%s","gcp_project":"%s","kube_context":"%s","secret_keys":"%s"}' \
+        "$sep" \
+        "$(ctx_json_escape "$pname")" \
+        "$active_json" \
+        "$(ctx_json_escape "${GIT_NAME:-}")" \
+        "$(ctx_json_escape "${GIT_EMAIL:-}")" \
+        "$(ctx_json_escape "${WORK_DIR:-}")" \
+        "$(ctx_json_escape "${GITHUB_USER:-}")" \
+        "$(ctx_json_escape "${AWS_PROFILE_NAME:-}")" \
+        "$(ctx_json_escape "${AZURE_SUBSCRIPTION:-}")" \
+        "$(ctx_json_escape "${GCP_PROJECT:-}")" \
+        "$(ctx_json_escape "${KUBE_CONTEXT:-}")" \
+        "$(ctx_json_escape "${SECRET_KEYS:-}")"
+      sep=","
+    done
+    printf ']}\n'
+    if ! $found; then
+      :
+    fi
+    return 0
+  fi
+
   ctx_init_dirs
   local current
   current=$(active_profile)

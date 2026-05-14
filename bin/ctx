@@ -21,6 +21,7 @@ source "$CTX_LIB/cmd_ops.sh"
 # ─── Flag parsing ─────────────────────────────────────────────────────────────
 CTX_DRY_RUN=0
 CTX_QUIET=0
+CTX_JSON=0
 POSITIONAL=()
 
 for arg in "$@"; do
@@ -28,10 +29,11 @@ for arg in "$@"; do
     --dry-run)    CTX_DRY_RUN=1 ;;
     --quiet|-q)   CTX_QUIET=1 ;;
     --no-gum)     HAS_GUM=false ;;
+    --json)       CTX_JSON=1 ;;
     *)            POSITIONAL+=("$arg") ;;
   esac
 done
-export CTX_DRY_RUN CTX_QUIET HAS_GUM
+export CTX_DRY_RUN CTX_QUIET CTX_JSON HAS_GUM
 set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
@@ -85,6 +87,7 @@ cmd_help() {
       "  --dry-run        Preview changes without writing files" \
       "  --quiet          Suppress output (used by auto-switch)" \
       "  --no-gum         Force plain text prompts" \
+      "  --json           Machine-readable JSON (list, status)" \
       "" \
       "$(gum style --faint "SETUP FLAGS")" \
       "  --config FILE    Non-interactive wizard (see examples/setup.noninteractive.conf.example)" \
@@ -134,6 +137,7 @@ ${BOLD}FLAGS${RESET}
   --dry-run             Preview changes, write nothing
   --quiet               Suppress output (auto-switch hook uses this)
   --no-gum              Force plain text prompts
+  --json                Machine-readable JSON for supported commands (list, status)
   setup --config FILE   Non-interactive wizard (KEY=value file)
   setup -y              With --config: confirm without prompting
   setup --help          Same as: ctx help setup
@@ -198,10 +202,17 @@ _ctx() {
     '-h:Full setup reference'
   )
   local help_topics=('setup:Wizard and --config reference')
+  local global_flags=(
+    '--dry-run:Preview without writing files'
+    '--quiet:Suppress output'
+    '--no-gum:Plain prompts'
+    '--json:JSON output (list, status)'
+  )
   case $CURRENT in
-    2) _describe 'ctx commands' cmds ;;
+    2) _describe 'ctx flags' global_flags && _describe 'ctx commands' cmds ;;
     3)
       case ${words[2]} in
+        --dry-run|--quiet|--no-gum|--json) _describe 'ctx commands' cmds ;;
         use|edit|remove|verify) _describe 'profiles' profiles ;;
         setup|import|add) _describe 'setup options' setup_flags ;;
         help) _describe 'help topics' help_topics ;;
@@ -247,6 +258,11 @@ _ctx_comp() {
   local cmds="init setup import add use deactivate list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
+  # ctx list|status [--json]
+  if [[ "$w1" =~ ^(list|status)$ && "$prev" == "$w1" ]]; then
+    COMPREPLY=($(compgen -W "--json" -- "$cur"))
+    return
+  fi
   # ctx setup [--config FILE] [-y|--yes]
   if [[ "$w1" =~ ^(setup|import|add)$ ]]; then
     if [[ "$prev" == "--config" ]]; then
@@ -268,7 +284,7 @@ _ctx_comp() {
     upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     uninstall) COMPREPLY=($(compgen -W "--purge" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
-    ctx) COMPREPLY=($(compgen -W "$cmds" -- "$cur")) ;;
+    ctx) COMPREPLY=($(compgen -W "$cmds --dry-run --quiet --no-gum --json" -- "$cur")) ;;
   esac
   if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
     COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
@@ -286,6 +302,8 @@ function __fish_ctx_profiles
 end
 
 complete -c ctx -f
+
+complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
 
 complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
 
@@ -310,6 +328,9 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -s y -l ye
 complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -s h -l help -d 'Full setup reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -l config -d 'Non-interactive KEY=value file' -r
 complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add; and __fish_prev_arg_in --config' -f -a '(__fish_complete_path)'
+
+complete -c ctx -n '__fish_seen_subcommand_from ctx list' -l json -d 'JSON output'
+complete -c ctx -n '__fish_seen_subcommand_from ctx status' -l json -d 'JSON output'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx clone' -s p -l profile -d 'Profile' -a '(__fish_ctx_profiles)'
 FISH

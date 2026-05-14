@@ -136,6 +136,93 @@ test_ctx_cli_version() {
   pass "ctx CLI (bin/ctx version)"
 }
 
+test_ctx_resolve_path_profile() {
+  (
+    set -euo pipefail
+    local ROOT td prof want got
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(mktemp -d)"
+    prof="$td/profiles"
+    mkdir -p "$prof"
+    printf 'WORK_DIR=%q\n' "$td/root" >"$prof/short.conf"
+    printf 'WORK_DIR=%q\n' "$td/root/client" >"$prof/long.conf"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT/lib/core.sh"
+    got="$(ctx_resolve_path_profile "$td/root/client/app" "$prof")"
+    [[ "$got" == "long" ]] || exit 1
+
+    mkdir -p "$td/w/repo/sub"
+    git -C "$td/w/repo" init -q
+    printf 'profile=short\n' >"$td/w/repo/.ctx"
+    printf 'WORK_DIR=%q\n' "$td/w" >"$prof/short.conf"
+    printf 'WORK_DIR=%q\n' "$td/w/repo" >"$prof/long.conf"
+    got="$(ctx_resolve_path_profile "$td/w/repo/sub" "$prof")"
+    [[ "$got" == "short" ]] || exit 1
+
+    mkdir -p "$td/m/repo/deep"
+    git -C "$td/m/repo" init -q
+    printf 'profile=long\n' >"$td/m/repo/.ctx"
+    printf 'profile=short\n' >"$td/m/repo/deep/.ctx"
+    printf 'WORK_DIR=%q\n' "$td/m" >"$prof/short.conf"
+    printf 'WORK_DIR=%q\n' "$td/m/repo" >"$prof/long.conf"
+    got="$(ctx_resolve_path_profile "$td/m/repo/deep" "$prof")"
+    [[ "$got" == "short" ]] || exit 1
+
+    got="$(ctx_resolve_path_profile "/nonexistent/nope/zz" "$prof")"
+    [[ -z "$got" ]] || exit 1
+
+    rm -rf "$td"
+  ) || fail "ctx_resolve_path_profile"
+  pass "ctx_resolve_path_profile (prefix, .ctx override, no match)"
+}
+
+test_generate_mise_toml_matches_fixture() {
+  (
+    set -euo pipefail
+    local ROOT td want got
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(mktemp -d)"
+    mkdir -p "$td/w"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT/lib/core.sh"
+    generate_mise_toml "snap" "$td/w" "Test User" "test@example.com" "" "" "" "" "" ""
+    want="$ROOT/test/fixtures/mise_generated_minimal.toml"
+    got="$td/w/mise.toml"
+    cmp -s "$want" "$got" || {
+      diff -u "$want" "$got" >&2 || true
+      exit 1
+    }
+    rm -rf "$td"
+  ) || fail "generate_mise_toml golden mismatch"
+  pass "generate_mise_toml matches fixture"
+}
+
+test_ctx_json_list_and_status() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(mktemp -d)"
+    export CTX_DIR="$td"
+    mkdir -p "$td/profiles"
+    {
+      printf 'PROFILE_NAME=%q\n' "alpha"
+      printf 'GIT_NAME=%q\n' "A User"
+      printf 'GIT_EMAIL=%q\n' "a@example.com"
+      printf 'WORK_DIR=%q\n' "$td/w"
+    } >"$td/profiles/alpha.conf"
+    : >"$td/config"
+    out="$("$ROOT_DIR/bin/ctx" list --json 2>&1)" || exit 1
+    echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["command"]=="list" and "version" in d and len(d["profiles"])==1 and d["profiles"][0]["name"]=="alpha" and d["profiles"][0]["active"] is False' || exit 1
+    out="$("$ROOT_DIR/bin/ctx" --json status 2>&1)" || exit 1
+    echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["command"]=="status" and d["active"] is None' || exit 1
+    echo "active=alpha" >>"$td/config"
+    out="$("$ROOT_DIR/bin/ctx" --json status 2>&1)" || exit 1
+    echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["command"]=="status" and d["active"]=="alpha" and d["git_email"]=="a@example.com"' || exit 1
+    rm -rf "$td"
+  ) || fail "ctx --json list / status"
+  pass "ctx JSON list and status"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -145,5 +232,8 @@ test_secret_file_path
 test_secret_provider_resolution
 test_ctx_profile_read_work_dir
 test_ctx_cli_version
+test_ctx_resolve_path_profile
+test_generate_mise_toml_matches_fixture
+test_ctx_json_list_and_status
 
 echo "All tests passed."

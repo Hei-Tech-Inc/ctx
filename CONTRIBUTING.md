@@ -4,6 +4,7 @@ Thanks for contributing to `ctx`.
 
 ## Development setup
 
+- See [docs/sprint/SPRINT.md](docs/sprint/SPRINT.md) for the current engineering backlog (tests, CLI contracts, docs).
 - Run `bash install.sh` for local dependencies.
 - Run `bin/ctx help` to validate CLI wiring.
 - Run `bash test/test.sh` before opening a pull request (CI runs the same script on Ubuntu).

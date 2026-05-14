@@ -1,5 +1,5 @@
 # ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook
-# Longest WORK_DIR prefix wins; .ctx in git repo overrides; manual ctx use locks until cd.
+# Longest WORK_DIR prefix wins; nearest .ctx (walk $PWD → git root) overrides; manual ctx use locks until cd.
 
 _ctx_profile_autoswitch() {
   command -v ctx &>/dev/null || return 0
@@ -24,14 +24,29 @@ _ctx_profile_autoswitch() {
 
   local path_profile="$best_pname"
   if [[ -n "$path_profile" ]]; then
-    local repo_root
+    # Nearest .ctx from $PWD up to git root (nested client dirs beat monorepo root .ctx).
+    local repo_root d parent ov
     repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
-    if [[ -n "$repo_root" && -f "$repo_root/.ctx" ]]; then
-      local ov
-      ov="$(grep "^profile=" "$repo_root/.ctx" 2>/dev/null | tail -1 | cut -d= -f2-)"
-      if [[ -n "$ov" ]] && [[ -f "${profiles_dir}/${ov}.conf" ]]; then
-        path_profile="$ov"
-      fi
+    repo_root="${repo_root%/}"
+    if [[ -n "$repo_root" ]]; then
+      d="${PWD%/}"
+      while true; do
+        if [[ -f "$d/.ctx" ]]; then
+          ov="$(grep "^profile=" "$d/.ctx" 2>/dev/null | tail -1 | cut -d= -f2-)"
+          ov="${ov//$'\r'/}"
+          ov="$(printf '%s' "$ov" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [[ -n "$ov" && -f "${profiles_dir}/${ov}.conf" ]]; then
+            path_profile="$ov"
+            break
+          fi
+        fi
+        if [[ "$d" == "$repo_root" ]]; then
+          break
+        fi
+        parent="${d%/*}"
+        [[ "$parent" == "$d" ]] && break
+        d="$parent"
+      done
     fi
   fi
 
@@ -87,7 +102,18 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
   add-zsh-hook chpwd _ctx_profile_autoswitch 2>/dev/null || true
   _ctx_profile_autoswitch
 elif [[ -n "${BASH_VERSION:-}" ]]; then
-  PROMPT_COMMAND="_ctx_profile_autoswitch${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+  # Idempotent: strip our hook (and legacy token) so reinstall / re-source does not stack.
+  PROMPT_COMMAND="${PROMPT_COMMAND//_ctx_profile_autoswitch;/}"
+  PROMPT_COMMAND="${PROMPT_COMMAND//;_ctx_profile_autoswitch/}"
+  PROMPT_COMMAND="${PROMPT_COMMAND//_ctx_profile_autoswitch/}"
   PROMPT_COMMAND="${PROMPT_COMMAND//_ctx_auto_switch;/}"
+  PROMPT_COMMAND="${PROMPT_COMMAND//;_ctx_auto_switch/}"
+  PROMPT_COMMAND="${PROMPT_COMMAND//_ctx_auto_switch/}"
+  while [[ "$PROMPT_COMMAND" == *";;"* ]]; do
+    PROMPT_COMMAND="${PROMPT_COMMAND//;;/;}"
+  done
+  PROMPT_COMMAND="${PROMPT_COMMAND#;}"
+  PROMPT_COMMAND="${PROMPT_COMMAND%;}"
+  PROMPT_COMMAND="_ctx_profile_autoswitch${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   _ctx_profile_autoswitch
 fi

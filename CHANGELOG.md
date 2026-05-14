@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`ctx --json` / `ctx list --json` / `ctx status --json`:** machine-readable output with a **`version`** field and stable keys for scripting and CI; completions advertise `--json` where relevant.
+- **`ctx_resolve_path_profile`** in `lib/core.sh` (longest `WORK_DIR` prefix + repo **`.ctx`** `profile=` override), covered by unit tests.
+- **Golden fixture** for minimal **`generate_mise_toml`** output under `test/fixtures/mise_generated_minimal.toml`.
+- **Bash auto-switch hook:** idempotent **`PROMPT_COMMAND`** wiring — strips duplicate **`_ctx_profile_autoswitch`** and legacy **`_ctx_auto_switch`** tokens before prepending once.
 - **Setup reference in the CLI:** `ctx setup --help`, `ctx import --help`, and `ctx help setup` show the same reference (flags, `--config` keys, dry-run, example file URL). Completions advertise `help setup` and setup `-h` / `--help`.
 - **Example config:** header comment in `examples/setup.noninteractive.conf.example` points to `ctx help setup`.
 - **ctx doctor:** warns if `~/.ssh` is group- or world-writable and suggests `chmod 700` (OpenSSH may otherwise ignore keys).
@@ -18,7 +22,7 @@ All notable changes to this project will be documented in this file.
 - **README:** added **Enterprise secrets (Vault / 1Password)** — built-in backends vs external vaults, how `mise` hooks inject values, and practical patterns (`op run`, Vault Agent, `pass`).
 
 ### Fixed
-- **Setup:** removed a duplicate `cmd_add` definition in `lib/cmd_import.sh`.
+- **Auto-switch `.ctx`:** profile override now uses the **nearest** `profile=` from `$PWD` up to the git root (not only the repo root). Nested client folders under one git worktree no longer inherit the wrong profile when only the monorepo root had a `.ctx`.
 - **Installer safety check:** `install.sh` now validates the installed `ctx` script with `bash -n` and aborts fast if syntax is invalid (prevents silent broken upgrades).
 - **Atomic installer writes:** `install.sh` now stages `ctx` files in a temp directory, validates syntax, then swaps into place to avoid partially-written binaries during upgrade.
 - **Doctor checks:** fixed SSH include detection, and updated command version probes so `kubectl` reports correctly instead of showing a false unknown-flag error.

@@ -1,4 +1,5 @@
 # ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)
+# Nearest .ctx from $PWD up to git root wins (not repo-root only).
 
 function _ctx_profile_autoswitch --on-variable PWD
   command -v ctx >/dev/null 2>/dev/null; or return
@@ -32,10 +33,26 @@ function _ctx_profile_autoswitch --on-variable PWD
   set -l path_profile "$best_pname"
   if test -n "$path_profile"
     set -l repo_root (git rev-parse --show-toplevel 2>/dev/null; or echo "")
-    if test -n "$repo_root"; and test -f "$repo_root/.ctx"
-      set -l ov (grep "^profile=" "$repo_root/.ctx" 2>/dev/null | tail -1 | cut -d= -f2-)
-      if test -n "$ov"; and test -f "$profiles_dir/$ov.conf"
-        set path_profile "$ov"
+    set repo_root (string trim -r / -- "$repo_root")
+    if test -n "$repo_root"
+      set -l d (string trim -r / -- "$PWD")
+      while true
+        if test -f "$d/.ctx"
+          set -l ov (grep "^profile=" "$d/.ctx" 2>/dev/null | tail -1 | cut -d= -f2-)
+          set ov (string trim -- "$ov")
+          if test -n "$ov"; and test -f "$profiles_dir/$ov.conf"
+            set path_profile "$ov"
+            break
+          end
+        end
+        if test "$d" = "$repo_root"
+          break
+        end
+        set -l parent (command dirname "$d")
+        if test "$parent" = "$d"
+          break
+        end
+        set d "$parent"
       end
     end
   end

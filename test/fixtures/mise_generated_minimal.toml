@@ -1,0 +1,24 @@
+# mise.toml — ctx managed environment for: snap
+# Edit freely. This file is safe to commit (no secrets here).
+# Secrets load in [hooks.enter]: macOS Keychain, or ~/.ctx/secrets on other OSes.
+
+[env]
+
+# Uncomment to load a local secrets file (add it to .gitignore)
+# _.file = ".env.local"
+
+[hooks.enter]
+shell = "bash"
+script = """
+  # Set git identity for this directory
+  git config user.name  "Test User"
+  git config user.email "test@example.com"
+
+"""
+
+[hooks.leave]
+shell = "bash"
+script = """
+  git config --unset user.name  2>/dev/null || true
+  git config --unset user.email 2>/dev/null || true
+"""

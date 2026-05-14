@@ -407,6 +407,75 @@ ctx_profile_read_work_dir() {
   printf '%s\n' "$wd"
 }
 
+# Escape a string for use inside JSON double quotes (no surrounding quotes).
+ctx_json_escape() {
+  local s="$1" out="" i c
+  local -i i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\) out+='\\' ;;
+      \") out+='\"' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      *) out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# Longest WORK_DIR prefix of pwd under profiles_dir; optional repo .ctx profile= override.
+# Prints profile basename (no .conf) or empty. pwd and profile paths are expanded (~ → HOME).
+ctx_resolve_path_profile() {
+  local pwd="${1:?pwd required}" pdir="${2:?profiles dir required}"
+  pwd="${pwd/#\~/$HOME}"
+  [[ -d "$pdir" ]] || return 1
+  local best_pname="" best_len=0 conf work_dir len
+  for conf in "$pdir"/*.conf; do
+    [[ -e "$conf" ]] || continue
+    work_dir="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
+    work_dir="${work_dir/#\~/$HOME}"
+    [[ -z "$work_dir" ]] && continue
+    if [[ "$pwd" == "$work_dir" || "$pwd" == "$work_dir/"* ]]; then
+      len=${#work_dir}
+      if [[ $len -gt $best_len ]]; then
+        best_len=$len
+        best_pname="$(basename "$conf" .conf)"
+      fi
+    fi
+  done
+  local path_profile="$best_pname"
+  if [[ -n "$path_profile" && -d "$pwd" ]]; then
+    # Nearest .ctx wins (walk $pwd → repo root). Root-only .ctx was wrong for nested
+    # client dirs inside one git worktree (every subfolder inherited the root profile).
+    local repo_root d parent ov
+    repo_root="$(git -C "$pwd" rev-parse --show-toplevel 2>/dev/null || echo "")"
+    repo_root="${repo_root%/}"
+    if [[ -n "$repo_root" ]]; then
+      d="${pwd%/}"
+      while true; do
+        if [[ -f "$d/.ctx" ]]; then
+          ov="$(grep "^profile=" "$d/.ctx" 2>/dev/null | tail -1 | cut -d= -f2-)"
+          ov="${ov//$'\r'/}"
+          ov="$(printf '%s' "$ov" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [[ -n "$ov" && -f "${pdir}/${ov}.conf" ]]; then
+            path_profile="$ov"
+            break
+          fi
+        fi
+        if [[ "$d" == "$repo_root" ]]; then
+          break
+        fi
+        parent="${d%/*}"
+        [[ "$parent" == "$d" ]] && break
+        d="$parent"
+      done
+    fi
+  fi
+  printf '%s' "${path_profile:-}"
+}
+
 ctx_activation_get_source() {
   local v
   v="$(grep "^active_source=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
