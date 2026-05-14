@@ -217,7 +217,7 @@ _ctx() {
         setup|import|add) _describe 'setup options' setup_flags ;;
         help) _describe 'help topics' help_topics ;;
         secret) local sub=('set' 'get' 'list' 'delete' 'migrate'); _describe 'subcommands' sub ;;
-        config) local sub=('show' 'work-root' 'secret-provider' 'export' 'import'); _describe 'subcommands' sub ;;
+        config) local sub=('show' 'work-root' 'secret-provider' 'prompt-workdir-depth' 'prompt-extra-paths' 'export' 'import'); _describe 'subcommands' sub ;;
         upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
         uninstall) local sub=('--purge'); _describe 'uninstall flags' sub ;;
         completion) local sh=('zsh' 'bash' 'fish'); _describe 'shells' sh ;;
@@ -280,7 +280,7 @@ _ctx_comp() {
     use|edit|remove|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     secret) COMPREPLY=($(compgen -W "set get list delete migrate" -- "$cur")) ;;
-    config) COMPREPLY=($(compgen -W "show work-root secret-provider export import" -- "$cur")) ;;
+    config) COMPREPLY=($(compgen -W "show work-root secret-provider prompt-workdir-depth prompt-extra-paths export import" -- "$cur")) ;;
     upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     uninstall) COMPREPLY=($(compgen -W "--purge" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
@@ -319,7 +319,7 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx secret set' -a '(__fish_ctx_
 complete -c ctx -n '__fish_seen_subcommand_from ctx secret get' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx secret delete' -a '(__fish_ctx_profiles)'
 
-complete -c ctx -n '__fish_seen_subcommand_from ctx config' -a 'show work-root secret-provider export import'
+complete -c ctx -n '__fish_seen_subcommand_from ctx config' -a 'show work-root secret-provider prompt-workdir-depth prompt-extra-paths export import'
 complete -c ctx -n '__fish_seen_subcommand_from ctx upgrade' -a '--check'
 complete -c ctx -n '__fish_seen_subcommand_from ctx uninstall' -a '--purge'
 complete -c ctx -n '__fish_seen_subcommand_from ctx completion' -a 'zsh bash fish'

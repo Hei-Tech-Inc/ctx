@@ -497,6 +497,47 @@ ctx_resolve_path_profile() {
   printf '%s' "${path_profile:-}"
 }
 
+# Path segments under work_dir (0 = exact match). Prints -1 if pwd is not under work_dir.
+ctx_rel_path_depth_under() {
+  local p="${1:?pwd}" r="${2:?work dir}"
+  p="${p/#\~/$HOME}"
+  r="${r/#\~/$HOME}"
+  p="${p%/}"
+  r="${r%/}"
+  [[ "$p" == "$r" ]] && { printf '%s' 0; return 0; }
+  [[ "$p" == "$r/"* ]] || { printf '%s' -1; return 0; }
+  local x="${p#"${r}"/}"
+  [[ -z "$x" ]] && { printf '%s' 0; return 0; }
+  if [[ "$x" != */* ]]; then
+    printf '%s' 1
+    return 0
+  fi
+  printf '%s' "$(printf '%s\n' "$x" | awk -F/ '{print NF}')"
+}
+
+# Default 2: show prompt helpers for WORK_DIR plus up to two path segments below it.
+ctx_config_prompt_workdir_max_depth() {
+  local v="2"
+  ctx_init_dirs
+  if [[ -f "$CTX_CONFIG" ]]; then
+    v="$(grep "^prompt_workdir_max_depth=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  fi
+  v="${v//$'\r'/}"
+  v="${v// /}"
+  [[ "$v" =~ ^[0-9]+$ ]] || v=2
+  printf '%s' "$v"
+}
+
+# Colon-separated extra absolute path prefixes for prompt scope (optional).
+ctx_config_prompt_extra_paths_or_default() {
+  ctx_init_dirs
+  local v=""
+  if [[ -f "$CTX_CONFIG" ]]; then
+    v="$(grep "^prompt_extra_paths=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  fi
+  [[ -n "$v" ]] && printf '%s' "$v" || printf '%s' "(none)"
+}
+
 ctx_activation_get_source() {
   local v
   v="$(grep "^active_source=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"

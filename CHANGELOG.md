@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Prompt scope env vars** from the auto-switch hook: **`CTX_PROMPT_SHOW`** (0 or 1), **`CTX_PROMPT_PROFILE`**, **`CTX_PROMPT_WORK_DIR`** — only under a profile’s `WORK_DIR` within **`prompt_workdir_max_depth`** (default **2** path segments), or under optional **`prompt_extra_paths`** (colon-separated). Configure with **`ctx config prompt-workdir-depth`** / **`prompt-extra-paths`**. Use in zsh/bash/fish instead of grepping profile files for every `cd` (e.g. aliases to non-ctx folders).
 - **`ctx --json` / `ctx list --json` / `ctx status --json`:** machine-readable output with a **`version`** field and stable keys for scripting and CI; completions advertise `--json` where relevant.
 - **`ctx_resolve_path_profile`** in `lib/core.sh` (longest `WORK_DIR` prefix + repo **`.ctx`** `profile=` override), covered by unit tests.
 - **Golden fixture** for minimal **`generate_mise_toml`** output under `test/fixtures/mise_generated_minimal.toml`.

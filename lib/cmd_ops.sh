@@ -135,6 +135,7 @@ _ctx_deactivate_emit_unsets() {
       done
       printf 'set -e AWS_PROFILE AZURE_SUBSCRIPTION AZURE_TENANT GCLOUD_PROJECT GCP_PROJECT GCP_ACCOUNT\n'
       printf 'set -e CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER\n'
+      printf 'set -e CTX_PROMPT_SHOW CTX_PROMPT_PROFILE CTX_PROMPT_WORK_DIR\n'
       if [[ -n "$wd" ]]; then
         local qwd
         qwd="${wd//\'/\'\\\'\'}"
@@ -152,6 +153,7 @@ _ctx_deactivate_emit_unsets() {
       done
       printf 'unset AWS_PROFILE AZURE_SUBSCRIPTION AZURE_TENANT GCLOUD_PROJECT GCP_PROJECT GCP_ACCOUNT 2>/dev/null || true\n'
       printf 'unset CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER 2>/dev/null || true\n'
+      printf 'unset CTX_PROMPT_SHOW CTX_PROMPT_PROFILE CTX_PROMPT_WORK_DIR 2>/dev/null || true\n'
       if [[ -n "$wd" ]]; then
         local q
         q="$(printf '%q' "$wd")"
@@ -611,9 +613,13 @@ cmd_config() {
       bold "\n  ctx config\n"
       echo "  work_root: $(ctx_work_root)"
       echo "  secret_provider: $(ctx_secret_provider) (effective: $(ctx_effective_secret_provider))"
+      echo "  prompt_workdir_max_depth: $(ctx_config_prompt_workdir_max_depth) (prompt: CTX_PROMPT_* under each profile WORK_DIR)"
+      echo "  prompt_extra_paths: $(ctx_config_prompt_extra_paths_or_default)"
       echo ""
       info "Set with: ctx config work-root <path>"
       info "      or: ctx config secret-provider <auto|keychain|file|pass>"
+      info "      or: ctx config prompt-workdir-depth <n>   # max path segments under WORK_DIR for CTX_PROMPT_SHOW (default 2)"
+      info "      or: ctx config prompt-extra-paths '<p1>:<p2>'   # optional extra absolute prefixes (colon-separated)"
       info "      or: ctx config export <dir> / ctx config import <dir>"
       ;;
     work-root)
@@ -652,6 +658,32 @@ cmd_config() {
         echo "secret_provider=$value" >> "$CTX_CONFIG"
       fi
       success "secret_provider set to: $value (effective: $(ctx_effective_secret_provider))"
+      ;;
+    prompt-workdir-depth)
+      if [[ -z "$value" ]]; then
+        echo "  prompt_workdir_max_depth: $(ctx_config_prompt_workdir_max_depth)"
+        echo ""
+        info "Usage: ctx config prompt-workdir-depth <n>  (non-negative integer; 0 = only exact WORK_DIR)"
+        return 0
+      fi
+      [[ "$value" =~ ^[0-9]+$ ]] || die "prompt-workdir-depth must be a non-negative integer"
+      _ctx_config_upsert_line prompt_workdir_max_depth "$value"
+      success "prompt_workdir_max_depth set to: $value"
+      ;;
+    prompt-extra-paths)
+      if [[ -z "$value" ]]; then
+        echo "  prompt_extra_paths: $(ctx_config_prompt_extra_paths_or_default)"
+        echo ""
+        info "Usage: ctx config prompt-extra-paths '<abs1>:<abs2>:…'  (colon-separated), or: ctx config prompt-extra-paths clear"
+        return 0
+      fi
+      if [[ "$value" == "clear" ]]; then
+        _ctx_config_rm_key prompt_extra_paths
+        success "prompt_extra_paths cleared."
+      else
+        _ctx_config_upsert_line prompt_extra_paths "$value"
+        success "prompt_extra_paths set."
+      fi
       ;;
     export)
       [[ -z "$value" ]] && die "Usage: ctx config export <directory>"
@@ -714,7 +746,7 @@ cmd_config() {
       warn "Secrets are not included in exports; rehydrate via your provider (keychain/file/pass) or 'ctx secret'."
       ;;
     *)
-      die "Usage: ctx config [show|work-root <path>|secret-provider <auto|keychain|file|pass>|export <dir>|import <dir>]"
+      die "Usage: ctx config [show|work-root <path>|secret-provider <auto|keychain|file|pass>|prompt-workdir-depth <n>|prompt-extra-paths '<paths>'|export <dir>|import <dir>]"
       ;;
   esac
 }

@@ -136,6 +136,27 @@ test_ctx_cli_version() {
   pass "ctx CLI (bin/ctx version)"
 }
 
+test_ctx_rel_path_depth_under() {
+  (
+    set -euo pipefail
+    local ROOT d
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT/lib/core.sh"
+    d="$(ctx_rel_path_depth_under "/tmp/a" "/tmp/a")"
+    [[ "$d" == "0" ]] || exit 1
+    d="$(ctx_rel_path_depth_under "/tmp/a/b" "/tmp/a")"
+    [[ "$d" == "1" ]] || exit 1
+    d="$(ctx_rel_path_depth_under "/tmp/a/b/c" "/tmp/a")"
+    [[ "$d" == "2" ]] || exit 1
+    d="$(ctx_rel_path_depth_under "/tmp/a/b/c/d" "/tmp/a")"
+    [[ "$d" == "3" ]] || exit 1
+    d="$(ctx_rel_path_depth_under "/tmp/other" "/tmp/a")"
+    [[ "$d" == "-1" ]] || exit 1
+  ) || fail "ctx_rel_path_depth_under"
+  pass "ctx_rel_path_depth_under"
+}
+
 test_ctx_resolve_path_profile() {
   (
     set -euo pipefail
@@ -242,6 +263,7 @@ test_secret_file_path
 test_secret_provider_resolution
 test_ctx_profile_read_work_dir
 test_ctx_cli_version
+test_ctx_rel_path_depth_under
 test_ctx_resolve_path_profile
 test_generate_mise_toml_matches_fixture
 test_ctx_json_list_and_status

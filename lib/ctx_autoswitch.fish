@@ -1,5 +1,29 @@
 # ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)
 # Nearest .ctx from $PWD up to git root wins (not repo-root only).
+# Sets CTX_PROMPT_SHOW / CTX_PROMPT_WORK_DIR / CTX_PROMPT_PROFILE (see README).
+
+function _ctx_rel_depth_under -a p r
+  set p (string trim -r / -- (string replace -r '^~' "$HOME" -- "$p"))
+  set r (string trim -r / -- (string replace -r '^~' "$HOME" -- "$r"))
+  if test "$p" = "$r"
+    echo 0
+    return
+  end
+  if not string match -q "$r/*" "$p"
+    echo -1
+    return
+  end
+  set -l x (string replace -- "$r/" "" "$p")
+  if test -z "$x"
+    echo 0
+    return
+  end
+  if not string match -q '*/*' "$x"
+    echo 1
+    return
+  end
+  count (string split / -- $x)
+end
 
 function _ctx_profile_autoswitch --on-variable PWD
   command -v ctx >/dev/null 2>/dev/null; or return
@@ -106,6 +130,55 @@ function _ctx_profile_autoswitch --on-variable PWD
   set -l target "$path_profile"
   if test "$src" = manual; and test -n "$manual_anchor"; and test "$PWD" = "$manual_anchor"
     set target "$current"
+  end
+
+  # Prompt hints: only under configured WORK_DIR within depth (default 2), or prompt_extra_paths.
+  set -l pmd 2
+  set -l pmd_raw (grep "^prompt_workdir_max_depth=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
+  set pmd_raw (string trim -- "$pmd_raw")
+  if test -n "$pmd_raw"; and string match -qr '^[0-9]+$' -- "$pmd_raw"
+    set pmd "$pmd_raw"
+  end
+  set -l pex (grep "^prompt_extra_paths=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
+  set -l display_root ""
+  set -l profwd ""
+  set -l prompt_show 0
+  if test -n "$path_profile"
+    set profwd (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$path_profile.conf")
+    set profwd (string replace -r '^~' "$HOME" -- "$profwd")
+    set display_root "$profwd"
+    test -z "$display_root"; and test -n "$best_work_dir"; and set display_root "$best_work_dir"
+  end
+  if test -n "$display_root"
+    set -l d (_ctx_rel_depth_under "$PWD" "$display_root" | string trim)
+    if test "$d" -ge 0; and test "$d" -le "$pmd"
+      set prompt_show 1
+    end
+  end
+  if test "$prompt_show" != 1; and test -n "$pex"
+    for piece in (string split ":" -- "$pex")
+      test -z "$piece"; and continue
+      set piece (string replace -r '^~' "$HOME" -- "$piece")
+      set piece (string trim -r / -- "$piece")
+      if test -n "$piece"; and begin; test "$PWD" = "$piece"; or string match -q "$piece/*" "$PWD"; end
+        set prompt_show 1
+        set display_root "$piece"
+        break
+      end
+    end
+  end
+  if test "$prompt_show" -eq 1
+    set -gx CTX_PROMPT_SHOW 1
+    set -l pname_show "$path_profile"
+    if test -z "$pname_show"
+      set pname_show (grep "^active=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
+    end
+    set -gx CTX_PROMPT_PROFILE "$pname_show"
+    set -gx CTX_PROMPT_WORK_DIR "$display_root"
+  else
+    set -gx CTX_PROMPT_SHOW 0
+    set -e CTX_PROMPT_PROFILE 2>/dev/null
+    set -e CTX_PROMPT_WORK_DIR 2>/dev/null
   end
 
   set -l _as_key "$PWD|$target"

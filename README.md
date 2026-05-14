@@ -261,14 +261,29 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 The shell hook (`ctx install-hook` / `install.sh`) appends **`lib/ctx_autoswitch.bash`** (bash/zsh) or **`lib/ctx_autoswitch.fish`** (fish) to your rc file. It:
 
 - Picks the profile whose **`WORK_DIR`** is the **longest path prefix** of `$PWD` (nested clients supported).
-- Applies a **repo override** when `$GIT_ROOT/.ctx` contains `profile=<name>` (must be a valid profile).
+- Prefers a **sibling profile** when a broad `WORK_DIR` covers `…/clients` and `…/clients/<name>.conf` exists.
+- Applies **nearest** `.ctx` with `profile=<name>` when walking from `$PWD` up to the git root (must be a valid profile).
 - Prints **`[ctx] → name`**, **`[ctx] ← old → new`**, or **`[ctx] ← name`** on stderr when the active profile changes.
 - Runs **`eval "$(ctx deactivate --eval bash)"`** (or fish equivalent) before switching, so secrets and env vars from the previous profile are cleared in your shell.
 - Calls **`CTX_AUTO_SWITCH=1 ctx use <name>`** so `~/.ctx/config` marks activation as **auto** (not manual-lock).
+- Exports **`CTX_PROMPT_SHOW`**, **`CTX_PROMPT_PROFILE`**, and **`CTX_PROMPT_WORK_DIR`** for your prompt: by default the prompt scope is **only** under each profile’s `WORK_DIR` for **up to two extra path segments** (configurable). Folders outside any profile (e.g. a random `cd` or alias) get **`CTX_PROMPT_SHOW=0`**. See **`ctx config prompt-workdir-depth`** and **`prompt_extra_paths`**.
 
 **Manual `ctx use`:** a normal `ctx use` sets **`active_source=manual`** and anchors to **`$PWD`** until you **`cd`** anywhere else; until then the hook will not replace your choice with directory inference.
 
-**Prompt / Starship:** the hook sets **`CTX_ACTIVE_PROFILE`** (and **`CTX_ACTIVATION_TRIGGER=auto`**) when a profile is active. Example Starship snippet:
+**Prompt / Starship:** the hook sets **`CTX_ACTIVE_PROFILE`** (and **`CTX_ACTIVATION_TRIGGER=auto`**) when a profile is active. For **custom prompts** (e.g. printing `WORK_DIR=…`), use **`CTX_PROMPT_SHOW`** so you only show context when `PWD` is actually under a configured profile tree (default: **two** path segments below that profile’s `WORK_DIR`). Example zsh:
+
+```zsh
+# In precmd or RPROMPT — do not grep profile files directly unless CTX_PROMPT_SHOW is 1
+if [[ ${CTX_PROMPT_SHOW:-0} == 1 && -n ${CTX_PROMPT_WORK_DIR:-} ]]; then
+  work_dir="WORK_DIR=${CTX_PROMPT_WORK_DIR}"
+else
+  work_dir=""
+fi
+```
+
+Tune depth: **`ctx config prompt-workdir-depth 2`** (use `0` for exact `WORK_DIR` only). Add more roots: **`ctx config prompt-extra-paths '/other/abs:/another'`** or **`ctx config prompt-extra-paths clear`**.
+
+Example Starship snippet (profile name only):
 
 ```toml
 [env_var]

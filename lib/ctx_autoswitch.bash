@@ -1,6 +1,66 @@
 # ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook
 # Longest WORK_DIR prefix wins; sibling …/clients/<name>.conf under a broad prefix;
 # nearest .ctx (walk $PWD → git root) overrides; manual ctx use locks until cd.
+# Sets CTX_PROMPT_SHOW / CTX_PROMPT_WORK_DIR / CTX_PROMPT_PROFILE for prompts (see README).
+
+_ctx_rel_depth_under() {
+  local p="${1%/}" r="${2%/}" x
+  [[ "$p" == "$r" ]] && { echo 0; return; }
+  [[ "$p" == "$r/"* ]] || { echo -1; return; }
+  x="${p#"${r}"/}"
+  [[ -z "$x" ]] && { echo 0; return; }
+  [[ "$x" != */* ]] && { echo 1; return; }
+  printf '%s\n' "$x" | awk -F/ '{print NF}'
+}
+
+_ctx_prompt_update_exports() {
+  local pmd=2 pex="" display_root="" profwd d prompt_show=0 piece
+  pmd="$(grep "^prompt_workdir_max_depth=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  pmd="${pmd// /}"
+  [[ "$pmd" =~ ^[0-9]+$ ]] || pmd=2
+  pex="$(grep "^prompt_extra_paths=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)"
+
+  if [[ -n "$path_profile" ]]; then
+    profwd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${profiles_dir}/${path_profile}.conf")"
+    profwd="${profwd/#\~/$HOME}"
+    display_root="$profwd"
+    [[ -z "$display_root" && -n "${best_work_dir:-}" ]] && display_root="$best_work_dir"
+  fi
+
+  if [[ -n "$display_root" ]]; then
+    d="$(_ctx_rel_depth_under "$PWD" "$display_root")"
+    d="${d//$'\n'/}"
+    [[ "$d" -ge 0 && "$d" -le "$pmd" ]] && prompt_show=1
+  fi
+
+  if [[ "$prompt_show" != "1" && -n "$pex" ]]; then
+    while IFS= read -r piece; do
+      [[ -z "$piece" ]] && continue
+      piece="${piece/#\~/$HOME}"
+      piece="${piece%/}"
+      if [[ -n "$piece" && ( "$PWD" == "$piece" || "$PWD" == "$piece/"* ) ]]; then
+        prompt_show=1
+        display_root="$piece"
+        break
+      fi
+    done < <(printf '%s' "$pex" | tr ':' '\n')
+  fi
+
+  if [[ "$prompt_show" == "1" ]]; then
+    export CTX_PROMPT_SHOW=1
+    local pname_show="${path_profile:-}"
+    if [[ -z "$pname_show" ]]; then
+      pname_show="$(grep "^active=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)"
+      pname_show="${pname_show//$'\r'/}"
+    fi
+    export CTX_PROMPT_PROFILE="${pname_show:-}"
+    export CTX_PROMPT_WORK_DIR="${display_root:-}"
+  else
+    export CTX_PROMPT_SHOW=0
+    unset CTX_PROMPT_PROFILE 2>/dev/null || true
+    unset CTX_PROMPT_WORK_DIR 2>/dev/null || true
+  fi
+}
 
 _ctx_profile_autoswitch() {
   command -v ctx &>/dev/null || return 0
@@ -88,6 +148,8 @@ _ctx_profile_autoswitch() {
   else
     target="$path_profile"
   fi
+
+  _ctx_prompt_update_exports
 
   local _as_key="${PWD}|${target:-}"
   if [[ "$_as_key" == "${_CTX_AS_STATE:-}" ]]; then
