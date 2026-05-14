@@ -2,5 +2,6 @@
 *.log
 .DS_Store
 
-# IDE metadata (local-only; never commit project metadata or rely on it in CI)
-.cursor/
+# IDE metadata (local-only). Exception: commit .cursor/settings.json so git identity stays pinned.
+.cursor/**
+!.cursor/settings.json
