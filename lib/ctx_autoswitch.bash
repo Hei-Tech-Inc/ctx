@@ -130,6 +130,13 @@ _ctx_profile_autoswitch() {
     fi
   fi
 
+  if [[ -n "$path_profile" ]]; then
+    local _sync_wd
+    _sync_wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${profiles_dir}/${path_profile}.conf")"
+    _sync_wd="${_sync_wd/#\~/$HOME}"
+    [[ -n "$_sync_wd" ]] && best_work_dir="$_sync_wd"
+  fi
+
   local current src manual_anchor target
   current="$(grep "^active=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)"
   src="$(grep "^active_source=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
@@ -194,6 +201,7 @@ _ctx_profile_autoswitch() {
 if [[ -n "${ZSH_VERSION:-}" ]]; then
   autoload -Uz add-zsh-hook 2>/dev/null || true
   add-zsh-hook chpwd _ctx_profile_autoswitch 2>/dev/null || true
+  add-zsh-hook precmd _ctx_profile_autoswitch 2>/dev/null || true
   _ctx_profile_autoswitch
 elif [[ -n "${BASH_VERSION:-}" ]]; then
   # Idempotent: strip our hook (and legacy token) so reinstall / re-source does not stack.

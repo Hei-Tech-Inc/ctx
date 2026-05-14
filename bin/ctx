@@ -60,6 +60,7 @@ cmd_help() {
       "  list             List all profiles" \
       "  status           Active profile + live checks" \
       "  clone            git clone with GitHub host rewrite for this profile" \
+      "  workdir-prompt   Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)" \
       "" \
       "$(gum style --faint "SECRETS  (Keychain or ~/.ctx/secrets)")" \
       "  secret set   <profile> <KEY>" \
@@ -109,6 +110,7 @@ ${BOLD}DAILY USE${RESET}
   list                  List all profiles
   status                Active profile + live checks
   clone                 git clone with GitHub host rewrite (see README)
+  workdir-prompt        Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)
 
 ${BOLD}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${RESET}
   secret set   <profile> <KEY>
@@ -179,6 +181,7 @@ _ctx() {
     'list:List all profiles'
     'status:Show active profile and live checks'
     'clone:git clone with GitHub host rewrite'
+    'workdir-prompt:Print WORK_DIR line when cwd is in prompt scope'
     'config:Configure ctx defaults'
     'secret:Manage profile secrets'
     'verify:Verify profile wiring'
@@ -255,7 +258,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
+  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -305,7 +308,7 @@ complete -c ctx -f
 
 complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 
@@ -352,6 +355,7 @@ main() {
     list|ls)          cmd_list ;;
     status|st)        cmd_status ;;
     clone)            cmd_clone "$@" ;;
+    workdir-prompt)   cmd_workdir_prompt ;;
     config)           cmd_config "$@" ;;
     secret)           cmd_secret "$@" ;;
     verify)           cmd_verify "${1:-}" ;;

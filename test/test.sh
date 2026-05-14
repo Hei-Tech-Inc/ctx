@@ -202,9 +202,37 @@ test_ctx_resolve_path_profile() {
     got="$(ctx_resolve_path_profile "/nonexistent/nope/zz" "$prof")"
     [[ -z "$got" ]] || exit 1
 
+    line="$(ctx_resolve_path_with_root "$td/clients/hubtel/deep" "$prof")"
+    got="${line%%$'\t'*}"
+    root="${line#*$'\t'}"
+    [[ "$got" == "hubtel" ]] || exit 1
+    [[ "$root" == "$td/clients/hubtel" ]] || exit 1
+
     rm -rf "$td" "${_git_tpl:-}"
   ) || fail "ctx_resolve_path_profile"
-  pass "ctx_resolve_path_profile (prefix, sibling, .ctx, no match)"
+  pass "ctx_resolve_path_profile (prefix, sibling, .ctx, no match, with_root)"
+}
+
+test_cmd_workdir_prompt() {
+  (
+    set -euo pipefail
+    local ROOT td out
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(mktemp -d)"
+    export CTX_DIR="$td"
+    mkdir -p "$td/profiles" "$td/clients/hubtel/deep"
+    printf 'prompt_workdir_max_depth=5\n' >"$td/config"
+    printf 'WORK_DIR=%q\n' "$td/clients" >"$td/profiles/deladetech.conf"
+    printf 'PROFILE_NAME=hubtel\n' >"$td/profiles/hubtel.conf"
+    cd "$td/clients/hubtel/deep"
+    out="$("$ROOT/bin/ctx" workdir-prompt)"
+    [[ "$out" == "work_dir='WORK_DIR=$td/clients/hubtel'" ]] || exit 1
+    cd /
+    out="$("$ROOT/bin/ctx" workdir-prompt)"
+    [[ -z "$out" ]] || exit 1
+    rm -rf "$td"
+  ) || fail "cmd_workdir_prompt"
+  pass "workdir-prompt"
 }
 
 test_generate_mise_toml_matches_fixture() {
@@ -265,6 +293,7 @@ test_ctx_profile_read_work_dir
 test_ctx_cli_version
 test_ctx_rel_path_depth_under
 test_ctx_resolve_path_profile
+test_cmd_workdir_prompt
 test_generate_mise_toml_matches_fixture
 test_ctx_json_list_and_status
 

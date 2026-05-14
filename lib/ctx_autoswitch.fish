@@ -115,6 +115,12 @@ function _ctx_profile_autoswitch --on-variable PWD
     end
   end
 
+  if test -n "$path_profile"
+    set -l _sync_wd (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$path_profile.conf")
+    set _sync_wd (string replace -r '^~' "$HOME" -- "$_sync_wd")
+    test -n "$_sync_wd"; and set best_work_dir "$_sync_wd"
+  end
+
   set -l current (grep "^active=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
   set -l src (grep "^active_source=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string lower)
   set -l manual_anchor ""
@@ -220,4 +226,10 @@ function _ctx_profile_autoswitch --on-variable PWD
     set -e CTX_ACTIVATION_TRIGGER 2>/dev/null
   end
 end
+
+# Refresh after commands that do not change PWD (e.g. aliases to ctx use).
+function _ctx_profile_autoswitch_postexec --on-event fish_postexec
+  _ctx_profile_autoswitch
+end
+
 _ctx_profile_autoswitch

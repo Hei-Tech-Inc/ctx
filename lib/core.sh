@@ -427,8 +427,8 @@ ctx_json_escape() {
 
 # Longest WORK_DIR prefix of pwd under profiles_dir; optional sibling profile by
 # first path segment under that prefix; then nearest .ctx (walk pwd → git root).
-# Prints profile basename (no .conf) or empty. pwd and profile paths are expanded (~ → HOME).
-ctx_resolve_path_profile() {
+# Prints: "<profile_name><TAB><display WORK_DIR>" (WORK_DIR may be empty before sync).
+ctx_resolve_path_with_root() {
   local pwd="${1:?pwd required}" pdir="${2:?profiles dir required}"
   pwd="${pwd/#\~/$HOME}"
   [[ -d "$pdir" ]] || return 1
@@ -448,8 +448,6 @@ ctx_resolve_path_profile() {
     fi
   done
   local path_profile="$best_pname" best_work_dir="$best_wd"
-  # Broad WORK_DIR (e.g. …/clients) + sibling dir …/clients/hubtel → prefer hubtel.conf when
-  # that profile exists and PWD is under …/clients/hubtel (even if hubtel WORK_DIR was unset).
   if [[ -n "$best_pname" && -n "$best_work_dir" && "$pwd" == "${best_work_dir}/"* ]]; then
     local rel="${pwd#"${best_work_dir}"/}"
     local first="${rel%%/*}"
@@ -468,8 +466,6 @@ ctx_resolve_path_profile() {
     fi
   fi
   if [[ -n "$path_profile" && -d "$pwd" ]]; then
-    # Nearest .ctx wins (walk $pwd → repo root). Root-only .ctx was wrong for nested
-    # client dirs inside one git worktree (every subfolder inherited the root profile).
     local repo_root d parent ov
     repo_root="$(git -C "$pwd" rev-parse --show-toplevel 2>/dev/null || echo "")"
     repo_root="${repo_root%/}"
@@ -494,7 +490,22 @@ ctx_resolve_path_profile() {
       done
     fi
   fi
-  printf '%s' "${path_profile:-}"
+  local display_wd=""
+  if [[ -n "$path_profile" ]]; then
+    display_wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${path_profile}.conf")"
+    display_wd="${display_wd/#\~/$HOME}"
+    [[ -n "$display_wd" ]] && best_work_dir="$display_wd"
+    [[ -z "$display_wd" && -n "$best_work_dir" ]] && display_wd="$best_work_dir"
+  fi
+  printf '%s\t%s' "${path_profile:-}" "${display_wd:-}"
+}
+
+# Prints profile basename (no .conf) or empty. pwd and profile paths are expanded (~ → HOME).
+ctx_resolve_path_profile() {
+  local line name
+  line="$(ctx_resolve_path_with_root "$1" "$2")" || return 1
+  name="${line%%$'\t'*}"
+  printf '%s' "$name"
 }
 
 # Path segments under work_dir (0 = exact match). Prints -1 if pwd is not under work_dir.

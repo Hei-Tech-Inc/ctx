@@ -283,6 +283,8 @@ fi
 
 Tune depth: **`ctx config prompt-workdir-depth 2`** (use `0` for exact `WORK_DIR` only). Add more roots: **`ctx config prompt-extra-paths '/other/abs:/another'`** or **`ctx config prompt-extra-paths clear`**.
 
+You can also run **`ctx workdir-prompt`** (prints the same `work_dir='WORK_DIR=…'` line when in scope, or nothing) and embed it in **`PS1`** / **`PROMPT`** if you prefer a subprocess over env vars.
+
 Example Starship snippet (profile name only):
 
 ```toml

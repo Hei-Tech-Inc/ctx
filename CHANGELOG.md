@@ -5,9 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`ctx workdir-prompt`:** prints `work_dir='WORK_DIR=<root>'` when the current directory is in the same prompt scope as **`CTX_PROMPT_*`** (depth + **`prompt_extra_paths`**); otherwise prints nothing — useful for **`PS1`** without grepping profile files.
+- **zsh `precmd`** registration for the auto-switch hook (in addition to **`chpwd`**) so **`CTX_PROMPT_*`** refresh after commands that do not change **`$PWD`** (e.g. aliases that only run **`ctx use`**).
+- **fish `fish_postexec`** hook calling the same auto-switch function for the same reason.
+- **`ctx_resolve_path_with_root`** in **`lib/core.sh`**: tab-separated **`profile<TAB>resolved WORK_DIR`** after **`.ctx`** override; **`ctx_resolve_path_profile`** reads the first field only. Shell hooks re-sync **`best_work_dir`** from the final profile’s **`WORK_DIR`** after **`.ctx`** so **`CTX_PROMPT_WORK_DIR`** matches the active tree profile.
 - **Prompt scope env vars** from the auto-switch hook: **`CTX_PROMPT_SHOW`** (0 or 1), **`CTX_PROMPT_PROFILE`**, **`CTX_PROMPT_WORK_DIR`** — only under a profile’s `WORK_DIR` within **`prompt_workdir_max_depth`** (default **2** path segments), or under optional **`prompt_extra_paths`** (colon-separated). Configure with **`ctx config prompt-workdir-depth`** / **`prompt-extra-paths`**. Use in zsh/bash/fish instead of grepping profile files for every `cd` (e.g. aliases to non-ctx folders).
 - **`ctx --json` / `ctx list --json` / `ctx status --json`:** machine-readable output with a **`version`** field and stable keys for scripting and CI; completions advertise `--json` where relevant.
-- **`ctx_resolve_path_profile`** in `lib/core.sh` (longest `WORK_DIR` prefix + repo **`.ctx`** `profile=` override), covered by unit tests.
 - **Golden fixture** for minimal **`generate_mise_toml`** output under `test/fixtures/mise_generated_minimal.toml`.
 - **Bash auto-switch hook:** idempotent **`PROMPT_COMMAND`** wiring — strips duplicate **`_ctx_profile_autoswitch`** and legacy **`_ctx_auto_switch`** tokens before prepending once.
 - **Setup reference in the CLI:** `ctx setup --help`, `ctx import --help`, and `ctx help setup` show the same reference (flags, `--config` keys, dry-run, example file URL). Completions advertise `help setup` and setup `-h` / `--help`.

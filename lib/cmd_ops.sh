@@ -1231,6 +1231,48 @@ cmd_doctor() {
   echo ""
 }
 
+# Same prompt line as CTX_PROMPT_* rules (depth + prompt_extra_paths); stdout only when in scope.
+cmd_workdir_prompt() {
+  ctx_init_dirs
+  local line name root pmd pex d prompt_show=0 piece display_root=""
+  [[ -d "$CTX_PROFILES_DIR" ]] || return 0
+  line="$(ctx_resolve_path_with_root "${PWD:-$HOME}" "$CTX_PROFILES_DIR")" || return 0
+  name="${line%%$'\t'*}"
+  root="${line#*$'\t'}"
+  root="${root//$'\r'/}"
+  root="${root//$'\n'/}"
+
+  pmd="$(ctx_config_prompt_workdir_max_depth)"
+  pex=""
+  [[ -f "$CTX_CONFIG" ]] && pex="$(grep "^prompt_extra_paths=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+
+  display_root=""
+  [[ -n "$root" ]] && display_root="$root"
+
+  if [[ -n "$display_root" ]]; then
+    d="$(ctx_rel_path_depth_under "${PWD:-$HOME}" "$display_root")"
+    d="${d//$'\n'/}"
+    [[ "$d" -ge 0 && "$d" -le "$pmd" ]] && prompt_show=1
+  fi
+
+  if [[ "$prompt_show" != "1" && -n "$pex" ]]; then
+    while IFS= read -r piece; do
+      [[ -z "$piece" ]] && continue
+      piece="${piece/#\~/$HOME}"
+      piece="${piece%/}"
+      if [[ -n "$piece" && ( "${PWD:-$HOME}" == "$piece" || "${PWD:-$HOME}" == "$piece/"* ) ]]; then
+        prompt_show=1
+        display_root="$piece"
+        break
+      fi
+    done < <(printf '%s' "$pex" | tr ':' '\n')
+  fi
+
+  if [[ "$prompt_show" == "1" && -n "$display_root" ]]; then
+    printf "work_dir='WORK_DIR=%s'\n" "$display_root"
+  fi
+}
+
 # ─── init ─────────────────────────────────────────────────────────────────────
 cmd_init() {
   ctx_init_dirs
