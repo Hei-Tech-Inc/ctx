@@ -256,6 +256,62 @@ test_generate_mise_toml_matches_fixture() {
   pass "generate_mise_toml matches fixture"
 }
 
+test_autoswitch_notify_default_off() {
+  (
+    set -euo pipefail
+    local ROOT td
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(mktemp -d)"
+    export CTX_DIR="$td"
+    mkdir -p "$td"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT/lib/core.sh"
+    unset CTX_AUTOSWITCH_NOTIFY
+    [[ "$(ctx_config_autoswitch_notify)" == "0" ]] || exit 1
+    echo "autoswitch_notify=on" >"$td/config"
+    [[ "$(ctx_config_autoswitch_notify)" == "1" ]] || exit 1
+    echo "autoswitch_notify=off" >"$td/config"
+    [[ "$(ctx_config_autoswitch_notify)" == "0" ]] || exit 1
+    CTX_AUTOSWITCH_NOTIFY=1
+    export CTX_AUTOSWITCH_NOTIFY
+    [[ "$(ctx_config_autoswitch_notify)" == "1" ]] || exit 1
+    rm -rf "$td"
+  ) || fail "autoswitch_notify default/config/env"
+  pass "autoswitch_notify default off"
+}
+
+test_setup_scope_clone_batch() {
+  (
+    set -euo pipefail
+    local ROOT td home cfg
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(mktemp -d)"
+    home="$td/home"
+    mkdir -p "$home/.ssh"
+    chmod 700 "$home/.ssh"
+    ssh-keygen -t ed25519 -f "$home/.ssh/id_testclone" -N "" -q
+    export HOME="$home"
+    export CTX_DIR="$home/.ctx"
+    cfg="$td/clone.conf"
+    cat >"$cfg" <<EOF
+SETUP_SCOPE=clone
+PROFILE_NAME=cloneonly
+SSH_MODE=existing
+SSH_KEY_PATH=$home/.ssh/id_testclone
+AUTO_CONFIRM=true
+EOF
+    "$ROOT/bin/ctx" setup --config "$cfg" --yes >/dev/null
+    [[ -f "$CTX_DIR/profiles/cloneonly.conf" ]] || exit 1
+    grep -q '^Host github-cloneonly$' "$home/.ssh/ctx_config" || exit 1
+    # shellcheck source=../lib/core.sh
+    source "$ROOT/lib/core.sh"
+    out="$(github_clone_url_for_profile cloneonly 'git@github.com:Org/repo.git' n)"
+    [[ "$out" == 'git@github-cloneonly:Org/repo.git' ]] || exit 1
+    rm -rf "$td"
+  ) || fail "setup SETUP_SCOPE=clone batch"
+  pass "setup scope clone (batch)"
+}
+
 test_ctx_json_list_and_status() {
   (
     set -euo pipefail
@@ -295,6 +351,8 @@ test_ctx_rel_path_depth_under
 test_ctx_resolve_path_profile
 test_cmd_workdir_prompt
 test_generate_mise_toml_matches_fixture
+test_autoswitch_notify_default_off
+test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 
 echo "All tests passed."

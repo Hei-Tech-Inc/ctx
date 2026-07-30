@@ -549,6 +549,28 @@ ctx_config_prompt_extra_paths_or_default() {
   [[ -n "$v" ]] && printf '%s' "$v" || printf '%s' "(none)"
 }
 
+# Print 1 if autoswitch should echo [ctx] ←/→ lines; else 0.
+# Default off (privacy: screen share / new tabs). Override: CTX_AUTOSWITCH_NOTIFY=1|0
+# or ~/.ctx/config autoswitch_notify=on|off|1|0|true|false.
+ctx_config_autoswitch_notify() {
+  local v=""
+  if [[ -n "${CTX_AUTOSWITCH_NOTIFY:-}" ]]; then
+    v="$(echo "$CTX_AUTOSWITCH_NOTIFY" | tr '[:upper:]' '[:lower:]')"
+  else
+    ctx_init_dirs
+    if [[ -f "$CTX_CONFIG" ]]; then
+      v="$(grep "^autoswitch_notify=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+    fi
+    v="$(echo "${v:-}" | tr '[:upper:]' '[:lower:]')"
+  fi
+  v="${v//$'\r'/}"
+  v="${v// /}"
+  case "$v" in
+    1|true|yes|on) printf '%s' 1 ;;
+    *) printf '%s' 0 ;;
+  esac
+}
+
 ctx_activation_get_source() {
   local v
   v="$(grep "^active_source=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"

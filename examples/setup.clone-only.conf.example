@@ -1,0 +1,17 @@
+# Minimal profile for ctx clone URL rewrite (github-<profile> SSH host).
+#   ctx setup --config /path/to/this-file --yes
+# Add git identity, work dir, cloud, secrets later:
+#   ctx setup --extend <PROFILE_NAME>
+
+SETUP_SCOPE=clone
+PROFILE_NAME=side-client
+
+SSH_MODE=existing
+SSH_KEY_PATH=~/.ssh/id_ed25519
+# Or: SSH_MODE=generate  (creates ~/.ssh/ctx_<PROFILE_NAME>)
+
+# Optional:
+# GITHUB_USER=my-github-handle
+# WORK_DIR=/Users/you/projects/side-client
+
+AUTO_CONFIRM=true

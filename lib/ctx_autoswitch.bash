@@ -164,22 +164,34 @@ _ctx_profile_autoswitch() {
   fi
   _CTX_AS_STATE="$_as_key"
 
+  # Default off: avoid leaking client profile names on new tabs / screen share.
+  # Enable: ctx config autoswitch-notify on  (or CTX_AUTOSWITCH_NOTIFY=1)
+  local _ctx_notify=0 _nv
+  if [[ -n "${CTX_AUTOSWITCH_NOTIFY:-}" ]]; then
+    _nv="$(echo "$CTX_AUTOSWITCH_NOTIFY" | tr '[:upper:]' '[:lower:]')"
+    case "$_nv" in 1|true|yes|on) _ctx_notify=1 ;; esac
+  else
+    _nv="$(grep "^autoswitch_notify=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)"
+    _nv="$(echo "${_nv:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "$_nv" in 1|true|yes|on) _ctx_notify=1 ;; esac
+  fi
+
   local dim="\033[2m" rst="\033[0m" _ctx_applied=0
   if [[ -n "$target" ]]; then
     if [[ -n "$current" && "$current" != "$target" ]]; then
-      echo -e "${dim}[ctx] ← ${current} → ${target}${rst}" >&2
+      [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ← ${current} → ${target}${rst}" >&2
       eval "$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)" || true
       if CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null; then
         _ctx_applied=1
       else
-        echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
+        [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
       fi
     elif [[ -z "$current" ]]; then
-      echo -e "${dim}[ctx] → ${target}${rst}" >&2
+      [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] → ${target}${rst}" >&2
       if CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null; then
         _ctx_applied=1
       else
-        echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
+        [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
       fi
     else
       _ctx_applied=1
@@ -190,7 +202,7 @@ _ctx_profile_autoswitch() {
     fi
   else
     if [[ -n "$current" ]]; then
-      echo -e "${dim}[ctx] ← ${current}${rst}" >&2
+      [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ← ${current}${rst}" >&2
       eval "$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)" || true
     fi
     unset CTX_ACTIVE_PROFILE 2>/dev/null || true

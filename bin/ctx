@@ -71,6 +71,7 @@ cmd_help() {
       "$(gum style --faint "MAINTENANCE")" \
       "  config [show]    Show ctx config values" \
       "  config work-root Set default client directory root" \
+      "  config autoswitch-notify  on|off — [ctx] ←/→ lines (default off)" \
       "  config export    Export portable config bundle (no secrets)" \
       "  config import    Import portable config bundle" \
       "  verify [name]    One profile: live ssh -T, gh match, paths, email" \
@@ -91,7 +92,9 @@ cmd_help() {
       "  --json           Machine-readable JSON (list, status)" \
       "" \
       "$(gum style --faint "SETUP FLAGS")" \
-      "  --config FILE    Non-interactive wizard (see examples/setup.noninteractive.conf.example)" \
+      "  --scope clone|full   Clone-only profile or full wizard" \
+      "  --extend NAME        Add git/folder/cloud/secrets to existing profile" \
+      "  --config FILE    Non-interactive wizard (see examples/)" \
       "  -y / --yes       With --config: skip final confirmation prompt" \
       "  setup --help     Same as: ctx help setup"
   else
@@ -122,6 +125,7 @@ ${BOLD}MAINTENANCE${RESET}
   help setup            Full setup wizard + --config reference
   config [show]         Show ctx config values
   config work-root <p>  Set default client directory root
+  config autoswitch-notify <on|off>  [ctx] ←/→ messages (default off)
   config export <dir>   Export config for laptop migration (no secrets)
   config import <dir>   Import config bundle on a new machine
   verify [name]         One profile: live ssh -T, gh match, paths, email
@@ -140,6 +144,8 @@ ${BOLD}FLAGS${RESET}
   --quiet               Suppress output (auto-switch hook uses this)
   --no-gum              Force plain text prompts
   --json                Machine-readable JSON for supported commands (list, status)
+  setup --scope clone   Profile + SSH host for ctx clone only
+  setup --extend NAME   Add git/folder/cloud/secrets to a profile
   setup --config FILE   Non-interactive wizard (KEY=value file)
   setup -y              With --config: confirm without prompting
   setup --help          Same as: ctx help setup
@@ -220,7 +226,7 @@ _ctx() {
         setup|import|add) _describe 'setup options' setup_flags ;;
         help) _describe 'help topics' help_topics ;;
         secret) local sub=('set' 'get' 'list' 'delete' 'migrate'); _describe 'subcommands' sub ;;
-        config) local sub=('show' 'work-root' 'secret-provider' 'prompt-workdir-depth' 'prompt-extra-paths' 'export' 'import'); _describe 'subcommands' sub ;;
+        config) local sub=('show' 'work-root' 'secret-provider' 'prompt-workdir-depth' 'prompt-extra-paths' 'autoswitch-notify' 'export' 'import'); _describe 'subcommands' sub ;;
         upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
         uninstall) local sub=('--purge'); _describe 'uninstall flags' sub ;;
         completion) local sh=('zsh' 'bash' 'fish'); _describe 'shells' sh ;;
@@ -283,7 +289,7 @@ _ctx_comp() {
     use|edit|remove|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     secret) COMPREPLY=($(compgen -W "set get list delete migrate" -- "$cur")) ;;
-    config) COMPREPLY=($(compgen -W "show work-root secret-provider prompt-workdir-depth prompt-extra-paths export import" -- "$cur")) ;;
+    config) COMPREPLY=($(compgen -W "show work-root secret-provider prompt-workdir-depth prompt-extra-paths autoswitch-notify export import" -- "$cur")) ;;
     upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     uninstall) COMPREPLY=($(compgen -W "--purge" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
@@ -322,7 +328,7 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx secret set' -a '(__fish_ctx_
 complete -c ctx -n '__fish_seen_subcommand_from ctx secret get' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx secret delete' -a '(__fish_ctx_profiles)'
 
-complete -c ctx -n '__fish_seen_subcommand_from ctx config' -a 'show work-root secret-provider prompt-workdir-depth prompt-extra-paths export import'
+complete -c ctx -n '__fish_seen_subcommand_from ctx config' -a 'show work-root secret-provider prompt-workdir-depth prompt-extra-paths autoswitch-notify export import'
 complete -c ctx -n '__fish_seen_subcommand_from ctx upgrade' -a '--check'
 complete -c ctx -n '__fish_seen_subcommand_from ctx uninstall' -a '--purge'
 complete -c ctx -n '__fish_seen_subcommand_from ctx completion' -a 'zsh bash fish'

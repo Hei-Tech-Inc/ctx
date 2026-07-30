@@ -28,12 +28,29 @@
 
 **Symptoms:** No `[ctx] →` lines; profile stuck.
 
+**Note:** Transition messages are **off by default**. Silent switching is normal unless you ran **`ctx config autoswitch-notify on`**. Check activation with **`ctx status`** / **`echo $CTX_ACTIVE_PROFILE`**.
+
 **Checks:**
 
 1. `echo "$PROMPT_COMMAND"` contains **`_ctx_profile_autoswitch`** (bash runs the hook each prompt).
 2. `type ctx` resolves to the installed binary on `PATH`.
 
 **Fix:** Re-run **`ctx install-hook`** (or reinstall hook block from `install.sh`). Remove duplicate legacy **`_ctx_auto_switch`** blocks if both exist.
+
+---
+
+## Want `[ctx] ←/→` messages back
+
+**Cause:** Notifications default to off so new tabs and screen shares do not show client profile names.
+
+**Fix:**
+
+```bash
+ctx config autoswitch-notify on
+# reload shell / open a new tab after ctx install-hook if the hook is still the old copy
+```
+
+Session-only: `export CTX_AUTOSWITCH_NOTIFY=1`
 
 ---
 

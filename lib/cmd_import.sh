@@ -8,8 +8,246 @@ _dsetup_die() {
   exit 1
 }
 
+_ctx_setup_scope_clone() {
+  [[ "${CTX_SETUP_SCOPE:-full}" == "clone" ]]
+}
+
+_ctx_setup_secret_keys_to_array() {
+  local _sk="${SECRET_KEYS:-}"
+  SECRET_KEYS=()
+  [[ -n "$_sk" ]] && read -ra SECRET_KEYS <<< "$_sk"
+}
+
+# ssh-keygen -C comment when git email is not configured yet
+_ctx_setup_ssh_key_comment() {
+  local profile="$1"
+  if [[ -n "${GIT_EMAIL:-}" ]] && is_sensible_git_email "$GIT_EMAIL"; then
+    printf '%s' "$GIT_EMAIL"
+  else
+    printf 'ctx-%s@local' "$profile"
+  fi
+}
+
+# Clone-only wizard: profile + SSH host alias (required) + optional folder/GitHub user
+_ctx_setup_interactive_clone() {
+  local SETUP_STEPS=3 work_root key_mode loc
+
+  ctx_setup_step 1 "$SETUP_STEPS" "Profile name" "Used for ctx clone -p and the github-<name> SSH host."
+  PROFILE_NAME=$(ask "Profile name (short slug)" "" "e.g. acme, side-project")
+  [[ -z "$PROFILE_NAME" ]] && die "Profile name required."
+  PROFILE_NAME=$(echo "$PROFILE_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
+  if profile_exists "$PROFILE_NAME"; then
+    ask_yn "Profile '$PROFILE_NAME' already exists. Overwrite?" "n" || die "Aborted."
+  fi
+  GIT_NAME=""
+  GIT_EMAIL=""
+  echo ""
+
+  ctx_setup_step 2 "$SETUP_STEPS" "SSH key" "Required so git@github-<profile>:… uses the right key."
+  key_mode=$(pick_one \
+    "SSH key for github-${PROFILE_NAME}?" \
+    "Use an existing private key" \
+    "Generate a new key for this profile")
+  SSH_KEY_GENERATED=0
+  case "$key_mode" in
+    "Use an existing private key")
+      SSH_KEY_PATH=$(ask "Path to private SSH key" "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519")
+      SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
+      [[ -n "$SSH_KEY_PATH" && ! -f "$SSH_KEY_PATH" ]] && _dsetup_die "SSH key not found: $SSH_KEY_PATH"
+      [[ -n "$SSH_KEY_PATH" ]] && success "Using key: $(basename "$SSH_KEY_PATH")"
+      ;;
+    *)
+      SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
+      _gen_ssh_key "$SSH_KEY_PATH" "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")"
+      SSH_KEY_GENERATED=1
+      ;;
+  esac
+  echo ""
+
+  ctx_setup_step 3 "$SETUP_STEPS" "Optional extras" "Skip folder linking if you only need ctx clone."
+  GITHUB_USER=$(ask "GitHub username (blank to skip)")
+  loc=$(pick_one \
+    "Link a client folder for autoswitch later?" \
+    "Skip for now — clone helper only" \
+    "Use current directory: $PWD" \
+    "Create folder under $(ctx_work_root)")
+  WORK_DIR=""
+  case "$loc" in
+    "Use current directory: $PWD")
+      WORK_DIR="$PWD"
+      success "Work directory: $WORK_DIR"
+      ;;
+    "Create folder under "*)
+      work_root="$(ctx_work_root)"
+      local slug
+      slug=$(ask "Folder name under $work_root" "$PROFILE_NAME" "$PROFILE_NAME")
+      slug="${slug//\//-}"
+      WORK_DIR="${work_root}/${slug}"
+      success "Work directory: $WORK_DIR"
+      ;;
+    *)
+      dim "  No WORK_DIR — use: ctx clone -p $PROFILE_NAME <url>"
+      ;;
+  esac
+
+  if [[ -n "$GITHUB_USER" && "$SSH_KEY_GENERATED" == "1" && -f "${SSH_KEY_PATH}.pub" ]] \
+    && has gh && ask_yn "Upload this SSH key to GitHub ($GITHUB_USER) now?" "n"; then
+    gh auth switch -u "$GITHUB_USER" 2>/dev/null || true
+    local key_title
+    key_title="ctx-${PROFILE_NAME}-$(hostname)-$(date +%Y%m%d)"
+    if gh ssh-key add "${SSH_KEY_PATH}.pub" --title "$key_title" 2>/dev/null; then
+      success "SSH key uploaded to GitHub ($GITHUB_USER)"
+    else
+      warn "Could not upload key automatically. Add it at https://github.com/settings/keys"
+    fi
+  fi
+
+  AWS_PROFILE_NAME="" AZURE_SUBSCRIPTION="" AZURE_TENANT=""
+  GCP_PROJECT="" GCP_ACCOUNT="" KUBE_CONTEXT=""
+  SECRET_KEYS=() EXTRA_ENVS=""
+  import_existing=false
+  echo ""
+}
+
+# Add git / folder / cloud / secrets to an existing profile
+_ctx_setup_interactive_extend() {
+  local profile="$1" work_root selected_loc existing_path secret_mode where
+
+  profile_exists "$profile" || die "setup --extend: profile '$profile' not found"
+  load_profile "$profile"
+  PROFILE_NAME="$profile"
+  _ctx_setup_secret_keys_to_array
+  EXTRA_ENVS="${EXTRA_ENVS:-}"
+  SSH_KEY_GENERATED=0
+  import_existing=false
+
+  bold "Extend profile: ${PROFILE_NAME}"
+  dim "  SSH: ${SSH_KEY_PATH:-—}   WORK_DIR: ${WORK_DIR:-—}   Git: ${GIT_NAME:-—} <${GIT_EMAIL:-—}>"
+  echo ""
+
+  if [[ -z "${GIT_NAME:-}" && -z "${GIT_EMAIL:-}" ]] \
+    || ask_yn "Set or update git commit identity for this profile?" "y"; then
+    local current_name current_email
+    current_name=$(git config --global user.name  2>/dev/null || echo "")
+    current_email=$(git config --global user.email 2>/dev/null || echo "")
+    GIT_NAME=$(ask "Git commit author name" "${GIT_NAME:-$current_name}" "Jane Doe")
+    while :; do
+      GIT_EMAIL=$(ask "Git commit email" "${GIT_EMAIL:-$current_email}" "you@company.com")
+      GIT_EMAIL="$(printf '%s' "$GIT_EMAIL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      [[ -z "$GIT_EMAIL" ]] && break
+      is_sensible_git_email "$GIT_EMAIL" && break
+      warn "Expected user@domain.tld — try again or leave blank."
+    done
+  fi
+
+  if [[ -z "${WORK_DIR:-}" ]] && ask_yn "Set a work directory (autoswitch + git includeIf + mise)?" "y"; then
+    work_root="$(ctx_work_root)"
+    selected_loc=$(pick_one \
+      "Where is this client/project?" \
+      "Use current directory: $PWD" \
+      "Use an existing path" \
+      "New folder under $work_root")
+    case "$selected_loc" in
+      "Use current directory: $PWD") WORK_DIR="$PWD" ;;
+      "Use an existing path")
+        existing_path=$(ask "Existing project path" "$PWD")
+        existing_path="${existing_path/#\~/$HOME}"
+        [[ -d "$existing_path" ]] || mkdir -p "$existing_path" || _dsetup_die "Could not create: $existing_path"
+        WORK_DIR="$existing_path"
+        ;;
+      *)
+        local slug
+        slug=$(ask "Folder name under $work_root" "$PROFILE_NAME")
+        WORK_DIR="${work_root}/${slug}"
+        ;;
+    esac
+    success "Work directory: $WORK_DIR"
+  fi
+
+  if [[ -z "${SSH_KEY_PATH:-}" || ! -f "${SSH_KEY_PATH:-/dev/null}" ]] \
+    && ask_yn "Configure SSH key and github-${PROFILE_NAME} host alias?" "y"; then
+    local key_mode
+    key_mode=$(pick_one \
+      "SSH key setup" \
+      "Use an existing private key" \
+      "Generate a new key")
+    case "$key_mode" in
+      "Use an existing private key")
+        SSH_KEY_PATH=$(ask "Path to private key" "$HOME/.ssh/id_ed25519")
+        SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
+        [[ -f "$SSH_KEY_PATH" ]] || _dsetup_die "SSH key not found: $SSH_KEY_PATH"
+        ;;
+      *)
+        SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
+        _gen_ssh_key "$SSH_KEY_PATH" "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")"
+        SSH_KEY_GENERATED=1
+        ;;
+    esac
+  fi
+
+  if [[ -z "${GITHUB_USER:-}" ]] && has gh; then
+    GITHUB_USER=$(ask "GitHub username (blank to skip)" "")
+  fi
+
+  if [[ -z "${AWS_PROFILE_NAME:-}${AZURE_SUBSCRIPTION:-}${GCP_PROJECT:-}${KUBE_CONTEXT:-}" ]] \
+    && ask_yn "Add cloud / kubectl defaults (AWS, Azure, GCP, kube)?" "n"; then
+    AWS_PROFILE_NAME=$(ask "AWS profile name (blank to skip)" "${AWS_PROFILE_NAME:-}")
+    AZURE_SUBSCRIPTION=$(ask "Azure subscription ID (blank to skip)" "${AZURE_SUBSCRIPTION:-}")
+    [[ -n "$AZURE_SUBSCRIPTION" ]] && AZURE_TENANT=$(ask "Azure tenant ID (blank to skip)" "${AZURE_TENANT:-}")
+    GCP_PROJECT=$(ask "GCP project ID (blank to skip)" "${GCP_PROJECT:-}")
+    [[ -n "$GCP_PROJECT" ]] && GCP_ACCOUNT=$(ask "GCP account email (blank to skip)" "${GCP_ACCOUNT:-}")
+    KUBE_CONTEXT=$(ask "kubectl context (blank to skip)" "${KUBE_CONTEXT:-}")
+  fi
+
+  if ask_yn "Add or update secrets for this profile?" "n"; then
+    secret_mode="Add selected secrets now (manual, one by one)"
+  else
+    secret_mode="Skip for now"
+  fi
+  if [[ "$secret_mode" == "Add selected secrets now (manual, one by one)" ]]; then
+    _maybe_secret_extend() {
+      local key="$1" prompt="$2"
+      where="$(ctx_secret_store_label)"
+      is_valid_env_key "$key" || return 1
+      if ask_yn "$prompt?" "n"; then
+        local val
+        val=$(ask_secret "Value for $key")
+        if [[ -n "$val" ]]; then
+          keychain_set "$PROFILE_NAME" "$key" "$val" && success "$key → $where"
+          SECRET_KEYS+=("$key")
+        fi
+      fi
+    }
+    _maybe_secret_extend "GH_TOKEN" "Store a GitHub personal access token"
+    while ask_yn "Add another secret key?" "n"; do
+      local ckey cval
+      ckey=$(ask "Key name (e.g. NPM_TOKEN)")
+      [[ -z "$ckey" ]] && break
+      is_valid_env_key "$ckey" || { warn "Invalid key '$ckey'"; continue; }
+      cval=$(ask_secret "Value for $ckey")
+      if [[ -n "$cval" ]]; then
+        keychain_set "$PROFILE_NAME" "$ckey" "$cval"
+        SECRET_KEYS+=("$ckey")
+      fi
+    done
+  fi
+
+  if [[ -n "${WORK_DIR:-}" ]] && ask_yn "Add non-secret env vars to mise.toml?" "n"; then
+    while :; do
+      local env_key env_val
+      env_key=$(ask "Env key (blank to stop)")
+      [[ -z "$env_key" ]] && break
+      is_valid_env_key "$env_key" || { warn "Invalid key '$env_key'"; continue; }
+      env_val=$(ask "Value for $env_key")
+      EXTRA_ENVS+="${env_key}=${env_val}"$'\n'
+    done
+  fi
+  echo ""
+}
+
 cmd_import() {
   local CTX_SETUP_CONFIG_PATH="" CTX_SETUP_BATCH=false CTX_SETUP_AUTO_YES=0
+  local CTX_SETUP_SCOPE="full" CTX_SETUP_EXTEND="" CTX_SETUP_SKIP_FULL=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h|--help)
@@ -22,22 +260,46 @@ cmd_import() {
         CTX_SETUP_BATCH=true
         shift 2
         ;;
+      --scope)
+        [[ -n "${2-}" ]] || die "setup: --scope requires clone or full"
+        case "$2" in
+          clone|full) CTX_SETUP_SCOPE="$2" ;;
+          *) die "setup: --scope must be clone or full" ;;
+        esac
+        shift 2
+        ;;
+      --extend)
+        [[ -n "${2-}" ]] || die "setup: --extend requires a profile name"
+        CTX_SETUP_EXTEND="$2"
+        shift 2
+        ;;
       -y|--yes)
         CTX_SETUP_AUTO_YES=1
         shift
         ;;
       *)
-        die "setup: unknown option '$1' — usage: ctx setup [--config FILE] [-y|--yes]"
+        die "setup: unknown option '$1' — usage: ctx setup [--scope clone|full] [--extend NAME] [--config FILE] [-y|--yes]"
         ;;
     esac
   done
+
+  [[ -z "$CTX_SETUP_EXTEND" || ! $CTX_SETUP_BATCH ]] \
+    || die "setup: --extend cannot be used with --config (use ctx edit or a full --config run)"
+
+  _ctx_setup_scope_clone && [[ -n "$CTX_SETUP_EXTEND" ]] \
+    && die "setup: --extend cannot be combined with --scope clone"
 
   ctx_init_dirs
   ctx_header "Add a client profile"
 
   if $CTX_SETUP_BATCH; then
     [[ -f "$CTX_SETUP_CONFIG_PATH" ]] || die "setup --config: not a file: $CTX_SETUP_CONFIG_PATH"
-    info "Non-interactive setup from: $CTX_SETUP_CONFIG_PATH"
+    local _batch_scope
+    _batch_scope="$(ctx_setup_cfg_get "$CTX_SETUP_CONFIG_PATH" SETUP_SCOPE "full")"
+    [[ "$_batch_scope" == "clone" || "$_batch_scope" == "full" ]] \
+      || die "setup --config: SETUP_SCOPE must be clone or full"
+    CTX_SETUP_SCOPE="$_batch_scope"
+    info "Non-interactive setup from: $CTX_SETUP_CONFIG_PATH (scope: $CTX_SETUP_SCOPE)"
     local ac_file
     ac_file="$(ctx_setup_cfg_truthy "$(ctx_setup_cfg_get "$CTX_SETUP_CONFIG_PATH" AUTO_CONFIRM false)")"
     if [[ "$CTX_SETUP_AUTO_YES" != "1" ]] \
@@ -48,7 +310,8 @@ cmd_import() {
   else
     hr
     bold "  Welcome"
-    dim "  Eight quick steps: identity → folder → import mode → SSH/GitHub → cloud → secrets → env → review."
+    dim "  Full setup: identity → folder → SSH/GitHub → cloud → secrets → review."
+    dim "  Clone-only: ${BOLD}ctx setup --scope clone${RESET}${DIM} — profile + SSH host for ${BOLD}ctx clone${RESET}${DIM}; add git/cloud later with ${BOLD}ctx setup --extend <name>${RESET}${DIM}."
     dim "  Stuck mid-flow? Run ${BOLD}ctx doctor${RESET}${DIM} (tools + shell hooks + SSH).${RESET}"
     dim "  Scanning runs once so we can suggest keys and accounts."
     echo ""
@@ -107,16 +370,24 @@ cmd_import() {
         || die "setup --config: profile '$PROFILE_NAME' exists — set OVERWRITE=true to replace"
     fi
     GIT_NAME=$(ctx_setup_cfg_get "$f" GIT_NAME "")
-    [[ -n "$GIT_NAME" ]] || die "setup --config: GIT_NAME is required"
     GIT_EMAIL=$(ctx_setup_cfg_get "$f" GIT_EMAIL "")
     GIT_EMAIL="$(printf '%s' "$GIT_EMAIL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    [[ -z "$GIT_EMAIL" ]] || is_sensible_git_email "$GIT_EMAIL" \
-      || die "setup --config: GIT_EMAIL must look like user@domain.tld"
+    if _ctx_setup_scope_clone; then
+      :
+    else
+      [[ -n "$GIT_NAME" ]] || die "setup --config: GIT_NAME is required (or SETUP_SCOPE=clone)"
+      [[ -z "$GIT_EMAIL" ]] || is_sensible_git_email "$GIT_EMAIL" \
+        || die "setup --config: GIT_EMAIL must look like user@domain.tld"
+    fi
 
     WORK_DIR=$(ctx_setup_cfg_get "$f" WORK_DIR "")
     WORK_DIR="${WORK_DIR/#\~/$HOME}"
     if [[ -z "$WORK_DIR" ]]; then
-      wm=$(ctx_setup_cfg_get "$f" WORK_MODE "new")
+      wm=$(ctx_setup_cfg_get "$f" WORK_MODE "")
+      if _ctx_setup_scope_clone && [[ -z "$wm" ]]; then
+        WORK_DIR=""
+      else
+      wm="${wm:-new}"
       case "$wm" in
         current|pwd) WORK_DIR=$PWD ;;
         path|existing)
@@ -134,10 +405,14 @@ cmd_import() {
           ;;
         *) die "setup --config: set WORK_DIR=... or WORK_MODE=current|path|new" ;;
       esac
+      fi
     fi
-    [[ -n "$WORK_DIR" ]] || die "setup --config: could not resolve WORK_DIR"
-    if [[ "${CTX_DRY_RUN:-0}" != "1" ]]; then
-      mkdir -p "$WORK_DIR" || _dsetup_die "Could not create WORK_DIR: $WORK_DIR"
+    if [[ -n "$WORK_DIR" ]]; then
+      if [[ "${CTX_DRY_RUN:-0}" != "1" ]]; then
+        mkdir -p "$WORK_DIR" || _dsetup_die "Could not create WORK_DIR: $WORK_DIR"
+      fi
+    elif ! _ctx_setup_scope_clone; then
+      die "setup --config: could not resolve WORK_DIR (or use SETUP_SCOPE=clone without WORK_DIR)"
     fi
 
     case "$(ctx_setup_cfg_get "$f" IMPORT_MODE "auto")" in
@@ -154,8 +429,8 @@ cmd_import() {
         elif [[ ! -f "$SSH_KEY_PATH" ]]; then
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh" 2>/dev/null || true
-          [[ -n "$GIT_EMAIL" ]] || die "setup --config: GIT_EMAIL required to generate SSH key"
-          ssh-keygen -t ed25519 -C "$GIT_EMAIL" -f "$SSH_KEY_PATH" -N "" -q || _dsetup_die "ssh-keygen failed for $SSH_KEY_PATH"
+          ssh-keygen -t ed25519 -C "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")" -f "$SSH_KEY_PATH" -N "" -q \
+            || _dsetup_die "ssh-keygen failed for $SSH_KEY_PATH"
           chmod 600 "$SSH_KEY_PATH" 2>/dev/null || true
           SSH_KEY_GENERATED=1
         fi
@@ -168,6 +443,9 @@ cmd_import() {
         fi
         ;;
       skip|none|"")
+        if _ctx_setup_scope_clone; then
+          die "setup --config: SETUP_SCOPE=clone requires SSH_MODE=generate or existing (not skip)"
+        fi
         SSH_KEY_PATH=""
         ;;
       *) die "setup --config: SSH_MODE must be generate|existing|skip" ;;
@@ -189,6 +467,27 @@ cmd_import() {
     SECRET_KEYS=()
     EXTRA_ENVS=""
   else
+
+  if [[ -n "$CTX_SETUP_EXTEND" ]]; then
+    _ctx_setup_interactive_extend "$CTX_SETUP_EXTEND"
+    CTX_SETUP_SKIP_FULL=1
+  elif ! _ctx_setup_scope_clone; then
+    local _scope_pick=""
+    _scope_pick=$(pick_one \
+      "What do you need for this profile?" \
+      "Clone helper only (GitHub SSH + ctx clone)" \
+      "Full client profile (git, folder, cloud, secrets, …)")
+    [[ "$_scope_pick" == *Clone* ]] && CTX_SETUP_SCOPE=clone
+    if _ctx_setup_scope_clone; then
+      _ctx_setup_interactive_clone
+      CTX_SETUP_SKIP_FULL=1
+    fi
+  else
+    _ctx_setup_interactive_clone
+    CTX_SETUP_SKIP_FULL=1
+  fi
+
+  if [[ -z "$CTX_SETUP_SKIP_FULL" ]]; then
 
   # ── Profile name ────────────────────────────────────────────────────────
   ctx_setup_step 1 "$SETUP_STEPS" "Profile & Git identity" "This name is the ctx handle, SSH host alias, and default folder slug."
@@ -510,6 +809,8 @@ cmd_import() {
   fi
   echo ""
 
+  fi  # end full interactive wizard (not clone/extend)
+
   fi  # end interactive path (not --config)
 
   local _review_auto="$CTX_SETUP_AUTO_YES"
@@ -554,7 +855,28 @@ cmd_import() {
 
   # ── Final summary ────────────────────────────────────────────────────────
   echo ""
-  if $HAS_GUM; then
+  if _ctx_setup_scope_clone && [[ -z "$CTX_SETUP_EXTEND" ]]; then
+    if $HAS_GUM; then
+      gum style \
+        --border rounded --border-foreground 78 \
+        --padding "0 2" --margin "1 0" \
+        "Clone profile '${PROFILE_NAME}' ready" \
+        "$(dim "Clone:    ctx clone -p ${PROFILE_NAME} git@github.com:ORG/REPO.git")" \
+        "$(dim "Or:       git clone git@github-${PROFILE_NAME}:ORG/REPO.git")" \
+        "$(dim "Extend:   ctx setup --extend ${PROFILE_NAME}  (git, folder, cloud, secrets)")" \
+        "$(dim "Verify:   ctx verify ${PROFILE_NAME}")"
+    else
+      success "Clone profile '${PROFILE_NAME}' ready."
+      info "Clone:  ctx clone -p $PROFILE_NAME git@github.com:ORG/REPO.git"
+      info "Or:     git clone git@github-${PROFILE_NAME}:ORG/REPO.git"
+      info "Later:  ctx setup --extend $PROFILE_NAME"
+      info "Verify: ctx verify $PROFILE_NAME"
+    fi
+  elif [[ -n "$CTX_SETUP_EXTEND" ]]; then
+    success "Profile '${PROFILE_NAME}' updated."
+    info "Check:  ctx status"
+    info "Verify: ctx verify $PROFILE_NAME"
+  elif $HAS_GUM; then
     gum style \
       --border rounded --border-foreground 78 \
       --padding "0 2" --margin "1 0" \
@@ -593,11 +915,14 @@ cmd_setup_help() {
       "  • Ctrl+C cancels where supported." \
       "" \
       "$(gum style --faint "Flags")" \
+      "  --scope clone|full   clone = SSH host + ctx clone only; add rest with --extend" \
+      "  --extend NAME        Add git / folder / cloud / secrets to an existing profile" \
       "  --config FILE     KEY=value file (non-interactive)" \
       "  -y  --yes         Skip final confirmation (typical with --config in CI)" \
       "  ctx --dry-run setup …   Preview only (no profile files or SSH keys)" \
       "" \
       "$(gum style --faint "Config keys (FILE)")" \
+      "  SETUP_SCOPE=clone|full   (clone: GIT_* optional; WORK_DIR optional; SSH required)" \
       "  PROFILE_NAME  GIT_NAME  GIT_EMAIL" \
       "  WORK_DIR=/abs/path   OR   WORK_MODE=current | path | new" \
       "     path → EXISTING_PATH=…     new → WORK_SLUG=… (under ctx work-root)" \
@@ -622,12 +947,14 @@ cmd_setup_help() {
     echo "  • 8 steps with a review; nothing is written until you confirm."
     echo ""
     bold "Flags"
+    echo "  --scope clone|full   clone = SSH + ctx clone; extend later with --extend NAME"
+    echo "  --extend NAME        Add features to an existing profile (interactive)"
     echo "  --config FILE     Non-interactive KEY=value file"
     echo "  -y  --yes         Skip final confirmation"
     echo "  ctx --dry-run setup …   Preview only"
     echo ""
     bold "Config file keys"
-    echo "  PROFILE_NAME, GIT_NAME, GIT_EMAIL"
+    echo "  SETUP_SCOPE=clone|full, PROFILE_NAME, GIT_NAME, GIT_EMAIL"
     echo "  WORK_DIR=… or WORK_MODE=current|path|new (+ EXISTING_PATH or WORK_SLUG)"
     echo "  IMPORT_MODE, SSH_MODE, optional cloud + GITHUB_USER"
     echo "  SECRETS_MODE=skip, AUTO_CONFIRM, OVERWRITE"

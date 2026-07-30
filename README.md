@@ -148,6 +148,23 @@ ctx setup
 ctx use <name>
 ```
 
+### Clone-only profile (add the rest later)
+
+If you only need **`ctx clone`** to rewrite `git@github.com:…` → `git@github-<profile>:…`:
+
+```bash
+ctx setup --scope clone
+# or: ctx setup --config examples/setup.clone-only.conf.example --yes
+
+ctx clone -p <profile> git@github.com:Org/repo.git
+```
+
+Add git identity, a client folder, cloud defaults, or secrets when you need them:
+
+```bash
+ctx setup --extend <profile>
+```
+
 ---
 
 ## Commands
@@ -159,6 +176,7 @@ ctx use <name>
 | `ctx init` | Check deps, install hooks |
 | `ctx config [show]` | Show current ctx config values |
 | `ctx config work-root <path>` | Set default root used by `ctx setup` for client folders |
+| `ctx config autoswitch-notify <on\|off>` | Show `[ctx] ←/→` on profile change (default **off**) |
 | `ctx config secret-provider <auto\|keychain\|file\|pass>` | Choose where `ctx secret` stores values (reuse existing OS-backed defaults) |
 | `ctx config export <dir>` | Export portable profile/config bundle for laptop migration (no secrets) |
 | `ctx config import <dir>` | Import portable profile/config bundle on a new machine |
@@ -263,7 +281,7 @@ The shell hook (`ctx install-hook` / `install.sh`) appends **`lib/ctx_autoswitch
 - Picks the profile whose **`WORK_DIR`** is the **longest path prefix** of `$PWD` (nested clients supported).
 - Prefers a **sibling profile** when a broad `WORK_DIR` covers `…/clients` and `…/clients/<name>.conf` exists.
 - Applies **nearest** `.ctx` with `profile=<name>` when walking from `$PWD` up to the git root (must be a valid profile).
-- Prints **`[ctx] → name`**, **`[ctx] ← old → new`**, or **`[ctx] ← name`** on stderr when the active profile changes.
+- Prints **`[ctx] → name`**, **`[ctx] ← old → new`**, or **`[ctx] ← name`** on stderr when the active profile changes — **off by default** (screen-share safe). Enable with **`ctx config autoswitch-notify on`**, or for one session: **`export CTX_AUTOSWITCH_NOTIFY=1`**.
 - Runs **`eval "$(ctx deactivate --eval bash)"`** (or fish equivalent) before switching, so secrets and env vars from the previous profile are cleared in your shell.
 - Calls **`CTX_AUTO_SWITCH=1 ctx use <name>`** so `~/.ctx/config` marks activation as **auto** (not manual-lock).
 - Exports **`CTX_PROMPT_SHOW`**, **`CTX_PROMPT_PROFILE`**, and **`CTX_PROMPT_WORK_DIR`** for your prompt: by default the prompt scope is **only** under each profile’s `WORK_DIR` for **up to two extra path segments** (configurable). Folders outside any profile (e.g. a random `cd` or alias) get **`CTX_PROMPT_SHOW=0`**. See **`ctx config prompt-workdir-depth`** and **`prompt_extra_paths`**.

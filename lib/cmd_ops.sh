@@ -615,11 +615,17 @@ cmd_config() {
       echo "  secret_provider: $(ctx_secret_provider) (effective: $(ctx_effective_secret_provider))"
       echo "  prompt_workdir_max_depth: $(ctx_config_prompt_workdir_max_depth) (prompt: CTX_PROMPT_* under each profile WORK_DIR)"
       echo "  prompt_extra_paths: $(ctx_config_prompt_extra_paths_or_default)"
+      if [[ "$(ctx_config_autoswitch_notify)" == "1" ]]; then
+        echo "  autoswitch_notify: on ([ctx] ←/→ messages on profile change)"
+      else
+        echo "  autoswitch_notify: off (default — silent autoswitch; screen-share safe)"
+      fi
       echo ""
       info "Set with: ctx config work-root <path>"
       info "      or: ctx config secret-provider <auto|keychain|file|pass>"
       info "      or: ctx config prompt-workdir-depth <n>   # max path segments under WORK_DIR for CTX_PROMPT_SHOW (default 2)"
       info "      or: ctx config prompt-extra-paths '<p1>:<p2>'   # optional extra absolute prefixes (colon-separated)"
+      info "      or: ctx config autoswitch-notify <on|off>   # [ctx] ←/→ lines (default off)"
       info "      or: ctx config export <dir> / ctx config import <dir>"
       ;;
     work-root)
@@ -685,6 +691,34 @@ cmd_config() {
         success "prompt_extra_paths set."
       fi
       ;;
+    autoswitch-notify)
+      if [[ -z "$value" ]]; then
+        if [[ "$(ctx_config_autoswitch_notify)" == "1" ]]; then
+          echo "  autoswitch_notify: on"
+        else
+          echo "  autoswitch_notify: off"
+        fi
+        echo ""
+        info "Usage: ctx config autoswitch-notify <on|off>"
+        dim "  Default is off so new tabs / cd do not print client profile names (screen-share safe)."
+        dim "  Session override: CTX_AUTOSWITCH_NOTIFY=1"
+        return 0
+      fi
+      value="$(echo "$value" | tr '[:upper:]' '[:lower:]')"
+      case "$value" in
+        on|1|true|yes)
+          _ctx_config_upsert_line autoswitch_notify on
+          success "autoswitch_notify: on — [ctx] ←/→ messages enabled"
+          ;;
+        off|0|false|no)
+          _ctx_config_upsert_line autoswitch_notify off
+          success "autoswitch_notify: off — silent autoswitch (default)"
+          ;;
+        *)
+          die "Usage: ctx config autoswitch-notify <on|off>"
+          ;;
+      esac
+      ;;
     export)
       [[ -z "$value" ]] && die "Usage: ctx config export <directory>"
       local outdir
@@ -746,7 +780,7 @@ cmd_config() {
       warn "Secrets are not included in exports; rehydrate via your provider (keychain/file/pass) or 'ctx secret'."
       ;;
     *)
-      die "Usage: ctx config [show|work-root <path>|secret-provider <auto|keychain|file|pass>|prompt-workdir-depth <n>|prompt-extra-paths '<paths>'|export <dir>|import <dir>]"
+      die "Usage: ctx config [show|work-root <path>|secret-provider <auto|keychain|file|pass>|prompt-workdir-depth <n>|prompt-extra-paths '<paths>'|autoswitch-notify <on|off>|export <dir>|import <dir>]"
       ;;
   esac
 }

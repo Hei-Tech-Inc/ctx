@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`ctx config autoswitch-notify on|off`:** `[ctx] ←/→` transition lines from the shell autoswitch hook are **off by default** (screen-share / new-tab privacy). Opt in with config or session env **`CTX_AUTOSWITCH_NOTIFY=1`**. Re-run **`ctx install-hook`** (or **`ctx upgrade`**) so the installed rc hook picks up the change.
 - **`ctx workdir-prompt`:** prints `work_dir='WORK_DIR=<root>'` when the current directory is in the same prompt scope as **`CTX_PROMPT_*`** (depth + **`prompt_extra_paths`**); otherwise prints nothing — useful for **`PS1`** without grepping profile files.
 - **zsh `precmd`** registration for the auto-switch hook (in addition to **`chpwd`**) so **`CTX_PROMPT_*`** refresh after commands that do not change **`$PWD`** (e.g. aliases that only run **`ctx use`**).
 - **fish `fish_postexec`** hook calling the same auto-switch function for the same reason.

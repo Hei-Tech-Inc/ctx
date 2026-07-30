@@ -193,22 +193,37 @@ function _ctx_profile_autoswitch --on-variable PWD
   end
   set -g __CTX_AS_STATE "$_as_key"
 
+  # Default off: avoid leaking client profile names on new tabs / screen share.
+  # Enable: ctx config autoswitch-notify on  (or CTX_AUTOSWITCH_NOTIFY=1)
+  set -l _ctx_notify 0
+  set -l _nv
+  if set -q CTX_AUTOSWITCH_NOTIFY; and test -n "$CTX_AUTOSWITCH_NOTIFY"
+    set _nv (string lower -- "$CTX_AUTOSWITCH_NOTIFY")
+  else
+    set _nv (grep "^autoswitch_notify=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
+    set _nv (string lower -- (string trim -- "$_nv"))
+  end
+  switch "$_nv"
+    case 1 true yes on
+      set _ctx_notify 1
+  end
+
   if test -n "$target"
     set -l _ctx_applied 0
     if test -n "$current"; and test "$current" != "$target"
-      echo -e "\033[2m[ctx] ← $current → $target\033[0m" >&2
+      test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ← $current → $target\033[0m" >&2
       env CTX_QUIET=1 ctx deactivate --eval fish 2>/dev/null | source
       if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
         set _ctx_applied 1
       else
-        echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
+        test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
       end
     else if test -z "$current"
-      echo -e "\033[2m[ctx] → $target\033[0m" >&2
+      test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] → $target\033[0m" >&2
       if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
         set _ctx_applied 1
       else
-        echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
+        test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
       end
     else
       set _ctx_applied 1
@@ -219,7 +234,7 @@ function _ctx_profile_autoswitch --on-variable PWD
     end
   else
     if test -n "$current"
-      echo -e "\033[2m[ctx] ← $current\033[0m" >&2
+      test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ← $current\033[0m" >&2
       env CTX_QUIET=1 ctx deactivate --eval fish 2>/dev/null | source
     end
     set -e CTX_ACTIVE_PROFILE 2>/dev/null
