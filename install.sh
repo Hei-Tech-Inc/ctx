@@ -410,23 +410,28 @@ install_ctx() {
 
 # ─── Install ctx auto-switch hook ────────────────────────────────────────────
 install_ctx_hook() {
-  local script_dir hook_bash hook_fish
+  local script_dir hook_lib
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
-  hook_bash="$script_dir/lib/ctx_autoswitch.bash"
-  hook_fish="$script_dir/lib/ctx_autoswitch.fish"
-  if [[ ! -f "$hook_bash" && -n "${CTX_INSTALLED_LIB:-}" ]]; then
-    hook_bash="$CTX_INSTALLED_LIB/ctx_autoswitch.bash"
-    hook_fish="$CTX_INSTALLED_LIB/ctx_autoswitch.fish"
+  hook_lib="${CTX_INSTALLED_LIB:-}"
+  if [[ -z "$hook_lib" || ! -f "$hook_lib/ctx_autoswitch.bash" ]]; then
+    if [[ -f "$script_dir/lib/ctx_autoswitch.bash" ]]; then
+      hook_lib="$script_dir/lib"
+    elif [[ -f "$HOME/.local/lib/ctx/ctx_autoswitch.bash" ]]; then
+      hook_lib="$HOME/.local/lib/ctx"
+    else
+      hook_lib="/usr/local/lib/ctx"
+    fi
   fi
 
-  _strip_legacy_ctx_autohook() {
-    local rc="$1"
+  _ctx_rc_strip_autoswitch() {
+    local rc="$1" t
     [[ -f "$rc" ]] || return 0
-    grep -q '# ── ctx auto-switch' "$rc" 2>/dev/null || return 0
-    grep -q '_ctx_profile_autoswitch' "$rc" 2>/dev/null && return 0
-    local t
     t="$(mktemp)" || return 1
     awk '
+      /^# BEGIN ctx profile autoswitch/ { skip=1; next }
+      /^# END ctx profile autoswitch/ { skip=0; next }
+      skip { next }
+      /^# ctx profile autoswitch/ { skip=1; next }
       /^# ── ctx auto-switch/ { skip=1; next }
       skip && /^# ─{25,}$/ { skip=0; next }
       skip { next }
@@ -434,22 +439,42 @@ install_ctx_hook() {
     ' "$rc" > "$t" && mv "$t" "$rc"
   }
 
-  if grep -q '_ctx_profile_autoswitch' "$SHELL_RC" 2>/dev/null; then
-    success "ctx profile autoswitch: already in $SHELL_RC"
-    return 0
-  fi
+  _ctx_rc_strip_autoswitch "$SHELL_RC"
 
-  _strip_legacy_ctx_autohook "$SHELL_RC"
+  {
+    echo ""
+    echo "# BEGIN ctx profile autoswitch"
+    echo "# Sourced from ctx lib so upgrades apply without editing this file."
+    if [[ "$SHELL_RC" == *"/config.fish" ]]; then
+      [[ -f "$hook_lib/ctx_autoswitch.fish" ]] || die "Missing ctx_autoswitch.fish (re-run install from a full ctx checkout or release bundle)."
+      echo "set -l _ctx_as_lib ''"
+      echo "for _ctx_as_cand in '$hook_lib' \$HOME/.local/lib/ctx /usr/local/lib/ctx /opt/homebrew/lib/ctx"
+      echo "  if test -f \"\$_ctx_as_cand/ctx_autoswitch.fish\""
+      echo "    set _ctx_as_lib \$_ctx_as_cand"
+      echo "    break"
+      echo "  end"
+      echo "end"
+      echo "if test -n \"\$_ctx_as_lib\""
+      echo "  source \"\$_ctx_as_lib/ctx_autoswitch.fish\""
+      echo "end"
+    else
+      [[ -f "$hook_lib/ctx_autoswitch.bash" ]] || die "Missing ctx_autoswitch.bash (re-run install from a full ctx checkout or release bundle)."
+      cat <<EOF
+_ctx_as_lib=""
+for _ctx_as_cand in "$hook_lib" "\${HOME}/.local/lib/ctx" "/usr/local/lib/ctx" "/opt/homebrew/lib/ctx"; do
+  [[ -f "\${_ctx_as_cand}/ctx_autoswitch.bash" ]] && { _ctx_as_lib="\${_ctx_as_cand}"; break; }
+done
+if [[ -n "\${_ctx_as_lib}" ]]; then
+  # shellcheck disable=SC1090
+  source "\${_ctx_as_lib}/ctx_autoswitch.bash"
+fi
+unset _ctx_as_lib _ctx_as_cand 2>/dev/null || true
+EOF
+    fi
+    echo "# END ctx profile autoswitch"
+  } >> "$SHELL_RC"
 
-  if [[ "$SHELL_RC" == *"/config.fish" ]]; then
-    [[ -f "$hook_fish" ]] || die "Missing ctx_autoswitch.fish (re-run install from a full ctx checkout or release bundle)."
-    cat "$hook_fish" >> "$SHELL_RC"
-  else
-    [[ -f "$hook_bash" ]] || die "Missing ctx_autoswitch.bash (re-run install from a full ctx checkout or release bundle)."
-    cat "$hook_bash" >> "$SHELL_RC"
-  fi
-
-  success "ctx profile autoswitch hook: added to $SHELL_RC"
+  success "ctx profile autoswitch hook: refreshed in $SHELL_RC (sources lib)"
 }
 
 # ─── Verify everything installed correctly ────────────────────────────────────
