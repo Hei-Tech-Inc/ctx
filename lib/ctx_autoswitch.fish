@@ -25,6 +25,24 @@ function _ctx_rel_depth_under -a p r
   count (string split / -- $x)
 end
 
+# Per-terminal gh login (see _ctx_as_gh_token in ctx_autoswitch.bash).
+function _ctx_as_gh_token -a p profiles_dir
+  if set -q _CTX_GH_PROFILE
+    test "$_CTX_GH_PROFILE" = "$p"; and return
+    set -e GH_TOKEN
+    set -e _CTX_GH_PROFILE
+  end
+  test -n "$p"; or return
+  set -q GH_TOKEN; and test -n "$GH_TOKEN"; and return
+  command -v gh >/dev/null 2>&1; or return
+  set -l user (grep "^GITHUB_USER=" "$profiles_dir/$p.conf" 2>/dev/null | tail -1 | cut -d= -f2- | string trim -c "\"'")
+  test -n "$user"; or return
+  set -l tok (gh auth token -u "$user" 2>/dev/null); or return
+  test -n "$tok"; or return
+  set -gx GH_TOKEN "$tok"
+  set -gx _CTX_GH_PROFILE "$p"
+end
+
 function _ctx_profile_autoswitch --on-variable PWD
   command -v ctx >/dev/null 2>/dev/null; or return
   set -l profiles_dir (set -q CTX_DIR; and echo "$CTX_DIR"; or echo "$HOME/.ctx")/profiles
@@ -231,6 +249,7 @@ function _ctx_profile_autoswitch --on-variable PWD
     if test "$_ctx_applied" -eq 1
       set -gx CTX_ACTIVE_PROFILE "$target"
       set -gx CTX_ACTIVATION_TRIGGER auto
+      _ctx_as_gh_token "$target" "$profiles_dir"
     end
   else
     if test -n "$current"
@@ -239,6 +258,7 @@ function _ctx_profile_autoswitch --on-variable PWD
     end
     set -e CTX_ACTIVE_PROFILE 2>/dev/null
     set -e CTX_ACTIVATION_TRIGGER 2>/dev/null
+    _ctx_as_gh_token "" "$profiles_dir"
   end
 end
 

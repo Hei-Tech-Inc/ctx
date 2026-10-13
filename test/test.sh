@@ -314,16 +314,18 @@ test_autoswitch_hook_resolution() {
     export HOME="$td/home" CTX_DIR="$td/ctx"
     mkdir -p "$CTX_DIR/profiles" "$HOME/b/sub" "$td/w/a/deep" "$td/w/c d" "$td/w/clients/acme" "$td/w/mono/.git" "$td/w/mono/svc"
     : >"$CTX_DIR/config"
-    printf 'WORK_DIR=%s\n' "$td/w/a" >"$CTX_DIR/profiles/a.conf"
+    printf 'WORK_DIR=%s\nGITHUB_USER=alice\n' "$td/w/a" >"$CTX_DIR/profiles/a.conf"
     # shellcheck disable=SC2016
     printf 'WORK_DIR="$HOME/b"\n' >"$CTX_DIR/profiles/b.conf"
     printf 'WORK_DIR=%q\n' "$td/w/c d" >"$CTX_DIR/profiles/c.conf"
     printf 'WORK_DIR=%s\n' "$td/w/clients" >"$CTX_DIR/profiles/broad.conf"
     printf 'PROFILE_NAME=acme\n' >"$CTX_DIR/profiles/acme.conf"
-    printf 'WORK_DIR=%s\n' "$td/w/mono" >"$CTX_DIR/profiles/mono.conf"
+    printf 'WORK_DIR=%s\nGITHUB_USER="bob"\n' "$td/w/mono" >"$CTX_DIR/profiles/mono.conf"
     printf 'profile= a \r\n' >"$td/w/mono/svc/.ctx"
     used="$td/used"
+    unset GH_TOKEN _CTX_GH_PROFILE
     ctx() { [[ "$1" == use ]] && printf '%s\n' "$2" >>"$used"; return 0; }
+    gh() { [[ "$1 $2 $3" == "auth token -u" ]] && printf 'tok-%s' "$4"; }
     # shellcheck source=../lib/ctx_autoswitch.bash
     source "$ROOT/lib/ctx_autoswitch.bash"
     _expect() {
@@ -335,14 +337,24 @@ test_autoswitch_hook_resolution() {
     }
     _expect "$td/w/a/deep" a
     [[ "$CTX_PROMPT_SHOW" == 1 && "$CTX_PROMPT_PROFILE" == a && "$CTX_PROMPT_WORK_DIR" == "$td/w/a" ]] || exit 1
+    [[ "${GH_TOKEN:-}" == tok-alice ]] || { echo "GH_TOKEN in a: '${GH_TOKEN:-}'" >&2; exit 1; }
     _expect "$HOME/b/sub" b
+    [[ -z "${GH_TOKEN:-}" && -z "${_CTX_GH_PROFILE:-}" ]] || { echo "GH_TOKEN kept in b" >&2; exit 1; }
     _expect "$td/w/c d" c
     _expect "$td/w/clients/acme" acme
     _expect "$td/w/mono/svc" a
+    [[ "${GH_TOKEN:-}" == tok-alice ]] || exit 1
     _expect "$td/w/mono" mono
+    [[ "${GH_TOKEN:-}" == tok-bob ]] || { echo "GH_TOKEN in mono: '${GH_TOKEN:-}'" >&2; exit 1; }
+    cd "$td"
+    _ctx_profile_autoswitch
+    [[ -z "${GH_TOKEN:-}" ]] || { echo "GH_TOKEN kept outside profiles" >&2; exit 1; }
+    export GH_TOKEN=mine
+    _expect "$td/w/a/deep" a
+    [[ "$GH_TOKEN" == mine ]] || { echo "user GH_TOKEN overwritten" >&2; exit 1; }
     rm -rf "$td"
   ) || fail "autoswitch hook resolution"
-  pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx)"
+  pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx, per-shell GH_TOKEN)"
 }
 
 test_setup_scope_clone_batch() {
@@ -499,6 +511,89 @@ test_git_identity_github_rewrite() {
   pass "git identity rewrites github.com to github-<profile> inside WORK_DIR only"
 }
 
+test_ctx_run_env_agent_rules() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$td/bin:$ROOT_DIR/bin:$PATH"
+    unset GH_TOKEN AWS_PROFILE GIT_AUTHOR_EMAIL
+    mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/acme" "$td/bin" "$HOME/.ssh" "$td/w/acme/r"
+    : >"$HOME/.ssh/id_acme"
+    printf '#!/bin/sh\n[ "$1 $2 $3" = "auth token -u" ] && printf "tok-%%s" "$4"\n' >"$td/bin/gh"
+    chmod +x "$td/bin/gh"
+    {
+      printf 'GIT_NAME=%q\nGIT_EMAIL=dev@acme.com\nWORK_DIR=%s\n' "Dev One" "$td/w/acme"
+      printf 'GITHUB_USER=acme-dev\nAWS_PROFILE_NAME=acme-prod\nSSH_KEY_PATH=%s\n' "$HOME/.ssh/id_acme"
+      printf 'SECRET_KEYS=API_KEY\nEXTRA_ENVS=%q\n' $'FOO=bar baz\n'
+    } >"$CTX_DIR/profiles/acme.conf"
+    printf 'secret_provider=file\n' >"$CTX_DIR/config"
+    printf 's3cret' >"$CTX_DIR/secrets/acme/API_KEY"
+    cd "$td/w/acme/r"
+
+    out="$(ctx run -- env)"
+    for want in CTX_ACTIVE_PROFILE=acme "GIT_AUTHOR_NAME=Dev One" GIT_COMMITTER_EMAIL=dev@acme.com \
+      GH_TOKEN=tok-acme-dev AWS_PROFILE=acme-prod "FOO=bar baz" API_KEY=s3cret; do
+      grep -qxF "$want" <<<"$out" || { echo "run env missing: $want"; exit 1; }
+    done
+    grep -q '^GIT_SSH_COMMAND=ssh -i .*id_acme -o IdentitiesOnly=yes$' <<<"$out" || { echo "GIT_SSH_COMMAND"; exit 1; }
+    [[ "$(ctx run -- printf '%s,' --json -q --dry-run)" == "--json,-q,--dry-run," ]] || { echo "flags not passed through"; exit 1; }
+    (cd "$td" && ctx run -p acme -- sh -c 'printf %s "$AWS_PROFILE"' | grep -qx acme-prod) || { echo "-p outside folder"; exit 1; }
+
+    out="$(ctx env)"
+    grep -q API_KEY <<<"$out" && { echo "env printed secrets without --secrets"; exit 1; }
+    (eval "$out"; [[ "$GIT_AUTHOR_NAME" == "Dev One" && "$FOO" == "bar baz" ]]) || { echo "env eval"; exit 1; }
+    grep -qxF "set -gx GIT_AUTHOR_NAME 'Dev One'" <<<"$(ctx env --fish)" || { echo "env --fish"; exit 1; }
+    grep -q '^export API_KEY=s3cret$' <<<"$(ctx env --secrets)" || { echo "env --secrets"; exit 1; }
+
+    printf '# Project\n\nKeep me.\n' >"$td/w/acme/r/AGENTS.md"
+    git -C "$td/w/acme/r" init -q
+    ctx agent-rules --write >/dev/null
+    ctx agent-rules --write >/dev/null
+    [[ "$(grep -c 'BEGIN ctx agent rules' AGENTS.md)" == 1 ]] || { echo "agent rules duplicated"; exit 1; }
+    grep -q 'Keep me.' AGENTS.md && grep -q 'ctx run -- <command>' AGENTS.md || { echo "agent rules content"; exit 1; }
+    rm -rf "$td"
+  ) || fail "ctx run / env / agent-rules"
+  pass "ctx run, env (bash, fish, secrets opt-in) and agent-rules"
+}
+
+test_setup_commit_signing() {
+  (
+    set -euo pipefail
+    local td id cfg
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    mkdir -p "$HOME/.ssh" "$td/w/acme/r"
+    chmod 700 "$HOME/.ssh"
+    ssh-keygen -t ed25519 -f "$HOME/.ssh/id_acme" -N "" -q
+    cfg="$td/s.conf"
+    {
+      printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=dev@acme.com\nWORK_DIR=%s\n' "$td/w/acme"
+      printf 'IMPORT_MODE=manual\nSSH_MODE=existing\nSSH_KEY_PATH=%s\n' "$HOME/.ssh/id_acme"
+      printf 'SIGNING_FORMAT=ssh\nAUTO_CONFIRM=true\n'
+    } >"$cfg"
+    "$ROOT_DIR/bin/ctx" --no-gum setup --config "$cfg" --yes >/dev/null 2>&1 || { echo "setup failed"; exit 1; }
+    id="$HOME/.config/git/ctx-acme"
+    [[ "$(git config --file "$id" gpg.format)" == ssh \
+      && "$(git config --file "$id" user.signingkey)" == "$HOME/.ssh/id_acme" \
+      && "$(git config --file "$id" commit.gpgsign)" == true ]] || { echo "identity file: $(cat "$id")"; exit 1; }
+    grep -q '^SIGNING_FORMAT=ssh$' "$CTX_DIR/profiles/acme.conf" || { echo "profile conf"; exit 1; }
+
+    git -C "$td/w/acme/r" init -q
+    git -C "$td/w/acme/r" commit -q --allow-empty -m signed || { echo "signed commit failed"; exit 1; }
+    git -C "$td/w/acme/r" cat-file -p HEAD | grep -q '^gpgsig -----BEGIN SSH SIGNATURE' || { echo "commit not signed"; exit 1; }
+
+    sed -i.bak 's/^SIGNING_FORMAT=ssh$/SIGNING_FORMAT=gpg/' "$cfg"
+    printf 'OVERWRITE=true\n' >>"$cfg"
+    "$ROOT_DIR/bin/ctx" --no-gum setup --config "$cfg" --yes >/dev/null 2>&1 && { echo "gpg without key accepted"; exit 1; }
+    sed -i.bak 's/^SIGNING_FORMAT=gpg$/SIGNING_FORMAT=none/' "$cfg"
+    "$ROOT_DIR/bin/ctx" --no-gum setup --config "$cfg" --yes >/dev/null 2>&1 || { echo "re-setup failed"; exit 1; }
+    [[ -z "$(git config --file "$id" --get commit.gpgsign || true)" ]] || { echo "signing not removed"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup commit signing"
+  pass "setup commit signing (ssh signs commits, gpg needs a key, none removes it)"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -519,5 +614,7 @@ test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 test_guard_git_hooks
 test_git_identity_github_rewrite
+test_ctx_run_env_agent_rules
+test_setup_commit_signing
 
 echo "All tests passed."

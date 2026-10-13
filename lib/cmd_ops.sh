@@ -11,8 +11,8 @@ cmd_use() {
 
   local errors=0
 
-  # 1. GitHub
-  if [[ -n "${GITHUB_USER:-}" ]] && has gh; then
+  # 1. GitHub — the autoswitch hook sets GH_TOKEN per terminal instead of this machine-wide switch
+  if [[ -n "${GITHUB_USER:-}" && "${CTX_AUTO_SWITCH:-0}" != "1" ]] && has gh; then
     if gh auth switch -u "$GITHUB_USER" 2>/dev/null; then
       [[ "$quiet" == "0" ]] && success "GitHub → $GITHUB_USER"
     else
@@ -1456,6 +1456,163 @@ EOF
   success "SSH config isolated to $CTX_SSH_CONFIG"
 
   info "Reload your shell: source $shell_rc"
+}
+
+# ─── env / run / agent-rules ──────────────────────────────────────────────────
+# Profile for a command: -p NAME, else the folder's profile, else the active one.
+_ctx_profile_for_cwd() {
+  local p
+  p="$(ctx_resolve_path_profile "$PWD" "$CTX_PROFILES_DIR" 2>/dev/null || true)"
+  [[ -n "$p" ]] || p="$(active_profile)"
+  printf '%s' "$p"
+}
+
+# Fills _ctx_env_k / _ctx_env_v with one process's identity for the loaded profile.
+# Process-scoped only: no gh auth switch, no ssh-add, no kubectl/az/gcloud config writes.
+_ctx_profile_env_collect() {
+  local name="$1" with_secrets="$2" key val pair tok
+  _ctx_env_k=() _ctx_env_v=()
+  _ctx_env_add() { _ctx_env_k+=("$1"); _ctx_env_v+=("$2"); }
+  _ctx_env_add CTX_ACTIVE_PROFILE "$name"
+  if [[ -n "${GIT_NAME:-}" ]]; then
+    _ctx_env_add GIT_AUTHOR_NAME "$GIT_NAME"
+    _ctx_env_add GIT_COMMITTER_NAME "$GIT_NAME"
+  fi
+  if [[ -n "${GIT_EMAIL:-}" ]]; then
+    _ctx_env_add GIT_AUTHOR_EMAIL "$GIT_EMAIL"
+    _ctx_env_add GIT_COMMITTER_EMAIL "$GIT_EMAIL"
+  fi
+  if [[ -n "${SSH_KEY_PATH:-}" && -f "$SSH_KEY_PATH" ]]; then
+    _ctx_env_add GIT_SSH_COMMAND "ssh -i $(printf '%q' "$SSH_KEY_PATH") -o IdentitiesOnly=yes"
+  fi
+  if [[ -n "${GITHUB_USER:-}" ]] && has gh; then
+    tok="$(gh auth token -u "$GITHUB_USER" 2>/dev/null || true)"
+    [[ -n "$tok" ]] && _ctx_env_add GH_TOKEN "$tok"
+  fi
+  [[ -n "${AWS_PROFILE_NAME:-}" ]] && _ctx_env_add AWS_PROFILE "$AWS_PROFILE_NAME"
+  if [[ -n "${GCP_PROJECT:-}" ]]; then
+    _ctx_env_add CLOUDSDK_CORE_PROJECT "$GCP_PROJECT"
+    _ctx_env_add GOOGLE_CLOUD_PROJECT "$GCP_PROJECT"
+  fi
+  [[ -n "${GCP_ACCOUNT:-}" ]] && _ctx_env_add CLOUDSDK_CORE_ACCOUNT "$GCP_ACCOUNT"
+  if [[ -n "${AZURE_SUBSCRIPTION:-}" ]]; then
+    _ctx_env_add AZURE_SUBSCRIPTION "$AZURE_SUBSCRIPTION"
+    _ctx_env_add AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION"
+  fi
+  [[ -n "${AZURE_TENANT:-}" ]] && _ctx_env_add AZURE_TENANT_ID "$AZURE_TENANT"
+  if [[ -n "${EXTRA_ENVS:-}" ]]; then
+    while IFS= read -r pair; do
+      [[ -z "$pair" ]] && continue
+      key="${pair%%=*}"
+      is_valid_env_key "$key" && _ctx_env_add "$key" "${pair#*=}"
+    done <<< "$EXTRA_ENVS"
+  fi
+  if [[ "$with_secrets" == "1" ]]; then
+    for key in ${SECRET_KEYS:-}; do
+      is_valid_env_key "$key" || continue
+      val="$(keychain_get "$name" "$key" 2>/dev/null || true)"
+      [[ -n "$val" ]] && _ctx_env_add "$key" "$val"
+    done
+  fi
+  return 0
+}
+
+# Shared by env/run: parses [-p NAME] and loads the profile. Sets _ctx_cmd_profile, _ctx_cmd_rest.
+_ctx_cmd_load_profile() {
+  local p=""
+  _ctx_cmd_rest=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p|--profile) p="${2:-}"; shift 2 || shift ;;
+      --) shift; _ctx_cmd_rest+=("$@"); break ;;
+      *) _ctx_cmd_rest+=("$1"); shift ;;
+    esac
+  done
+  [[ -n "$p" ]] || p="$(_ctx_profile_for_cwd)"
+  [[ -n "$p" ]] || die "No profile for $PWD and none active. Use -p <profile>."
+  load_profile "$p"
+  _ctx_cmd_profile="$p"
+}
+
+# Print exports for eval: ctx env [-p NAME] [--fish] [--secrets]
+cmd_env() {
+  local shell_kind=bash with_secrets=0 a i
+  _ctx_cmd_load_profile "$@"
+  for a in "${_ctx_cmd_rest[@]+"${_ctx_cmd_rest[@]}"}"; do
+    case "$a" in
+      --fish) shell_kind=fish ;;
+      --secrets) with_secrets=1 ;;
+      *) die "Usage: ctx env [-p profile] [--fish] [--secrets]" ;;
+    esac
+  done
+  _ctx_profile_env_collect "$_ctx_cmd_profile" "$with_secrets"
+  for ((i = 0; i < ${#_ctx_env_k[@]}; i++)); do
+    if [[ "$shell_kind" == fish ]]; then
+      printf "set -gx %s '%s'\n" "${_ctx_env_k[i]}" "$(printf '%s' "${_ctx_env_v[i]}" | sed "s/[\\\\']/\\\\&/g")"
+    else
+      printf 'export %s=%q\n' "${_ctx_env_k[i]}" "${_ctx_env_v[i]}"
+    fi
+  done
+}
+
+# Run one command with the profile's identity (git author, SSH key, gh token, cloud, secrets).
+cmd_run() {
+  local i
+  _ctx_cmd_load_profile "$@"
+  [[ ${#_ctx_cmd_rest[@]} -gt 0 ]] || die "Usage: ctx run [-p profile] -- <command> [args...]"
+  _ctx_profile_env_collect "$_ctx_cmd_profile" 1
+  for ((i = 0; i < ${#_ctx_env_k[@]}; i++)); do
+    export "${_ctx_env_k[i]}=${_ctx_env_v[i]}"
+  done
+  exec "${_ctx_cmd_rest[@]}"
+}
+
+CTX_AGENT_RULES_BEGIN="<!-- BEGIN ctx agent rules -->"
+CTX_AGENT_RULES_END="<!-- END ctx agent rules -->"
+
+_ctx_agent_rules_text() {
+  cat <<EOF
+$CTX_AGENT_RULES_BEGIN
+## Client identity (ctx)
+
+This machine uses \`ctx\` to keep each client's git, GitHub, SSH and cloud identity separate.
+
+- Check which identity applies here: \`ctx status --json\`, or \`ctx env\` (prints the variables).
+- Run commands that need this client's credentials through \`ctx run -- <command>\`
+  (for example \`ctx run -- gh pr create\` or \`ctx run -- terraform plan\`).
+- Do not change \`git config user.email\`, rewrite remote URLs, or run \`gh auth switch\`.
+- If a commit or push is blocked by "ctx guard", stop and report it. Do not use \`--no-verify\`.
+$CTX_AGENT_RULES_END
+EOF
+}
+
+# ctx agent-rules [--write [FILE]] — print, or upsert into AGENTS.md (or FILE) between markers.
+cmd_agent_rules() {
+  if [[ "${1:-}" != "--write" ]]; then
+    _ctx_agent_rules_text
+    return 0
+  fi
+  local file="${2:-}" top tmp line skip=0
+  if [[ -z "$file" ]]; then
+    top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    file="$top/AGENTS.md"
+  fi
+  if [[ "${CTX_DRY_RUN:-0}" == "1" ]]; then
+    info "[dry-run] Would write ctx agent rules to $file"
+    return 0
+  fi
+  tmp="$(mktemp "${file}.XXXXXX")" || die "Cannot write next to $file"
+  if [[ -f "$file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" == "$CTX_AGENT_RULES_BEGIN" ]] && { skip=1; continue; }
+      [[ "$line" == "$CTX_AGENT_RULES_END" ]] && { skip=0; continue; }
+      [[ $skip -eq 1 ]] || printf '%s\n' "$line"
+    done <"$file" >"$tmp"
+    if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp"; fi
+  fi
+  _ctx_agent_rules_text >>"$tmp"
+  mv "$tmp" "$file"
+  success "ctx agent rules written to $file"
 }
 
 # ─── guard ────────────────────────────────────────────────────────────────────

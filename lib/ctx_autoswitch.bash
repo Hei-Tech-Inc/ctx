@@ -38,6 +38,24 @@ _ctx_as_profile_work_dir() {
   _ctx_wd="${v/#\~/$HOME}"
 }
 
+# Per-terminal gh login: GH_TOKEN for the profile's GITHUB_USER, so a switch in one shell
+# never changes the account another shell uses (gh auth switch is machine-wide).
+# A GH_TOKEN the user set themselves is left alone. Uses $profiles_dir from the caller.
+_ctx_as_gh_token() {
+  local p="$1" user tok
+  if [[ -n "${_CTX_GH_PROFILE+x}" ]]; then
+    [[ "$_CTX_GH_PROFILE" == "$p" ]] && return 0
+    unset GH_TOKEN _CTX_GH_PROFILE
+  fi
+  [[ -n "$p" && -z "${GH_TOKEN:-}" ]] || return 0
+  _ctx_as_kv_get "$profiles_dir/$p.conf" GITHUB_USER
+  user="${_ctx_kv//[\"\']/}"
+  [[ -n "$user" ]] && command -v gh >/dev/null 2>&1 || return 0
+  tok="$(gh auth token -u "$user" 2>/dev/null)" || return 0
+  [[ -n "$tok" ]] || return 0
+  export GH_TOKEN="$tok" _CTX_GH_PROFILE="$p"
+}
+
 # One pass over ~/.ctx/config (last value wins). Sets _cfg_* in the caller's scope.
 _ctx_as_read_config() {
   local line
@@ -254,6 +272,7 @@ _ctx_profile_autoswitch() {
     if [[ "$_ctx_applied" == "1" ]]; then
       export CTX_ACTIVE_PROFILE="$target"
       export CTX_ACTIVATION_TRIGGER=auto
+      _ctx_as_gh_token "$target"
     fi
   else
     if [[ -n "$current" ]]; then
@@ -262,6 +281,7 @@ _ctx_profile_autoswitch() {
     fi
     unset CTX_ACTIVE_PROFILE 2>/dev/null || true
     unset CTX_ACTIVATION_TRIGGER 2>/dev/null || true
+    _ctx_as_gh_token ""
   fi
 }
 

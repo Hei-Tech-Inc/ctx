@@ -361,7 +361,7 @@ load_profile() {
   profile_exists "$name" || die "Profile '$name' not found. Run: ctx list"
   unset PROFILE_NAME GIT_NAME GIT_EMAIL WORK_DIR GITHUB_USER SSH_KEY_PATH
   unset AWS_PROFILE_NAME AZURE_SUBSCRIPTION AZURE_TENANT GCP_PROJECT GCP_ACCOUNT
-  unset KUBE_CONTEXT SECRET_KEYS EXTRA_ENVS
+  unset KUBE_CONTEXT SECRET_KEYS EXTRA_ENVS SIGNING_FORMAT SIGNING_KEY
   # shellcheck source=/dev/null
   source "$CTX_PROFILES_DIR/$name.conf"
 }
@@ -976,6 +976,29 @@ ctx_git_identity_set_rewrite() {
   git config --file "$file" --add "$key" 'git@github.com:'
   git config --file "$file" --add "$key" 'ssh://git@github.com/'
   log "Added github.com → $host rewrite to $file"
+}
+
+# Commit and tag signing in a git identity file. format: ssh | openpgp; empty format or key turns it off.
+ctx_git_identity_set_signing() {
+  local file="$1" fmt="$2" key="$3" k
+  for k in gpg.format user.signingkey commit.gpgsign tag.gpgsign; do
+    git config --file "$file" --unset-all "$k" 2>/dev/null || true
+  done
+  [[ -n "$fmt" && -n "$key" ]] || return 0
+  git config --file "$file" gpg.format "$fmt"
+  git config --file "$file" user.signingkey "$key"
+  git config --file "$file" commit.gpgsign true
+  git config --file "$file" tag.gpgsign true
+}
+
+# Normalise SIGNING_FORMAT input: ssh | openpgp | "" (off). Returns 1 for unknown values.
+ctx_signing_format_normalize() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    ssh) printf 'ssh' ;;
+    gpg|openpgp|pgp) printf 'openpgp' ;;
+    ""|none|off|no) printf '' ;;
+    *) return 1 ;;
+  esac
 }
 
 # ─── Safe SSH config (writes ONLY to ~/.ssh/ctx_config, never directly) ───────

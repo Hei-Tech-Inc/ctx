@@ -192,6 +192,25 @@ ctx setup --extend <profile>
 | `ctx list` | List all profiles |
 | `ctx status` | Show active profile + live service checks |
 | `ctx clone [-p <profile>] <url> [-- git-args...]` | `git clone` with GitHub URL rewrite for `github-<profile>` (see below) |
+| `ctx run [-p <profile>] -- <cmd>` | Run one command with the folder's profile identity (see **AI agents and scripts** below) |
+| `ctx env [-p <profile>] [--fish] [--secrets]` | Print that identity as `export` lines for `eval` |
+| `ctx agent-rules [--write [file]]` | Print, or write into `AGENTS.md`, instructions that tell AI agents how to use ctx |
+
+### AI agents and scripts
+
+`ctx run -- <command>` starts one process with the identity of the profile that owns the current folder (or `-p <profile>`), without touching any other terminal:
+
+```bash
+cd ~/clients/acme
+ctx run -- claude            # the agent and everything it spawns act as acme
+ctx run -- gh pr create      # acme's GitHub account, even if another tab uses a different one
+```
+
+It sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, `GIT_SSH_COMMAND` (the profile's key only), `GH_TOKEN` (from `gh auth token -u <GITHUB_USER>`), `AWS_PROFILE`, `CLOUDSDK_CORE_PROJECT`/`ACCOUNT`, `AZURE_SUBSCRIPTION_ID`, `EXTRA_ENVS` and the profile's secrets. kubectl has no per-process context variable, so `KUBE_CONTEXT` is not applied; use `kubectl --context` in that case.
+
+`ctx env` prints the same variables for `eval "$(ctx env)"` (or `ctx env --fish | source`). Secrets are left out unless you pass `--secrets`, so running it by accident doesn't print them.
+
+`ctx agent-rules --write` adds a short section to the repo's `AGENTS.md` (between markers, safe to re-run). It tells Cursor, Claude Code, Codex and similar agents to check identity with `ctx status --json`, run credentialed commands through `ctx run`, and stop rather than use `--no-verify` when `ctx guard` blocks a commit.
 
 ### Secrets (Keychain or `~/.ctx/secrets`)
 
@@ -307,6 +326,7 @@ The shell hook (`ctx install-hook` / `install.sh`) appends **`lib/ctx_autoswitch
 - Prints **`[ctx] → name`**, **`[ctx] ← old → new`**, or **`[ctx] ← name`** on stderr when the active profile changes — **off by default** (screen-share safe). Enable with **`ctx config autoswitch-notify on`**, or for one session: **`export CTX_AUTOSWITCH_NOTIFY=1`**.
 - Runs **`eval "$(ctx deactivate --eval bash)"`** (or fish equivalent) before switching, so secrets and env vars from the previous profile are cleared in your shell.
 - Calls **`CTX_AUTO_SWITCH=1 ctx use <name>`** so `~/.ctx/config` marks activation as **auto** (not manual-lock).
+- Sets **`GH_TOKEN`** for this terminal from `gh auth token -u <GITHUB_USER>` instead of running `gh auth switch`, which changes the account for every terminal on the machine. Two tabs in two client folders use two GitHub accounts at the same time. A `GH_TOKEN` you exported yourself is left alone. Needs gh 2.40 or newer; a manual `ctx use` still runs `gh auth switch`.
 - Exports **`CTX_PROMPT_SHOW`**, **`CTX_PROMPT_PROFILE`**, and **`CTX_PROMPT_WORK_DIR`** for your prompt: by default the prompt scope is **only** under each profile’s `WORK_DIR` for **up to two extra path segments** (configurable). Folders outside any profile (e.g. a random `cd` or alias) get **`CTX_PROMPT_SHOW=0`**. See **`ctx config prompt-workdir-depth`** and **`prompt_extra_paths`**.
 
 **Manual `ctx use`:** a normal `ctx use` sets **`active_source=manual`** and anchors to **`$PWD`** until you **`cd`** anywhere else; until then the hook will not replace your choice with directory inference.
@@ -424,7 +444,9 @@ SSH_KEY_PATH="$HOME/.ssh/id_ed25519_acme"
 AWS_PROFILE_NAME="acme-prod"
 ```
 
-Optional fields: `AZURE_SUBSCRIPTION`, `AZURE_TENANT`, `GCP_PROJECT`, `GCP_ACCOUNT`, `KUBE_CONTEXT`, `SECRET_KEYS`, `EXTRA_ENVS`.
+Optional fields: `AZURE_SUBSCRIPTION`, `AZURE_TENANT`, `GCP_PROJECT`, `GCP_ACCOUNT`, `KUBE_CONTEXT`, `SECRET_KEYS`, `EXTRA_ENVS`, `SIGNING_FORMAT`, `SIGNING_KEY`.
+
+**Commit signing:** `SIGNING_FORMAT=ssh` signs commits and tags in the profile's folder with its SSH key (or `SIGNING_KEY`, a key path); `SIGNING_FORMAT=openpgp` uses the GPG key ID in `SIGNING_KEY`. Setup asks after the git email, and `--config` accepts `SIGNING_FORMAT=ssh|gpg|none`. For GitHub's "Verified" badge, add the public key as a **signing** key: `gh ssh-key add ~/.ssh/<key>.pub --type signing`.
 
 ---
 

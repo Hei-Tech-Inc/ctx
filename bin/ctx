@@ -23,9 +23,15 @@ CTX_DRY_RUN=0
 CTX_QUIET=0
 CTX_JSON=0
 POSITIONAL=()
+_ctx_passthrough=0
 
 for arg in "$@"; do
+  if [[ $_ctx_passthrough -eq 1 ]]; then
+    POSITIONAL+=("$arg")
+    continue
+  fi
   case "$arg" in
+    --)           _ctx_passthrough=1; POSITIONAL+=("$arg") ;;
     --dry-run)    CTX_DRY_RUN=1 ;;
     --quiet|-q)   CTX_QUIET=1 ;;
     --no-gum)     HAS_GUM=false ;;
@@ -61,6 +67,9 @@ cmd_help() {
       "  status           Active profile + live checks" \
       "  clone            git clone with GitHub host rewrite for this profile" \
       "  workdir-prompt   Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)" \
+      "  run -- <cmd>     Run one command (e.g. an AI agent) with this folder's profile identity" \
+      "  env              Print the profile's identity as exports (eval; --secrets to include secrets)" \
+      "  agent-rules      Print or --write AI agent instructions (AGENTS.md)" \
       "" \
       "$(gum style --faint "SECRETS  (Keychain or ~/.ctx/secrets)")" \
       "  secret set   <profile> <KEY>" \
@@ -115,6 +124,9 @@ ${BOLD}DAILY USE${RESET}
   status                Active profile + live checks
   clone                 git clone with GitHub host rewrite (see README)
   workdir-prompt        Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)
+  run [-p name] -- <cmd>  Run one command (e.g. an AI agent) with this folder's profile identity
+  env [-p name]         Print the profile's identity as exports (eval; --secrets, --fish)
+  agent-rules [--write [file]]  Print or write AI agent instructions (default: AGENTS.md)
 
 ${BOLD}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${RESET}
   secret set   <profile> <KEY>
@@ -201,6 +213,9 @@ _ctx() {
     'uninstall:Remove ctx install'
     'doctor:Health check'
     'guard:Git identity guard (status, install, uninstall)'
+    'run:Run a command with the profile identity'
+    'env:Print profile identity as exports'
+    'agent-rules:Print or write AI agent instructions'
     'completion:Print shell completion'
     'version:Print version'
     'help:Show help'
@@ -268,7 +283,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard completion version help"
+  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -319,7 +334,7 @@ complete -c ctx -f
 
 complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall'
@@ -384,6 +399,9 @@ main() {
     uninstall)        cmd_uninstall "$@" ;;
     doctor)           cmd_doctor ;;
     guard)            cmd_guard "$@" ;;
+    env)              cmd_env "$@" ;;
+    run)              cmd_run "$@" ;;
+    agent-rules)      cmd_agent_rules "$@" ;;
     completion)       cmd_completion "${1:-zsh}" ;;
     version|-v|--version) echo "ctx version $CTX_VERSION" ;;
     help|-h|--help)   cmd_help "$@" ;;

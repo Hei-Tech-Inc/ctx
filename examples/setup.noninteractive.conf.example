@@ -34,6 +34,10 @@ GCP_PROJECT=
 GCP_ACCOUNT=
 KUBE_CONTEXT=
 
+# Commit signing: ssh (uses SSH_KEY_PATH unless SIGNING_KEY is set) | gpg (SIGNING_KEY=<key id>) | none
+SIGNING_FORMAT=none
+# SIGNING_KEY=
+
 # Batch setup only supports skipping secrets here; add later:
 #   ctx secret set <profile> GH_TOKEN
 SECRETS_MODE=skip

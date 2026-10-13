@@ -28,6 +28,28 @@ _ctx_setup_ssh_key_comment() {
   fi
 }
 
+# Sets SIGNING_FORMAT / SIGNING_KEY. SSH signing with an empty key uses the profile's SSH key.
+_ctx_setup_ask_signing() {
+  local keep="" choice
+  [[ -n "${SIGNING_FORMAT:-}" ]] && keep="Keep current (${SIGNING_FORMAT})"
+  choice=$(pick_one \
+    "Sign commits for this profile?" \
+    ${keep:+"$keep"} \
+    "No signing" \
+    "SSH signing (uses this profile's SSH key)" \
+    "GPG key")
+  case "$choice" in
+    "Keep current"*) ;;
+    "SSH signing"*) SIGNING_FORMAT=ssh SIGNING_KEY="" ;;
+    "GPG key")
+      SIGNING_FORMAT=openpgp
+      SIGNING_KEY=$(ask "GPG key ID (from: gpg --list-secret-keys --keyid-format=long)")
+      [[ -n "$SIGNING_KEY" ]] || SIGNING_FORMAT=""
+      ;;
+    *) SIGNING_FORMAT="" SIGNING_KEY="" ;;
+  esac
+}
+
 # Clone-only wizard: profile + SSH host alias (required) + optional folder/GitHub user
 _ctx_setup_interactive_clone() {
   local SETUP_STEPS=3 work_root key_mode loc
@@ -138,6 +160,7 @@ _ctx_setup_interactive_extend() {
       is_sensible_git_email "$GIT_EMAIL" && break
       warn "Expected user@domain.tld — try again or leave blank."
     done
+    _ctx_setup_ask_signing
   fi
 
   if [[ -z "${WORK_DIR:-}" ]] && ask_yn "Set a work directory (autoswitch + git includeIf + mise)?" "y"; then
@@ -357,6 +380,7 @@ cmd_import() {
   local GITHUB_USER="" AWS_PROFILE_NAME="" AZURE_SUBSCRIPTION="" AZURE_TENANT=""
   local GCP_PROJECT="" GCP_ACCOUNT="" KUBE_CONTEXT=""
   local SECRET_KEYS=() EXTRA_ENVS="" secret_mode="" where
+  local SIGNING_FORMAT="" SIGNING_KEY=""
 
   if $CTX_SETUP_BATCH; then
     local f wm ep slug sm
@@ -458,6 +482,12 @@ cmd_import() {
     GCP_PROJECT=$(ctx_setup_cfg_get "$f" GCP_PROJECT "")
     GCP_ACCOUNT=$(ctx_setup_cfg_get "$f" GCP_ACCOUNT "")
     KUBE_CONTEXT=$(ctx_setup_cfg_get "$f" KUBE_CONTEXT "")
+    SIGNING_FORMAT=$(ctx_signing_format_normalize "$(ctx_setup_cfg_get "$f" SIGNING_FORMAT "")") \
+      || die "setup --config: SIGNING_FORMAT must be ssh|gpg|none"
+    SIGNING_KEY=$(ctx_setup_cfg_get "$f" SIGNING_KEY "")
+    SIGNING_KEY="${SIGNING_KEY/#\~/$HOME}"
+    [[ "$SIGNING_FORMAT" != openpgp || -n "$SIGNING_KEY" ]] \
+      || die "setup --config: SIGNING_FORMAT=gpg needs SIGNING_KEY (GPG key ID)"
 
     sm=$(ctx_setup_cfg_get "$f" SECRETS_MODE "skip")
     case "$sm" in
@@ -517,6 +547,7 @@ cmd_import() {
     warn "That doesn't look like an email (expected user@domain.tld). You entered: '$GIT_EMAIL'"
     dim "  Edit and try again, or clear the field to skip for now."
   done
+  _ctx_setup_ask_signing
   echo ""
 
   # ── Working directory / onboarding mode ────────────────────────────────
@@ -851,7 +882,8 @@ cmd_import() {
     "$GITHUB_USER"  "$SSH_KEY_PATH" \
     "$AWS_PROFILE_NAME" "$AZURE_SUBSCRIPTION" "$AZURE_TENANT" \
     "$GCP_PROJECT" "$GCP_ACCOUNT" "$KUBE_CONTEXT" \
-    "${SECRET_KEYS[*]}" "$EXTRA_ENVS"
+    "${SECRET_KEYS[*]}" "$EXTRA_ENVS" \
+    "${SIGNING_FORMAT:-}" "${SIGNING_KEY:-}"
 
   # ── Final summary ────────────────────────────────────────────────────────
   echo ""
@@ -935,6 +967,7 @@ cmd_setup_help() {
       "     path → EXISTING_PATH=…     new → WORK_SLUG=… (under ctx work-root)" \
       "  IMPORT_MODE=auto | manual      SSH_MODE=generate | existing | skip" \
       "  Optional: GITHUB_USER  AWS_PROFILE_NAME  AZURE_*  GCP_*  KUBE_CONTEXT" \
+      "  SIGNING_FORMAT=ssh | gpg | none   SIGNING_KEY=…  (ssh defaults to the profile's SSH key)" \
       "  SECRETS_MODE=skip  (only batch value — then: ctx secret set <profile> KEY)" \
       "  AUTO_CONFIRM=true   OVERWRITE=true  (when replacing an existing profile)" \
       "" \
@@ -964,6 +997,7 @@ cmd_setup_help() {
     echo "  SETUP_SCOPE=clone|full, PROFILE_NAME, GIT_NAME, GIT_EMAIL"
     echo "  WORK_DIR=… or WORK_MODE=current|path|new (+ EXISTING_PATH or WORK_SLUG)"
     echo "  IMPORT_MODE, SSH_MODE, optional cloud + GITHUB_USER"
+    echo "  SIGNING_FORMAT=ssh|gpg|none, SIGNING_KEY (ssh defaults to the profile's SSH key)"
     echo "  SECRETS_MODE=skip, AUTO_CONFIRM, OVERWRITE"
     echo ""
     bold "Example"
@@ -1010,6 +1044,12 @@ _write_all() {
   local aws="$7"  azure_sub="$8"  azure_tenant="$9"
   local gcp="${10}" gcp_acct="${11}" kube="${12}"
   local secret_keys="${13}" extra_envs="${14}"
+  local signing_format="${15:-}" signing_key="${16:-}"
+  [[ "$signing_format" == ssh && -z "$signing_key" ]] && signing_key="$ssh_key"
+  if [[ -n "$signing_format" && -z "$signing_key" ]]; then
+    warn "Commit signing skipped: no key (SSH signing needs an SSH key for this profile)"
+    signing_format=""
+  fi
 
   # 1. Profile .conf — metadata only, no secrets
   mkdir -p "$CTX_PROFILES_DIR"
@@ -1031,6 +1071,8 @@ _write_all() {
     printf 'KUBE_CONTEXT=%q\n' "$kube"
     printf 'SECRET_KEYS=%q\n' "$secret_keys"
     printf 'EXTRA_ENVS=%q\n' "$extra_envs"
+    printf 'SIGNING_FORMAT=%q\n' "$signing_format"
+    printf 'SIGNING_KEY=%q\n' "$signing_key"
   } > "$CTX_PROFILES_DIR/${profile}.conf"
   chmod 600 "$CTX_PROFILES_DIR/${profile}.conf"
   success "Profile config written"
@@ -1046,6 +1088,13 @@ _write_all() {
   else
     warn "Skipped git email in identity file (invalid): $git_email"
     success "Git identity file: ~/.config/git/ctx-${profile} (name only — fix email and re-run setup)"
+  fi
+  ctx_git_identity_set_signing "$git_identity_file" "$signing_format" "$signing_key"
+  if [[ "$signing_format" == ssh ]]; then
+    success "Commits signed with SSH key: $signing_key"
+    info "  Add ${signing_key%.pub}.pub on GitHub as a *signing* key: gh ssh-key add ${signing_key%.pub}.pub --type signing"
+  elif [[ "$signing_format" == openpgp ]]; then
+    success "Commits signed with GPG key: $signing_key"
   fi
 
   # 3. ~/.gitconfig includeIf — only one line added, deduped

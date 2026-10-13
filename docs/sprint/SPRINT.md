@@ -27,6 +27,9 @@ Update this file when an item ships (check the box, link PR or commit).
 | B2 | Extend **`--json`** to **`ctx list`**-style data from **`verify`** / **`doctor`** (optional) | M | [ ] | Opt-in; no breaking change to default TTY output |
 | B3 | **Hook hardening**: idempotent bash `PROMPT_COMMAND` (no duplicate autoswitch prefix) | S | [x] | Strip `_ctx_profile_autoswitch` / legacy `_ctx_auto_switch` before prepend |
 | B4 | **`ctx guard`**: git hooks that block wrong-identity commits and wrong-alias pushes | S | [x] | `test_guard_git_hooks`: email mismatch blocked, chaining to `.git/hooks`, bypass, uninstall, refuses foreign `core.hooksPath` |
+| B5 | **Per-terminal `GH_TOKEN`** in the autoswitch hook instead of global `gh auth switch` | S | [x] | Hook test: token per profile, cleared outside, user `GH_TOKEN` untouched |
+| B6 | **`ctx run` / `ctx env` / `ctx agent-rules`** for AI agents and scripts | M | [x] | `test_ctx_run_env_agent_rules` |
+| B7 | **Per-profile commit signing** (SSH / GPG) | S | [x] | `test_setup_commit_signing`: real signed commit in `WORK_DIR` |
 
 ## Phase C — Documentation & contributor experience
 

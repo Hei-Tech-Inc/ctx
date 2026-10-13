@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`ctx run [-p NAME] -- <cmd>`:** runs one command (for example an AI agent, `gh`, `terraform`) with the folder's profile identity: git author/committer, `GIT_SSH_COMMAND` with only the profile's key, `GH_TOKEN`, AWS/GCP/Azure variables, `EXTRA_ENVS` and secrets. Nothing outside that process changes.
+- **`ctx env [-p NAME] [--fish] [--secrets]`:** prints the same identity as `export` lines for `eval`; secrets only with `--secrets`.
+- **`ctx agent-rules [--write [FILE]]`:** prints, or upserts into `AGENTS.md` between markers, instructions for AI coding agents (check identity, use `ctx run`, don't bypass `ctx guard`).
+- **Per-profile commit signing:** setup asks whether to sign commits (SSH key or GPG key ID); `--config` takes `SIGNING_FORMAT=ssh|gpg|none` and `SIGNING_KEY`. Written to the profile's git identity file as `gpg.format`, `user.signingkey`, `commit.gpgsign` and `tag.gpgsign`.
 - **Plain GitHub URLs inside client folders:** each profile's git identity file now rewrites `git@github.com:` and `ssh://git@github.com/` to `git@github-<profile>:`, so `git clone`, fetch and push in that profile's `WORK_DIR` use its SSH key without `ctx clone` or editing remotes. Written by `ctx setup`; existing profiles pick it up on the next `ctx use`. Only added when the profile has a `github-<profile>` SSH host; HTTPS is untouched.
 - **`ctx guard install|uninstall|status`:** opt-in global git hooks that block commits whose author or committer email doesn't match the repo's profile, and pushes to another profile's `github-<name>` SSH alias. Hooks chain to each repo's own `.git/hooks`, can be skipped with `--no-verify` or `CTX_GUARD=off`, and never overwrite an existing global `core.hooksPath`. `ctx doctor` shows whether the guard is on.
 - **`ctx config autoswitch-notify on|off`:** `[ctx] ←/→` transition lines from the shell autoswitch hook are **off by default** (screen-share / new-tab privacy). Opt in with config or session env **`CTX_AUTOSWITCH_NOTIFY=1`**. Re-run **`ctx install-hook`** (or **`ctx upgrade`**) so the installed rc hook picks up the change.
@@ -30,6 +34,8 @@ All notable changes to this project will be documented in this file.
 - **README:** added **Enterprise secrets (Vault / 1Password)** — built-in backends vs external vaults, how `mise` hooks inject values, and practical patterns (`op run`, Vault Agent, `pass`).
 
 ### Fixed
+- **GitHub account per terminal:** the autoswitch hook (bash, zsh, fish) now sets `GH_TOKEN` for its own terminal from `gh auth token -u <GITHUB_USER>` instead of `gh auth switch`, which changed the account for every open terminal. A user-set `GH_TOKEN` is left alone; manual `ctx use` still switches globally.
+- **Global flags after `--`:** `--json`, `-q`, `--dry-run` and `--no-gum` after `--` are passed to the wrapped command (`ctx run`, `ctx clone`) instead of being consumed by ctx.
 - **Autoswitch hook latency:** the bash/zsh hook now resolves profiles with shell builtins only (no `grep`/`cut`/`awk`/`git` subprocesses per profile), cutting per-prompt cost from ~100 ms to ~1 ms with 10 profiles. Profile `WORK_DIR` values that need shell expansion beyond `$HOME`/`~` still fall back to sourcing the file.
 - **Config writes:** `~/.ctx/config` updates (`active`, `work-root`, `secret-provider`) no longer use `sed`, so values containing `&`, `|`, or `\` are stored literally; writes are atomic (temp file + `mv`) and multi-line values are rejected.
 - **Auto-switch (sibling clients):** when one profile’s **`WORK_DIR`** is a **parent** of several client dirs (e.g. `…/clients`), ctx now prefers **`…/clients/<segment>.conf`** named after the first path segment under that prefix when that profile exists and **`…/clients/<segment>`** is a directory (even if that `.conf` omits **`WORK_DIR`**).
