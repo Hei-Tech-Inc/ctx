@@ -31,6 +31,7 @@ cmd_use() {
       ssh-add "$SSH_KEY_PATH" 2>/dev/null || warn "SSH key load failed"
     fi
   fi
+  ctx_git_identity_set_rewrite "$name" || true
 
   # 3. AWS
   if [[ -n "${AWS_PROFILE_NAME:-}" ]]; then
@@ -1564,7 +1565,8 @@ _ctx_guard_check_push() {
       grep -Eq "^Host[[:space:]]+github-${prof}([[:space:]]|\$)" "$CTX_SSH_CONFIG" 2>/dev/null || return 0
       {
         warn "ctx guard: '$remote' pushes via github.com, not github-${prof}, so profile '$prof's SSH key may not be used."
-        echo "  Fix: git remote set-url $remote $(github_clone_url_for_profile "$prof" "$url" y)"
+        echo "  Fix: ctx use $prof   (routes github.com through github-${prof} for repos in its WORK_DIR)"
+        echo "   or: git remote set-url $remote $(github_clone_url_for_profile "$prof" "$url" y)"
       } >&2
       ;;
   esac

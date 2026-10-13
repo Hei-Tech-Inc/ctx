@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Plain GitHub URLs inside client folders:** each profile's git identity file now rewrites `git@github.com:` and `ssh://git@github.com/` to `git@github-<profile>:`, so `git clone`, fetch and push in that profile's `WORK_DIR` use its SSH key without `ctx clone` or editing remotes. Written by `ctx setup`; existing profiles pick it up on the next `ctx use`. Only added when the profile has a `github-<profile>` SSH host; HTTPS is untouched.
 - **`ctx guard install|uninstall|status`:** opt-in global git hooks that block commits whose author or committer email doesn't match the repo's profile, and pushes to another profile's `github-<name>` SSH alias. Hooks chain to each repo's own `.git/hooks`, can be skipped with `--no-verify` or `CTX_GUARD=off`, and never overwrite an existing global `core.hooksPath`. `ctx doctor` shows whether the guard is on.
 - **`ctx config autoswitch-notify on|off`:** `[ctx] ←/→` transition lines from the shell autoswitch hook are **off by default** (screen-share / new-tab privacy). Opt in with config or session env **`CTX_AUTOSWITCH_NOTIFY=1`**. Re-run **`ctx install-hook`** (or **`ctx upgrade`**) so the installed rc hook picks up the change.
 - **Autoswitch hook sourcing:** `ctx install-hook` / installer now write a small **source** stub in the shell rc (not a full paste of `ctx_autoswitch.bash`), so upgrades refresh mute/notify behavior without re-editing the rc. Re-run **`ctx install-hook`** once to replace an old embedded copy.

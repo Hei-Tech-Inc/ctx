@@ -458,6 +458,47 @@ test_guard_git_hooks() {
   pass "ctx guard (commit email, push alias, chaining, bypass, uninstall)"
 }
 
+test_git_identity_github_rewrite() {
+  (
+    set -euo pipefail
+    local td id
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    # shellcheck source=../lib/core.sh
+    source "$ROOT_DIR/lib/core.sh"
+    CTX_SSH_CONFIG="$HOME/.ssh/ctx_config"
+    mkdir -p "$HOME/.ssh" "$HOME/.config/git" "$td/w/acme/r" "$td/out/r"
+    id="$HOME/.config/git/ctx-acme"
+    git config --file "$id" user.email dev@acme.com
+    printf '[includeIf "gitdir:%s/"]\n\tpath = %s\n' "$td/w/acme" "$id" >"$HOME/.gitconfig"
+
+    ctx_git_identity_set_rewrite acme
+    [[ -z "$(git config --file "$id" --get-all url.git@github-acme:.insteadOf || true)" ]] \
+      || { echo "rewrite added without SSH host"; exit 1; }
+
+    printf 'Host github-acme\n  HostName github.com\n' >"$CTX_SSH_CONFIG"
+    ctx_git_identity_set_rewrite acme
+    ctx_git_identity_set_rewrite acme
+    [[ "$(git config --file "$id" --get-all url.git@github-acme:.insteadOf | wc -l | tr -d ' ')" == 2 ]] \
+      || { echo "rewrite not idempotent"; exit 1; }
+
+    git -C "$td/w/acme/r" init -q
+    git -C "$td/w/acme/r" remote add origin git@github.com:org/r.git
+    [[ "$(git -C "$td/w/acme/r" ls-remote --get-url origin)" == "git@github-acme:org/r.git" ]] \
+      || { echo "inside: $(git -C "$td/w/acme/r" ls-remote --get-url origin)"; exit 1; }
+    git -C "$td/w/acme/r" remote set-url origin ssh://git@github.com/org/r.git
+    [[ "$(git -C "$td/w/acme/r" ls-remote --get-url origin)" == "git@github-acme:org/r.git" ]] \
+      || { echo "ssh:// form not rewritten"; exit 1; }
+
+    git -C "$td/out/r" init -q
+    git -C "$td/out/r" remote add origin git@github.com:org/r.git
+    [[ "$(git -C "$td/out/r" ls-remote --get-url origin)" == "git@github.com:org/r.git" ]] \
+      || { echo "rewrite leaked outside WORK_DIR"; exit 1; }
+    rm -rf "$td"
+  ) || fail "git identity github.com rewrite"
+  pass "git identity rewrites github.com to github-<profile> inside WORK_DIR only"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -477,5 +518,6 @@ test_autoswitch_hook_resolution
 test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 test_guard_git_hooks
+test_git_identity_github_rewrite
 
 echo "All tests passed."

@@ -963,6 +963,21 @@ github_clone_url_for_profile() {
   fi
 }
 
+# Make plain git@github.com: / ssh://git@github.com/ remotes use Host github-<profile>
+# for every repo under the profile's WORK_DIR (the identity file is loaded via includeIf;
+# git clone re-reads it once the new repo exists). No-op without that SSH host. Idempotent.
+ctx_git_identity_set_rewrite() {
+  local profile="$1" host="github-$1"
+  local file="$HOME/.config/git/ctx-${profile}" key="url.git@github-${profile}:.insteadOf"
+  [[ -f "$file" ]] || return 0
+  grep -q "^Host ${host}$" "$CTX_SSH_CONFIG" 2>/dev/null || return 0
+  git config --file "$file" --get-all "$key" 2>/dev/null | grep -qx 'git@github.com:' && return 0
+  git config --file "$file" --unset-all "$key" 2>/dev/null || true
+  git config --file "$file" --add "$key" 'git@github.com:'
+  git config --file "$file" --add "$key" 'ssh://git@github.com/'
+  log "Added github.com → $host rewrite to $file"
+}
+
 # ─── Safe SSH config (writes ONLY to ~/.ssh/ctx_config, never directly) ───────
 # One-time: add a single Include line to ~/.ssh/config pointing to our file
 ensure_ssh_include() {

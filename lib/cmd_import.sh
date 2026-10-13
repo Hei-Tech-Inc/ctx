@@ -876,25 +876,32 @@ cmd_import() {
     success "Profile '${PROFILE_NAME}' updated."
     info "Check:  ctx status"
     info "Verify: ctx verify $PROFILE_NAME"
-  elif $HAS_GUM; then
-    gum style \
-      --border rounded --border-foreground 78 \
-      --padding "0 2" --margin "1 0" \
-      "Profile '${PROFILE_NAME}' created" \
-      "$(dim "Activate: ctx use ${PROFILE_NAME}")" \
-      "$(dim "Check:    ctx status")" \
-      "$(dim "Clone:    git clone git@github-${PROFILE_NAME}:OWNER/REPO.git")" \
-      "$(dim "Never:    git@github.com — uses the wrong SSH key for this profile")" \
-      "$(dim "Verify:   ctx verify ${PROFILE_NAME}")" \
-      "$(dim "Issues:   ctx doctor")"
   else
-    success "Profile '${BOLD}${PROFILE_NAME}${RESET}${GREEN}' created."
-    info "Activate: ctx use $PROFILE_NAME"
-    info "Check:    ctx status"
-    info "Clone:    git clone git@github-${PROFILE_NAME}:OWNER/REPO.git"
-    dim "  Avoid git@github.com here — it won't use this profile's key."
-    info "Verify:   ctx verify $PROFILE_NAME"
-    info "Issues:   ctx doctor"
+    local clone_note="Outside ${WORK_DIR:-its folder}, git@github.com won't use this profile's key."
+    if git config --file "$HOME/.config/git/ctx-${PROFILE_NAME}" \
+        --get-all "url.git@github-${PROFILE_NAME}:.insteadOf" &>/dev/null; then
+      clone_note="Inside ${WORK_DIR}, plain git@github.com URLs use this profile's key too."
+    fi
+    if $HAS_GUM; then
+      gum style \
+        --border rounded --border-foreground 78 \
+        --padding "0 2" --margin "1 0" \
+        "Profile '${PROFILE_NAME}' created" \
+        "$(dim "Activate: ctx use ${PROFILE_NAME}")" \
+        "$(dim "Check:    ctx status")" \
+        "$(dim "Clone:    git clone git@github-${PROFILE_NAME}:OWNER/REPO.git")" \
+        "$(dim "          ${clone_note}")" \
+        "$(dim "Verify:   ctx verify ${PROFILE_NAME}")" \
+        "$(dim "Issues:   ctx doctor")"
+    else
+      success "Profile '${BOLD}${PROFILE_NAME}${RESET}${GREEN}' created."
+      info "Activate: ctx use $PROFILE_NAME"
+      info "Check:    ctx status"
+      info "Clone:    git clone git@github-${PROFILE_NAME}:OWNER/REPO.git"
+      dim "  ${clone_note}"
+      info "Verify:   ctx verify $PROFILE_NAME"
+      info "Issues:   ctx doctor"
+    fi
   fi
   echo ""
 }
@@ -1055,9 +1062,14 @@ _write_all() {
     local ssh_host="github-${profile}"
     if ctx_ssh_add_host "$ssh_host" "$ssh_key"; then
       success "SSH host '$ssh_host' → ~/.ssh/ctx_config"
-      info "  Clone repos: git clone git@github-${profile}:org/repo.git"
     else
       dim "  SSH host '$ssh_host' already in ctx_config"
+    fi
+    if [[ -n "$work_dir" ]]; then
+      ctx_git_identity_set_rewrite "$profile"
+      info "  Inside $work_dir, git@github.com: URLs use $ssh_host automatically"
+    else
+      info "  Clone repos: git clone git@github-${profile}:org/repo.git"
     fi
   fi
 

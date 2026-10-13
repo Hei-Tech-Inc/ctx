@@ -350,7 +350,16 @@ Each profile gets its own SSH host alias in `~/.ssh/ctx_config`, shaped like:
 github-<profile>
 ```
 
-**Clone private repos using that host**, so Git uses the correct key:
+**Inside a profile's `WORK_DIR`, plain GitHub URLs just work.** The profile's git identity file (`~/.config/git/ctx-<profile>`, loaded by `includeIf`) rewrites `git@github.com:` and `ssh://git@github.com/` to `git@github-<profile>:`. That covers `git clone` run in the client folder and every existing repo there:
+
+```bash
+cd ~/clients/acme
+git clone git@github.com:Acme-Corp/example-app.git   # uses github-acme's key
+```
+
+Existing profiles get the rewrite the next time you run `ctx use <profile>` (or `cd` into the folder with autoswitch on). HTTPS URLs are left alone.
+
+**Outside `WORK_DIR`**, clone with the host alias directly:
 
 ```bash
 git clone git@github-acme:Acme-Corp/example-app.git
@@ -372,7 +381,7 @@ For arbitrary `git clone` flags, pass them after `--`:
 ctx clone -- -b main --depth 1 git@github.com:Acme-Corp/example-app.git ./example-app
 ```
 
-Avoid `git@github.com:...` for client work — it often picks your *default* SSH key and GitHub will respond with “repository not found” for private repos.
+Outside a profile's `WORK_DIR`, `git@github.com:...` uses your *default* SSH key, and GitHub responds with “repository not found” for private repos the default account can't see.
 
 Your git author identity for repos under the client folder comes from `~/.gitconfig` `includeIf` → `~/.config/git/ctx-<profile>`, and `mise.toml` hooks also set local `git config` when `mise` activates.
 
