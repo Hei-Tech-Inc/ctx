@@ -82,6 +82,7 @@ cmd_help() {
       "  upgrade [--check] Re-run installer, or check for newer version" \
       "  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe" \
       "  doctor           Machine-wide: tools, hooks, SSH layout, profiles" \
+      "  guard [install|uninstall]  Block commits/pushes with the wrong profile identity" \
       "  version          Print version" \
       "  help setup       Full setup wizard + --config reference" \
       "" \
@@ -136,6 +137,7 @@ ${BOLD}MAINTENANCE${RESET}
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles
+  guard [install|uninstall]  Block commits/pushes with the wrong profile identity
   completion <zsh|bash|fish> Print shell completion script
   version               Print version
 
@@ -198,6 +200,7 @@ _ctx() {
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
     'doctor:Health check'
+    'guard:Git identity guard (status, install, uninstall)'
     'completion:Print shell completion'
     'version:Print version'
     'help:Show help'
@@ -227,6 +230,7 @@ _ctx() {
         help) _describe 'help topics' help_topics ;;
         secret) local sub=('set' 'get' 'list' 'delete' 'migrate'); _describe 'subcommands' sub ;;
         config) local sub=('show' 'work-root' 'secret-provider' 'prompt-workdir-depth' 'prompt-extra-paths' 'autoswitch-notify' 'export' 'import'); _describe 'subcommands' sub ;;
+        guard) local sub=('status' 'install' 'uninstall'); _describe 'subcommands' sub ;;
         upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
         uninstall) local sub=('--purge'); _describe 'uninstall flags' sub ;;
         completion) local sh=('zsh' 'bash' 'fish'); _describe 'shells' sh ;;
@@ -264,7 +268,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help"
+  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -290,6 +294,7 @@ _ctx_comp() {
     clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     secret) COMPREPLY=($(compgen -W "set get list delete migrate" -- "$cur")) ;;
     config) COMPREPLY=($(compgen -W "show work-root secret-provider prompt-workdir-depth prompt-extra-paths autoswitch-notify export import" -- "$cur")) ;;
+    guard) COMPREPLY=($(compgen -W "status install uninstall" -- "$cur")) ;;
     upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     uninstall) COMPREPLY=($(compgen -W "--purge" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
@@ -314,9 +319,10 @@ complete -c ctx -f
 
 complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
+complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
@@ -377,6 +383,7 @@ main() {
     upgrade)          cmd_upgrade "$@" ;;
     uninstall)        cmd_uninstall "$@" ;;
     doctor)           cmd_doctor ;;
+    guard)            cmd_guard "$@" ;;
     completion)       cmd_completion "${1:-zsh}" ;;
     version|-v|--version) echo "ctx version $CTX_VERSION" ;;
     help|-h|--help)   cmd_help "$@" ;;

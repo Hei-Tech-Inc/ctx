@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`ctx guard install|uninstall|status`:** opt-in global git hooks that block commits whose author or committer email doesn't match the repo's profile, and pushes to another profile's `github-<name>` SSH alias. Hooks chain to each repo's own `.git/hooks`, can be skipped with `--no-verify` or `CTX_GUARD=off`, and never overwrite an existing global `core.hooksPath`. `ctx doctor` shows whether the guard is on.
 - **`ctx config autoswitch-notify on|off`:** `[ctx] ←/→` transition lines from the shell autoswitch hook are **off by default** (screen-share / new-tab privacy). Opt in with config or session env **`CTX_AUTOSWITCH_NOTIFY=1`**. Re-run **`ctx install-hook`** (or **`ctx upgrade`**) so the installed rc hook picks up the change.
 - **Autoswitch hook sourcing:** `ctx install-hook` / installer now write a small **source** stub in the shell rc (not a full paste of `ctx_autoswitch.bash`), so upgrades refresh mute/notify behavior without re-editing the rc. Re-run **`ctx install-hook`** once to replace an old embedded copy.
 - **`ctx workdir-prompt`:** prints `work_dir='WORK_DIR=<root>'` when the current directory is in the same prompt scope as **`CTX_PROMPT_*`** (depth + **`prompt_extra_paths`**); otherwise prints nothing — useful for **`PS1`** without grepping profile files.

@@ -259,10 +259,33 @@ Secrets are exported into your shell session by `ctx use` and loaded into your e
 | `ctx upgrade --check` | Compare installed version to `main` on GitHub (no install) |
 | `ctx uninstall [--purge]` | Remove `ctx` binary + lib from install location; `--purge` deletes `~/.ctx` |
 | `ctx doctor` | Full health check (see **doctor vs verify** below) |
+| `ctx guard [status\|install\|uninstall]` | Block commits and pushes made with the wrong profile identity (see **Git guard** below) |
 | `ctx completion <zsh\|bash\|fish>` | Print shell completion script |
 | `ctx version` | Print version |
 
 **doctor vs verify:** run **`ctx doctor`** after install or when something feels “broken globally” (missing tools, hooks, SSH include). Run **`ctx verify`** (optional profile name) when Git/SSH/`gh` misbehave for **that client** — it performs a live GitHub SSH auth check for `github-<profile>`.
+
+### Git guard
+
+`ctx guard install` stops the two most common multi-account mistakes before they reach a client:
+
+- **Commit with the wrong email.** In a repo under a profile's `WORK_DIR` (or a `.ctx` override), the commit is blocked unless the author and committer email match that profile's `GIT_EMAIL`. This catches repo-local `user.email` overrides, `GIT_AUTHOR_EMAIL` in the environment, and repos outside the `includeIf` path.
+- **Push with another profile's SSH key.** Pushing to `git@github-<other-profile>:…` from a repo that belongs to a different profile is blocked. Pushing via plain `github.com` prints a warning with the `git remote set-url` fix.
+
+```
+$ git commit
+✗ ctx guard: commit blocked — author email is 'me@personal.com', but this repo belongs to profile 'acme' (dev@acme.com).
+  Fix:       git config user.email 'dev@acme.com'
+  Skip once: git commit --no-verify    Turn off: CTX_GUARD=off
+```
+
+How it works: it sets the global `core.hooksPath` to `~/.ctx/git-hooks`. Every hook there hands off to the repo's own `.git/hooks/<name>`, so pre-commit, Git LFS and other per-repo hooks keep running. Repos outside any profile are not checked.
+
+Limits:
+- It refuses to install if you already have a global `core.hooksPath`. Call `ctx guard check pre-commit` and `ctx guard check pre-push "$@"` from your own hooks instead (exit code 3 means block).
+- Repos that set their own `core.hooksPath` (for example husky) skip the guard. `ctx guard status` tells you when that happens.
+- The profile is resolved at the repo root, so a `.ctx` file in a monorepo subfolder is not used.
+- `ctx guard uninstall` removes it.
 
 ### Flags
 

@@ -1224,6 +1224,12 @@ cmd_doctor() {
     dim "  SSH: ~/.ssh not present yet (normal before first key or setup)"
   fi
 
+  if _ctx_guard_installed; then
+    success "Git guard: on (wrong-identity commits/pushes are blocked)"
+  else
+    dim "  Git guard: off (optional) — ctx guard install"
+  fi
+
   echo ""
   hr
 
@@ -1449,4 +1455,215 @@ EOF
   success "SSH config isolated to $CTX_SSH_CONFIG"
 
   info "Reload your shell: source $shell_rc"
+}
+
+# ─── guard ────────────────────────────────────────────────────────────────────
+# Global git hooks (core.hooksPath) that stop commits/pushes made with another
+# profile's identity. Every stub chains to the repo's own .git/hooks/<name>.
+# reference-transaction is left out: it fires on every ref update.
+CTX_GUARD_HOOK_NAMES=(applypatch-msg pre-applypatch post-applypatch pre-commit
+  pre-merge-commit prepare-commit-msg commit-msg post-commit pre-rebase
+  post-checkout post-merge pre-push post-rewrite pre-auto-gc
+  sendemail-validate post-index-change)
+# Exit code of `ctx guard check` that makes the hook abort; any other failure lets git continue.
+CTX_GUARD_BLOCK=3
+
+_ctx_guard_dir() { printf '%s' "$CTX_DIR/git-hooks"; }
+
+_ctx_guard_installed() {
+  local cur
+  cur="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+  [[ "${cur/#\~/$HOME}" == "$(_ctx_guard_dir)" && -x "$(_ctx_guard_dir)/pre-commit" ]]
+}
+
+_ctx_guard_write_hook() {
+  local name="$1" file="$2"
+  {
+    echo '#!/bin/sh'
+    echo '# Written by "ctx guard install"; changes are overwritten.'
+    if [[ "$name" == pre-commit || "$name" == pre-push ]]; then
+      cat <<EOF
+if [ "\${CTX_GUARD:-on}" != off ] && command -v ctx >/dev/null 2>&1; then
+  ctx guard check $name "\$@" </dev/null
+  [ \$? -eq $CTX_GUARD_BLOCK ] && exit 1
+fi
+EOF
+    fi
+    cat <<EOF
+h="\$(git rev-parse --git-common-dir 2>/dev/null)/hooks/$name"
+[ -x "\$h" ] && exec "\$h" "\$@"
+exit 0
+EOF
+  } >"$file"
+  chmod 755 "$file"
+}
+
+_ctx_guard_profile_var() {
+  bash -c 'source "$1" 2>/dev/null || true; printf %s "${!2:-}"' _ "$CTX_PROFILES_DIR/$1.conf" "$2"
+}
+
+# "Name <email> 1700000000 +0000" → email
+_ctx_guard_ident_email() {
+  local id="${1#*<}"
+  printf '%s' "${id%%>*}"
+}
+
+_ctx_guard_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# git@host:path, ssh://user@host:port/path, https://host/path → host
+_ctx_guard_url_host() {
+  local u="$1"
+  case "$u" in
+    *://*) u="${u#*://}"; u="${u%%/*}"; u="${u##*@}"; u="${u%%:*}" ;;
+    *:*)   u="${u%%:*}"; u="${u##*@}" ;;
+    *)     u="" ;;
+  esac
+  printf '%s' "$u"
+}
+
+_ctx_guard_check_commit() {
+  local prof="$1" want got who fix
+  want="$(_ctx_guard_profile_var "$prof" GIT_EMAIL)"
+  [[ -n "$want" ]] || return 0
+  for who in AUTHOR COMMITTER; do
+    got="$(_ctx_guard_ident_email "$(git var "GIT_${who}_IDENT" 2>/dev/null)")"
+    [[ "$(_ctx_guard_lc "$got")" == "$(_ctx_guard_lc "$want")" ]] && continue
+    # git exports GIT_AUTHOR_EMAIL to hooks, so an env override shows up as a config mismatch.
+    if [[ "$(_ctx_guard_lc "$(git config --get user.email 2>/dev/null)")" != "$(_ctx_guard_lc "$got")" ]]; then
+      fix="unset GIT_AUTHOR_EMAIL GIT_COMMITTER_EMAIL EMAIL   (set in your environment)"
+    elif [[ -n "$(git config --local --get user.email 2>/dev/null)" ]]; then
+      fix="git config --local --unset user.email   (repo-local override)"
+    else
+      fix="git config user.email '$want'"
+    fi
+    {
+      error "ctx guard: commit blocked — $(_ctx_guard_lc "$who") email is '${got:-unset}', but this repo belongs to profile '$prof' ($want)."
+      echo "  Fix:       $fix"
+      echo "  Skip once: git commit --no-verify    Turn off: CTX_GUARD=off"
+    } >&2
+    return "$CTX_GUARD_BLOCK"
+  done
+}
+
+_ctx_guard_check_push() {
+  local prof="$1" remote="$2" url="$3" host other path
+  host="$(_ctx_guard_url_host "$url")"
+  case "$host" in
+    github-*)
+      other="${host#github-}"
+      [[ "$other" != "$prof" && -f "$CTX_PROFILES_DIR/${other}.conf" ]] || return 0
+      if [[ "$url" == *://* ]]; then path="${url#*://}"; path="${path#*/}"; else path="${url#*:}"; fi
+      {
+        error "ctx guard: push blocked — '$remote' uses profile '$other' (host $host), but this repo belongs to profile '$prof'."
+        echo "  Fix:       git remote set-url $remote git@github-${prof}:${path}"
+        echo "  Skip once: git push --no-verify    Turn off: CTX_GUARD=off"
+      } >&2
+      return "$CTX_GUARD_BLOCK"
+      ;;
+    github.com)
+      grep -Eq "^Host[[:space:]]+github-${prof}([[:space:]]|\$)" "$CTX_SSH_CONFIG" 2>/dev/null || return 0
+      {
+        warn "ctx guard: '$remote' pushes via github.com, not github-${prof}, so profile '$prof's SSH key may not be used."
+        echo "  Fix: git remote set-url $remote $(github_clone_url_for_profile "$prof" "$url" y)"
+      } >&2
+      ;;
+  esac
+  return 0
+}
+
+# Hook entry point: ctx guard check pre-commit | pre-push <remote> <url>
+_ctx_guard_check() {
+  local hook="${1:-}" top prof
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
+  prof="$(ctx_resolve_path_profile "$top" "$CTX_PROFILES_DIR" 2>/dev/null)" || return 0
+  [[ -n "$prof" ]] || return 0
+  case "$hook" in
+    pre-commit) _ctx_guard_check_commit "$prof" ;;
+    pre-push)   _ctx_guard_check_push "$prof" "${2:-}" "${3:-}" ;;
+  esac
+}
+
+_ctx_guard_install() {
+  has git || die "git not found"
+  local dir cur name
+  dir="$(_ctx_guard_dir)"
+  cur="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+  if [[ -n "$cur" && "${cur/#\~/$HOME}" != "$dir" ]]; then
+    error "git already has a global core.hooksPath: $cur"
+    info "Either unset it (git config --global --unset core.hooksPath) and re-run,"
+    info "or call these from your own hooks (exit $CTX_GUARD_BLOCK means block):"
+    info "  pre-commit: ctx guard check pre-commit"
+    info "  pre-push:   ctx guard check pre-push \"\$@\""
+    return 1
+  fi
+  if [[ "${CTX_DRY_RUN:-0}" == "1" ]]; then
+    info "[dry-run] Would write ${#CTX_GUARD_HOOK_NAMES[@]} hooks to $dir"
+    info "[dry-run] Would run: git config --global core.hooksPath $dir"
+    return 0
+  fi
+  mkdir -p "$dir"
+  for name in "${CTX_GUARD_HOOK_NAMES[@]}"; do
+    _ctx_guard_write_hook "$name" "$dir/$name"
+  done
+  git config --global core.hooksPath "$dir"
+  log "guard installed: $dir"
+  success "ctx guard on: commits and pushes in client repos are checked against the profile"
+  dim "  Repo hooks in .git/hooks still run. Repos that set their own core.hooksPath (e.g. husky) skip the guard."
+  dim "  Skip once: --no-verify   Off for a session: CTX_GUARD=off   Remove: ctx guard uninstall"
+}
+
+_ctx_guard_uninstall() {
+  local dir name
+  dir="$(_ctx_guard_dir)"
+  if _ctx_guard_installed || [[ -d "$dir" ]]; then
+    if [[ "${CTX_DRY_RUN:-0}" == "1" ]]; then
+      info "[dry-run] Would unset core.hooksPath and remove $dir"
+      return 0
+    fi
+    _ctx_guard_installed && git config --global --unset core.hooksPath
+    for name in "${CTX_GUARD_HOOK_NAMES[@]}"; do rm -f "$dir/$name"; done
+    rmdir "$dir" 2>/dev/null || true
+    log "guard removed"
+    success "ctx guard off"
+  else
+    info "ctx guard is not installed"
+  fi
+}
+
+_ctx_guard_status() {
+  local top prof want got local_hp
+  if _ctx_guard_installed; then
+    success "ctx guard: on ($(_ctx_guard_dir))"
+  else
+    warn "ctx guard: off  →  ctx guard install"
+  fi
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
+  prof="$(ctx_resolve_path_profile "$top" "$CTX_PROFILES_DIR" 2>/dev/null || true)"
+  if [[ -z "$prof" ]]; then
+    dim "  This repo is not under any profile — nothing to check."
+    return 0
+  fi
+  local_hp="$(git config --local --get core.hooksPath 2>/dev/null || true)"
+  [[ -n "$local_hp" ]] && warn "This repo sets core.hooksPath=$local_hp, so the guard does not run here."
+  want="$(_ctx_guard_profile_var "$prof" GIT_EMAIL)"
+  got="$(_ctx_guard_ident_email "$(git var GIT_AUTHOR_IDENT 2>/dev/null)")"
+  if [[ -z "$want" ]]; then
+    info "Profile '$prof' has no GIT_EMAIL — email check skipped."
+  elif [[ "$(_ctx_guard_lc "$got")" == "$(_ctx_guard_lc "$want")" ]]; then
+    success "Profile '$prof': commits here use $got"
+  else
+    warn "Profile '$prof' expects $want, but commits here would use ${got:-no email}"
+  fi
+}
+
+cmd_guard() {
+  local sub="${1:-status}"
+  shift 2>/dev/null || true
+  case "$sub" in
+    install)           _ctx_guard_install ;;
+    uninstall|remove)  _ctx_guard_uninstall ;;
+    status)            _ctx_guard_status ;;
+    check)             _ctx_guard_check "$@" ;;
+    *) die "Usage: ctx guard [status|install|uninstall]" ;;
+  esac
 }

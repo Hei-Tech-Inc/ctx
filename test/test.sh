@@ -403,6 +403,61 @@ test_ctx_json_list_and_status() {
   pass "ctx JSON list and status"
 }
 
+test_guard_git_hooks() {
+  (
+    set -euo pipefail
+    local td hooks repo out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    export PATH="$ROOT_DIR/bin:$PATH"
+    unset GIT_AUTHOR_EMAIL GIT_COMMITTER_EMAIL CTX_GUARD
+    mkdir -p "$CTX_DIR/profiles" "$td/w/acme/r" "$td/w/other" "$td/elsewhere"
+    printf 'GIT_EMAIL=dev@acme.com\nWORK_DIR=%s\n' "$td/w/acme" >"$CTX_DIR/profiles/acme.conf"
+    printf 'WORK_DIR=%s\n' "$td/w/other" >"$CTX_DIR/profiles/other.conf"
+    : >"$CTX_DIR/config"
+    git config --global user.name Tester
+    git config --global user.email me@personal.com
+
+    ctx guard install >/dev/null
+    hooks="$(git config --global --get core.hooksPath)"
+    [[ "$hooks" == "$CTX_DIR/git-hooks" && -x "$hooks/pre-commit" && -x "$hooks/commit-msg" ]] \
+      || { echo "install: hooksPath=$hooks"; exit 1; }
+
+    repo="$td/w/acme/r"
+    git -C "$repo" init -q
+    if out="$(git -C "$repo" commit -q --allow-empty -m wrong 2>&1)"; then
+      echo "wrong-email commit was allowed"; exit 1
+    fi
+    [[ "$out" == *"commit blocked"*"dev@acme.com"*"git config user.email"* ]] || { echo "message: $out"; exit 1; }
+    git -C "$repo" config user.email other@corp.com
+    out="$(git -C "$repo" commit -q --allow-empty -m wrong 2>&1)" && { echo "local override allowed"; exit 1; }
+    [[ "$out" == *"--unset user.email"* ]] || { echo "local hint: $out"; exit 1; }
+    CTX_GUARD=off git -C "$repo" commit -q --allow-empty -m bypass || { echo "CTX_GUARD=off"; exit 1; }
+
+    git -C "$repo" config user.email DEV@acme.com
+    printf '#!/bin/sh\ntouch "%s/chained"\n' "$td" >"$repo/.git/hooks/pre-commit"
+    chmod +x "$repo/.git/hooks/pre-commit"
+    git -C "$repo" commit -q --allow-empty -m ok || { echo "matching email blocked"; exit 1; }
+    [[ -f "$td/chained" ]] || { echo "repo hook not chained"; exit 1; }
+
+    (cd "$repo" && ctx guard check pre-push origin git@github-acme:org/r.git) || { echo "own alias blocked"; exit 1; }
+    (cd "$repo" && ctx guard check pre-push origin git@github-other:org/r.git 2>/dev/null) && { echo "other alias allowed"; exit 1; }
+    (cd "$repo" && "$hooks/pre-push" origin ssh://git@github-other/org/r.git </dev/null 2>/dev/null) \
+      && { echo "pre-push stub did not block"; exit 1; }
+
+    git -C "$td/elsewhere" init -q
+    git -C "$td/elsewhere" commit -q --allow-empty -m free || { echo "repo outside profiles blocked"; exit 1; }
+
+    ctx guard uninstall >/dev/null
+    [[ -z "$(git config --global --get core.hooksPath || true)" && ! -e "$hooks" ]] || { echo "uninstall"; exit 1; }
+    git config --global core.hooksPath "$td/mine"
+    ctx guard install >/dev/null 2>&1 && { echo "overwrote foreign hooksPath"; exit 1; }
+    [[ "$(git config --global --get core.hooksPath)" == "$td/mine" ]] || exit 1
+    rm -rf "$td"
+  ) || fail "ctx guard git hooks"
+  pass "ctx guard (commit email, push alias, chaining, bypass, uninstall)"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -421,5 +476,6 @@ test_config_upsert_literal_values
 test_autoswitch_hook_resolution
 test_setup_scope_clone_batch
 test_ctx_json_list_and_status
+test_guard_git_hooks
 
 echo "All tests passed."

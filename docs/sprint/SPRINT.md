@@ -26,6 +26,7 @@ Update this file when an item ships (check the box, link PR or commit).
 | B1 | **`ctx --json list`** and **`ctx --json status`** (machine-readable) | S | [x] | Documented schema version field; stable keys; works with `-q` |
 | B2 | Extend **`--json`** to **`ctx list`**-style data from **`verify`** / **`doctor`** (optional) | M | [ ] | Opt-in; no breaking change to default TTY output |
 | B3 | **Hook hardening**: idempotent bash `PROMPT_COMMAND` (no duplicate autoswitch prefix) | S | [x] | Strip `_ctx_profile_autoswitch` / legacy `_ctx_auto_switch` before prepend |
+| B4 | **`ctx guard`**: git hooks that block wrong-identity commits and wrong-alias pushes | S | [x] | `test_guard_git_hooks`: email mismatch blocked, chaining to `.git/hooks`, bypass, uninstall, refuses foreign `core.hooksPath` |
 
 ## Phase C — Documentation & contributor experience
 
