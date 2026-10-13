@@ -28,6 +28,8 @@ All notable changes to this project will be documented in this file.
 - **README:** added **Enterprise secrets (Vault / 1Password)** — built-in backends vs external vaults, how `mise` hooks inject values, and practical patterns (`op run`, Vault Agent, `pass`).
 
 ### Fixed
+- **Autoswitch hook latency:** the bash/zsh hook now resolves profiles with shell builtins only (no `grep`/`cut`/`awk`/`git` subprocesses per profile), cutting per-prompt cost from ~100 ms to ~1 ms with 10 profiles. Profile `WORK_DIR` values that need shell expansion beyond `$HOME`/`~` still fall back to sourcing the file.
+- **Config writes:** `~/.ctx/config` updates (`active`, `work-root`, `secret-provider`) no longer use `sed`, so values containing `&`, `|`, or `\` are stored literally; writes are atomic (temp file + `mv`) and multi-line values are rejected.
 - **Auto-switch (sibling clients):** when one profile’s **`WORK_DIR`** is a **parent** of several client dirs (e.g. `…/clients`), ctx now prefers **`…/clients/<segment>.conf`** named after the first path segment under that prefix when that profile exists and **`…/clients/<segment>`** is a directory (even if that `.conf` omits **`WORK_DIR`**).
 - **Installer safety check:** `install.sh` now validates the installed `ctx` script with `bash -n` and aborts fast if syntax is invalid (prevents silent broken upgrades).
 - **Atomic installer writes:** `install.sh` now stages `ctx` files in a temp directory, validates syntax, then swaps into place to avoid partially-written binaries during upgrade.

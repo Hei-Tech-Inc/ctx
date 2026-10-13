@@ -280,6 +280,71 @@ test_autoswitch_notify_default_off() {
   pass "autoswitch_notify default off"
 }
 
+test_config_upsert_literal_values() {
+  (
+    set -euo pipefail
+    local ROOT td got
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(mktemp -d)"
+    export CTX_DIR="$td"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT/lib/core.sh"
+    printf 'active=x\nprompt_extra_paths=old\nprompt_extra_paths=dup\nwork_root=/w\n' >"$CTX_CONFIG"
+    _ctx_config_upsert_line prompt_extra_paths '/a|b:/c&d:/e\f'
+    [[ "$(grep -c '^prompt_extra_paths=' "$CTX_CONFIG")" == "1" ]] || exit 1
+    got="$(grep '^prompt_extra_paths=' "$CTX_CONFIG")"
+    [[ "$got" == 'prompt_extra_paths=/a|b:/c&d:/e\f' ]] || { echo "got: $got" >&2; exit 1; }
+    grep -qx 'active=x' "$CTX_CONFIG" || exit 1
+    grep -qx 'work_root=/w' "$CTX_CONFIG" || exit 1
+    set_active_profile 'acme' 2>/dev/null
+    grep -qx 'active=acme' "$CTX_CONFIG" || exit 1
+    ! _ctx_config_upsert_line work_root $'two\nlines' 2>/dev/null || exit 1
+    grep -qx 'work_root=/w' "$CTX_CONFIG" || exit 1
+    rm -rf "$td"
+  ) || fail "_ctx_config_upsert_line literal values"
+  pass "config upsert writes values literally"
+}
+
+test_autoswitch_hook_resolution() {
+  (
+    set -euo pipefail
+    local ROOT td used
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/ctx"
+    mkdir -p "$CTX_DIR/profiles" "$HOME/b/sub" "$td/w/a/deep" "$td/w/c d" "$td/w/clients/acme" "$td/w/mono/.git" "$td/w/mono/svc"
+    : >"$CTX_DIR/config"
+    printf 'WORK_DIR=%s\n' "$td/w/a" >"$CTX_DIR/profiles/a.conf"
+    # shellcheck disable=SC2016
+    printf 'WORK_DIR="$HOME/b"\n' >"$CTX_DIR/profiles/b.conf"
+    printf 'WORK_DIR=%q\n' "$td/w/c d" >"$CTX_DIR/profiles/c.conf"
+    printf 'WORK_DIR=%s\n' "$td/w/clients" >"$CTX_DIR/profiles/broad.conf"
+    printf 'PROFILE_NAME=acme\n' >"$CTX_DIR/profiles/acme.conf"
+    printf 'WORK_DIR=%s\n' "$td/w/mono" >"$CTX_DIR/profiles/mono.conf"
+    printf 'profile= a \r\n' >"$td/w/mono/svc/.ctx"
+    used="$td/used"
+    ctx() { [[ "$1" == use ]] && printf '%s\n' "$2" >>"$used"; return 0; }
+    # shellcheck source=../lib/ctx_autoswitch.bash
+    source "$ROOT/lib/ctx_autoswitch.bash"
+    _expect() {
+      cd "$1"
+      : >"$used"
+      _ctx_profile_autoswitch 2>"$td/stderr"
+      [[ "$(cat "$used")" == "$2" ]] || { echo "in $1: used='$(cat "$used")' want '$2'" >&2; exit 1; }
+      [[ ! -s "$td/stderr" ]] || { echo "unexpected stderr: $(cat "$td/stderr")" >&2; exit 1; }
+    }
+    _expect "$td/w/a/deep" a
+    [[ "$CTX_PROMPT_SHOW" == 1 && "$CTX_PROMPT_PROFILE" == a && "$CTX_PROMPT_WORK_DIR" == "$td/w/a" ]] || exit 1
+    _expect "$HOME/b/sub" b
+    _expect "$td/w/c d" c
+    _expect "$td/w/clients/acme" acme
+    _expect "$td/w/mono/svc" a
+    _expect "$td/w/mono" mono
+    rm -rf "$td"
+  ) || fail "autoswitch hook resolution"
+  pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx)"
+}
+
 test_setup_scope_clone_batch() {
   (
     set -euo pipefail
@@ -352,6 +417,8 @@ test_ctx_resolve_path_profile
 test_cmd_workdir_prompt
 test_generate_mise_toml_matches_fixture
 test_autoswitch_notify_default_off
+test_config_upsert_literal_values
+test_autoswitch_hook_resolution
 test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 

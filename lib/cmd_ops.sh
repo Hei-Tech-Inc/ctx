@@ -637,12 +637,7 @@ cmd_config() {
       fi
       value="${value/#\~/$HOME}"
       mkdir -p "$value" || die "Could not create directory: $value"
-      if grep -q "^work_root=" "$CTX_CONFIG" 2>/dev/null; then
-        sed -i.bak "s|^work_root=.*|work_root=$value|" "$CTX_CONFIG"
-        rm -f "$CTX_CONFIG.bak"
-      else
-        echo "work_root=$value" >> "$CTX_CONFIG"
-      fi
+      _ctx_config_upsert_line work_root "$value" || die "Could not update $CTX_CONFIG"
       success "work_root set to: $value"
       ;;
     secret-provider)
@@ -657,12 +652,7 @@ cmd_config() {
         auto|keychain|file|pass) ;;
         *) die "Invalid secret provider '$value'. Use: auto, keychain, file, pass" ;;
       esac
-      if grep -q "^secret_provider=" "$CTX_CONFIG" 2>/dev/null; then
-        sed -i.bak "s|^secret_provider=.*|secret_provider=$value|" "$CTX_CONFIG"
-        rm -f "$CTX_CONFIG.bak"
-      else
-        echo "secret_provider=$value" >> "$CTX_CONFIG"
-      fi
+      _ctx_config_upsert_line secret_provider "$value" || die "Could not update $CTX_CONFIG"
       success "secret_provider set to: $value (effective: $(ctx_effective_secret_provider))"
       ;;
     prompt-workdir-depth)

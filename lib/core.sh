@@ -378,12 +378,7 @@ active_profile() {
 
 set_active_profile() {
   local name="$1"
-  if grep -q "^active=" "$CTX_CONFIG" 2>/dev/null; then
-    sed -i.bak "s/^active=.*/active=$name/" "$CTX_CONFIG"
-    rm -f "$CTX_CONFIG.bak"
-  else
-    echo "active=$name" >> "$CTX_CONFIG"
-  fi
+  _ctx_config_upsert_line active "$name"
   log "Switched to profile: $name"
 }
 
@@ -588,19 +583,24 @@ ctx_activation_get_manual_pwd() {
   printf '%s\n' "$raw"
 }
 
+# Set key=val in ~/.ctx/config. Values are written literally (no sed: & | \ are safe);
+# duplicate key lines collapse into one; the file is replaced atomically.
 _ctx_config_upsert_line() {
-  local key="$1" val="$2"
+  local key="$1" val="$2" tmp line found=0
+  [[ "$val" == *$'\n'* ]] && { error "config value for '$key' must be a single line"; return 1; }
   ctx_init_dirs
   [[ -f "$CTX_CONFIG" ]] || : >"$CTX_CONFIG"
-  if grep -q "^${key}=" "$CTX_CONFIG" 2>/dev/null; then
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-      sed -i '' "s|^${key}=.*|${key}=${val}|" "$CTX_CONFIG"
-    else
-      sed -i "s|^${key}=.*|${key}=${val}|" "$CTX_CONFIG"
+  tmp="$(mktemp "${CTX_CONFIG}.XXXXXX")" || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "${key}="* ]]; then
+      [[ $found -eq 0 ]] && printf '%s=%s\n' "$key" "$val"
+      found=1
+      continue
     fi
-  else
-    echo "${key}=${val}" >> "$CTX_CONFIG"
-  fi
+    printf '%s\n' "$line"
+  done <"$CTX_CONFIG" >"$tmp"
+  [[ $found -eq 1 ]] || printf '%s=%s\n' "$key" "$val" >>"$tmp"
+  mv "$tmp" "$CTX_CONFIG"
 }
 
 _ctx_config_rm_key() {
