@@ -2,6 +2,27 @@
 # ctx/lib/cmd_ops.sh — v3: use, status, list, remove, undo, secret, doctor
 
 # ─── use ─────────────────────────────────────────────────────────────────────
+# ctx only removes agent keys it added itself (recorded as ssh_agent_added in ~/.ctx/config),
+# so keys the user loaded stay put and plain github.com outside client folders keeps working.
+_ctx_agent_added_key() {
+  grep '^ssh_agent_added=' "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-
+}
+
+_ctx_agent_has_key() {
+  local fp
+  [[ -f "$1.pub" ]] || return 1
+  fp="$(ssh-keygen -lf "$1.pub" 2>/dev/null | awk '{print $2}')"
+  [[ -n "$fp" ]] && ssh-add -l 2>/dev/null | awk '{print $2}' | grep -qxF "$fp"
+}
+
+_ctx_agent_drop_added_key() {
+  local key
+  key="$(_ctx_agent_added_key)"
+  [[ -n "$key" ]] || return 0
+  ssh-add -d "$key" >/dev/null 2>&1 || true
+  _ctx_config_rm_key ssh_agent_added
+}
+
 cmd_use() {
   local name="${1:-}" quiet="${CTX_QUIET:-0}"
   [[ -z "$name" ]] && die "Usage: ctx use <profile>"
@@ -21,15 +42,19 @@ cmd_use() {
     fi
   fi
 
-  # 2. SSH key — flush agent, load this profile's key only
+  # 2. SSH key — add this profile's key; keep the user's own agent keys
   if [[ -n "${SSH_KEY_PATH:-}" && -f "$SSH_KEY_PATH" ]]; then
-    ssh-add -D 2>/dev/null || true
-    if ssh-add "$SSH_KEY_PATH" 2>/dev/null; then
+    [[ "$(_ctx_agent_added_key)" == "$SSH_KEY_PATH" ]] || _ctx_agent_drop_added_key
+    if _ctx_agent_has_key "$SSH_KEY_PATH"; then
+      [[ "$quiet" == "0" ]] && success "SSH key → $(basename "$SSH_KEY_PATH") (already in agent)"
+    elif ssh-add "$SSH_KEY_PATH" 2>/dev/null; then
+      _ctx_config_upsert_line ssh_agent_added "$SSH_KEY_PATH"
       [[ "$quiet" == "0" ]] && success "SSH key → $(basename "$SSH_KEY_PATH")"
     else
-      eval "$(ssh-agent -s)" &>/dev/null
-      ssh-add "$SSH_KEY_PATH" 2>/dev/null || warn "SSH key load failed"
+      warn "SSH key not loaded into the agent — github-${name} still reads it from disk"
     fi
+  else
+    _ctx_agent_drop_added_key
   fi
   ctx_git_identity_set_rewrite "$name" || true
 
@@ -179,7 +204,7 @@ _ctx_deactivate_emit_unsets() {
 
 # ─── deactivate ───────────────────────────────────────────────────────────────
 # Clears ~/.ctx/config active marker and prints eval-able unsets for the parent shell.
-# Does not edit mise.toml, SSH, or secret stores.
+# Removes the SSH key ctx added to the agent; does not edit mise.toml or secret stores.
 cmd_deactivate() {
   local eval_shell="bash" want_eval=false
   while [[ $# -gt 0 ]]; do
@@ -199,6 +224,7 @@ cmd_deactivate() {
   done
 
   ctx_init_dirs
+  _ctx_agent_drop_added_key
   local current quiet="${CTX_QUIET:-0}"
   current="$(active_profile)"
   if [[ -z "$current" ]]; then

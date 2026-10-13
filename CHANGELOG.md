@@ -30,6 +30,7 @@ All notable changes to this project will be documented in this file.
 - **`ctx status`:** shows **activation** mode (manual lock vs directory auto) and **`CTX_ACTIVE_PROFILE`** when set by the hook.
 
 ### Changed
+- **SSH agent:** `ctx use` no longer empties the agent (`ssh-add -D`). It adds the profile's key, remembers that it did, and removes only that key on `ctx deactivate`, when the hook leaves the folder, or when switching profile. Keys you loaded yourself stay, so plain `git@github.com` outside client folders keeps using your own account instead of the last client's.
 - **Installer** “next steps” after `install.sh` lists `ctx doctor`, `ctx help setup`, and `ctx verify` so the flow matches the docs and post-setup help text.
 - **README:** added **Enterprise secrets (Vault / 1Password)** — built-in backends vs external vaults, how `mise` hooks inject values, and practical patterns (`op run`, Vault Agent, `pass`).
 

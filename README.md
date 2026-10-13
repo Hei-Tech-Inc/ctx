@@ -401,7 +401,7 @@ For arbitrary `git clone` flags, pass them after `--`:
 ctx clone -- -b main --depth 1 git@github.com:Acme-Corp/example-app.git ./example-app
 ```
 
-Outside a profile's `WORK_DIR`, `git@github.com:...` uses your *default* SSH key, and GitHub responds with “repository not found” for private repos the default account can't see.
+Outside a profile's `WORK_DIR`, `git@github.com:...` uses your *default* SSH key, and GitHub responds with “repository not found” for private repos the default account can't see. `ctx use` adds the profile's key to your SSH agent without removing your own keys, and takes it out again on `ctx deactivate` (or when the hook leaves the folder), so a client key doesn't linger for plain `github.com` elsewhere.
 
 Your git author identity for repos under the client folder comes from `~/.gitconfig` `includeIf` → `~/.config/git/ctx-<profile>`, and `mise.toml` hooks also set local `git config` when `mise` activates.
 

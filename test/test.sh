@@ -594,6 +594,37 @@ test_setup_commit_signing() {
   pass "setup commit signing (ssh signs commits, gpg needs a key, none removes it)"
 }
 
+test_use_keeps_user_agent_keys() {
+  (
+    set -euo pipefail
+    local td k
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$ROOT_DIR/bin:$PATH" CTX_QUIET=1
+    mkdir -p "$CTX_DIR/profiles" "$HOME/.ssh"
+    eval "$(ssh-agent -s -a "/tmp/ctx-agent.$$")" >/dev/null
+    trap 'ssh-agent -k >/dev/null 2>&1; rm -rf "$td" "/tmp/ctx-agent.$$"' EXIT
+    for k in own acme beta; do
+      ssh-keygen -t ed25519 -f "$HOME/.ssh/id_$k" -N "" -q
+      mkdir -p "$td/w/$k"
+      printf 'GIT_NAME=Dev\nGIT_EMAIL=dev@%s.com\nWORK_DIR=%s\nSSH_KEY_PATH=%s\n' \
+        "$k" "$td/w/$k" "$HOME/.ssh/id_$k" >"$CTX_DIR/profiles/$k.conf"
+    done
+    in_agent() { ssh-add -l 2>/dev/null | grep -qF "$(ssh-keygen -lf "$HOME/.ssh/id_$1.pub" | awk '{print $2}')"; }
+    ssh-add -q "$HOME/.ssh/id_own" 2>/dev/null
+
+    ctx use acme >/dev/null 2>&1
+    in_agent own && in_agent acme || { echo "use acme: $(ssh-add -l)"; exit 1; }
+    ctx use beta >/dev/null 2>&1
+    in_agent own && in_agent beta && ! in_agent acme || { echo "use beta: $(ssh-add -l)"; exit 1; }
+    ctx deactivate >/dev/null 2>&1
+    in_agent own && ! in_agent beta || { echo "deactivate: $(ssh-add -l)"; exit 1; }
+    ctx use own >/dev/null 2>&1
+    ctx deactivate >/dev/null 2>&1
+    in_agent own || { echo "removed the user's own key"; exit 1; }
+  ) || fail "ctx use keeps user agent keys"
+  pass "ctx use adds the profile SSH key without flushing the agent; deactivate removes only ctx's key"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -616,5 +647,6 @@ test_guard_git_hooks
 test_git_identity_github_rewrite
 test_ctx_run_env_agent_rules
 test_setup_commit_signing
+test_use_keeps_user_agent_keys
 
 echo "All tests passed."
