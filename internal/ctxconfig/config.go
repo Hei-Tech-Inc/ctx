@@ -31,6 +31,9 @@ type Config struct {
 	PromptWorkdirMaxDepth int
 	// SSHAgentAdded is the last ssh_agent_added value, CR stripped.
 	SSHAgentAdded string
+	// SecretProvider is the last secret_provider value, raw (like ctx_secret_provider's
+	// grep | tail -1 | cut -d= -f2-); normalizing is the caller's job.
+	SecretProvider string
 }
 
 // Path returns $CTX_DIR/config, defaulting to $HOME/.ctx/config.
@@ -63,7 +66,7 @@ func Load() (*Config, error) {
 			// cut -d= -f2: the text between the first and second "=".
 			f, _, _ := strings.Cut(v, "=")
 			actives = append(actives, f)
-		case "active_source", "manual_pwd", "prompt_extra_paths", "prompt_workdir_max_depth", "ssh_agent_added":
+		case "active_source", "manual_pwd", "prompt_extra_paths", "prompt_workdir_max_depth", "ssh_agent_added", "secret_provider":
 			last[k] = v
 		}
 	}
@@ -74,6 +77,7 @@ func Load() (*Config, error) {
 	cfg.ManualPWD = decodeManualPWD(last["manual_pwd"])
 	cfg.PromptExtraPaths = stripCR(last["prompt_extra_paths"])
 	cfg.SSHAgentAdded = stripCR(last["ssh_agent_added"])
+	cfg.SecretProvider = last["secret_provider"]
 	cfg.PromptWorkdirMaxDepth = parseDepth(last["prompt_workdir_max_depth"])
 	return cfg, nil
 }

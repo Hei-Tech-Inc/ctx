@@ -447,7 +447,10 @@ main() {
       cmd_workdir_prompt
       ;;
     config)           cmd_config "$@" ;;
-    secret)           cmd_secret "$@" ;;
+    secret)
+      case "${1:-}" in get|list|delete) _ctx_core_forward secret "$@" ;; esac
+      cmd_secret "$@"
+      ;;
     verify)           cmd_verify "${1:-}" ;;
     edit)
       local pname="${1:-}"

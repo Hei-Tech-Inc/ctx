@@ -117,3 +117,18 @@ func TestPathDefaultsToHome(t *testing.T) {
 }
 
 func sp(s string) *string { return &s }
+
+func TestSecretProviderLastWins(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CTX_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config"), []byte("secret_provider=file\nx=1\nsecret_provider=pa=ss\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SecretProvider != "pa=ss" {
+		t.Errorf("SecretProvider = %q, want last value after the first =", cfg.SecretProvider)
+	}
+}

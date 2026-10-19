@@ -251,7 +251,7 @@ func loadForCommand(args []string) (*profile.Profile, []string, error) {
 	return prof, rest, nil
 }
 
-func newGetter() secret.Getter { return secret.CLIGetter{CtxBin: os.Getenv("CTX_BIN_PATH")} }
+func newGetter() secret.Getter { return secret.ProviderGetter{} }
 
 // Env prints exports for eval: ctx env [-p NAME] [--fish] [--secrets].
 func Env(w io.Writer, args []string) error {

@@ -26,7 +26,7 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|guard> [args]\n"
+const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|guard> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry reports whether it handles the given first argument (the
@@ -39,6 +39,7 @@ var implemented = map[string]func(sub string) bool{
 	"env":            func(string) bool { return true },
 	"run":            func(string) bool { return true },
 	"guard":          func(sub string) bool { return sub == "check" },
+	"secret":         func(sub string) bool { return sub == "get" || sub == "list" || sub == "delete" },
 }
 
 func implements(cmd string, rest []string) bool {
@@ -87,6 +88,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0 // the Bash command never fails
 	case "env", "run":
 		return runEnvRun(args, stdout, stderr)
+	case "secret":
+		if len(args) < 2 || !implements("secret", args[1:]) {
+			fmt.Fprintln(stderr, "ctx-core: secret supports only get, list, delete")
+			return 127
+		}
+		return runSecret(args[1:], stdout, stderr)
 	case "guard":
 		if len(args) < 2 || args[1] != "check" {
 			fmt.Fprintln(stderr, "ctx-core: guard supports only check")
@@ -136,7 +143,7 @@ func runMCP(args []string, stderr io.Writer) int {
 		return 1
 	}
 	opts.Cwd = cwd
-	d := mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.CLIGetter{}}
+	d := mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.ProviderGetter{}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := mcpserver.Run(ctx, d, opts, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
@@ -229,6 +236,21 @@ func runEnvRun(args []string, stdout, stderr io.Writer) int {
 	} else {
 		err = cli.Run(args[1:])
 	}
+	if err == nil {
+		return 0
+	}
+	var ee *cli.ExitError
+	if errors.As(err, &ee) {
+		fmt.Fprintln(stderr, ee.Msg)
+		return ee.Code
+	}
+	fmt.Fprintf(stderr, "\u2717 %v\n", err)
+	return 1
+}
+
+// runSecret serves `secret get|list|delete`.
+func runSecret(args []string, stdout, stderr io.Writer) int {
+	err := cli.Secret(stdout, args)
 	if err == nil {
 		return 0
 	}
