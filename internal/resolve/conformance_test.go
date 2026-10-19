@@ -9,8 +9,7 @@ import (
 )
 
 // TestMatchesBash checks Path against ctx_resolve_path_with_root in lib/core.sh.
-// The trailing-slash WORK_DIR case is excluded: Bash does not match it
-// (it compares against "<wd>//"), while Go deliberately normalizes it.
+// Includes a trailing-slash WORK_DIR: Bash trims one trailing "/" (ruling R5) like Go.
 func TestMatchesBash(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -76,6 +75,10 @@ func TestMatchesBash(t *testing.T) {
 	conf(t, prof, "wprof", filepath.Join(td, "w"))
 	conf(t, prof, "mprof", filepath.Join(td, "m"))
 	conf(t, prof, "xprof", filepath.Join(td, "x"))
+	mkdirs(t, filepath.Join(td, "ts/acme/app"))
+	conf(t, prof, "tsprof", filepath.Join(td, "ts")+"/")
+	conf(t, prof, "acme", filepath.Join(td, "ts/acme")+"/")
+	add("ts/acme/app", "ts/acme", "ts")
 	pwds = append(pwds, "/nonexistent/nope/zz", td)
 
 	for _, pwd := range pwds {

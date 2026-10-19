@@ -357,6 +357,47 @@ test_autoswitch_hook_resolution() {
   pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx, per-shell GH_TOKEN)"
 }
 
+test_trailing_slash_work_dir() {
+  (
+    set -euo pipefail
+    local td ROOT mode out rc used
+    ROOT="$ROOT_DIR"
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    unset GIT_COMMITTER_EMAIL CTX_GUARD
+    mkdir -p "$CTX_DIR/profiles" "$td/w/acme/r"
+    : >"$CTX_DIR/config"
+    printf 'GIT_EMAIL=dev@acme.com\nWORK_DIR="%s/"\n' "$td/w/acme" >"$CTX_DIR/profiles/acme.conf"
+    git -C "$td/w/acme/r" init -q
+    # Library resolvers
+    [[ "$(ctx_profile_read_work_dir "$CTX_DIR/profiles/acme.conf")" == "$td/w/acme" ]] || { echo "read_work_dir keeps slash"; exit 1; }
+    [[ "$(ctx_resolve_path_with_root "$td/w/acme/r" "$CTX_DIR/profiles")" == "acme"$'\t'"$td/w/acme" ]] || { echo "resolve keeps slash"; exit 1; }
+    printf 'WORK_DIR=/\n' >"$td/root.conf"
+    [[ "$(ctx_profile_read_work_dir "$td/root.conf")" == "/" ]] || { echo "root WORK_DIR trimmed"; exit 1; }
+    # Guard in both modes
+    for mode in off default; do
+      rc=0
+      if [[ $mode == off ]]; then
+        out="$(cd "$td/w/acme/r" && GIT_AUTHOR_EMAIL=x@y.z CTX_CORE=off "$ROOT_DIR/bin/ctx" guard check pre-commit 2>&1)" || rc=$?
+      else
+        out="$(cd "$td/w/acme/r" && env -u CTX_CORE GIT_AUTHOR_EMAIL=x@y.z "$ROOT_DIR/bin/ctx" guard check pre-commit 2>&1)" || rc=$?
+      fi
+      [[ $rc -ne 0 && "$out" == *"commit blocked"* ]] || { echo "guard ($mode): rc=$rc out=$out"; exit 1; }
+    done
+    # Autoswitch hook
+    used="$td/used"
+    ctx() { [[ "$1" == use ]] && printf '%s\n' "$2" >>"$used"; return 0; }
+    # shellcheck source=../lib/ctx_autoswitch.bash
+    source "$ROOT/lib/ctx_autoswitch.bash"
+    cd "$td/w/acme/r"
+    : >"$used"
+    _ctx_profile_autoswitch 2>/dev/null
+    [[ "$(cat "$used")" == acme ]] || { echo "autoswitch: '$(cat "$used")'"; exit 1; }
+    rm -rf "$td"
+  ) || fail "trailing-slash WORK_DIR"
+  pass "trailing-slash WORK_DIR matches in Bash and Go (resolver, guard, autoswitch)"
+}
+
 test_setup_scope_clone_batch() {
   (
     set -euo pipefail
@@ -776,6 +817,7 @@ test_generate_mise_toml_matches_fixture
 test_autoswitch_notify_default_off
 test_config_upsert_literal_values
 test_autoswitch_hook_resolution
+test_trailing_slash_work_dir
 test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 test_guard_git_hooks

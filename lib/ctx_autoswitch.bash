@@ -36,6 +36,7 @@ _ctx_as_profile_work_dir() {
       ;;
   esac
   _ctx_wd="${v/#\~/$HOME}"
+  [[ "$_ctx_wd" == "/" ]] || _ctx_wd="${_ctx_wd%/}"
 }
 
 # Per-terminal gh login: GH_TOKEN for the profile's GITHUB_USER, so a switch in one shell

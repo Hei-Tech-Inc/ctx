@@ -398,6 +398,7 @@ ctx_profile_read_work_dir() {
   [[ -f "$conf" ]] || return 1
   wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
   wd="${wd/#\~/$HOME}"
+  [[ "$wd" == "/" ]] || wd="${wd%/}"
   [[ -n "$wd" ]] || return 1
   printf '%s\n' "$wd"
 }
@@ -432,6 +433,7 @@ ctx_resolve_path_with_root() {
     [[ -e "$conf" ]] || continue
     work_dir="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
     work_dir="${work_dir/#\~/$HOME}"
+    [[ "$work_dir" == "/" ]] || work_dir="${work_dir%/}"
     [[ -z "$work_dir" ]] && continue
     if [[ "$pwd" == "$work_dir" || "$pwd" == "$work_dir/"* ]]; then
       len=${#work_dir}
@@ -450,6 +452,7 @@ ctx_resolve_path_with_root() {
       local wdc
       wdc="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${first}.conf")"
       wdc="${wdc/#\~/$HOME}"
+      [[ "$wdc" == "/" ]] || wdc="${wdc%/}"
       [[ -z "$wdc" ]] && wdc="${best_work_dir%/}/$first"
       if [[ -d "$wdc" && ( "$pwd" == "$wdc" || "$pwd" == "$wdc/"* ) ]]; then
         local cand_len=${#wdc}
@@ -489,6 +492,7 @@ ctx_resolve_path_with_root() {
   if [[ -n "$path_profile" ]]; then
     display_wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${path_profile}.conf")"
     display_wd="${display_wd/#\~/$HOME}"
+    [[ "$display_wd" == "/" ]] || display_wd="${display_wd%/}"
     [[ -n "$display_wd" ]] && best_work_dir="$display_wd"
     [[ -z "$display_wd" && -n "$best_work_dir" ]] && display_wd="$best_work_dir"
   fi
