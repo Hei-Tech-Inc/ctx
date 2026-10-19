@@ -38,6 +38,9 @@ func ValidateUserArgs(args []string) error {
 	if i := indexOf(args, "--"); i >= 0 {
 		flags = args[:i]
 	}
+	if v := blockedVerb(flags); v != "" {
+		return fmt.Errorf("kubectl %s is not allowed: ctx manages kubeconfig itself", v)
+	}
 	var formats []string
 	fromFiles := false // -f/-k: the objects could be Secrets
 	for i := 0; i < len(flags); i++ {
@@ -104,6 +107,29 @@ func shortValue(g string, next func() string) string {
 		return v
 	}
 	return next()
+}
+
+// blockedVerbs could rewrite a kubeconfig (config use-context, set-context),
+// print its credentials (config view --flatten) or run arbitrary binaries
+// and user preferences (plugin, kuberc).
+var blockedVerbs = map[string]bool{"config": true, "kuberc": true, "plugin": true}
+
+// blockedVerb returns the kubectl verb in flags if it is blocked. Leading
+// flags are skipped; a word right after a flag without "=" might be that
+// flag's value ("-v 5 config"), so it is checked too and the search goes on.
+func blockedVerb(flags []string) string {
+	for i, a := range flags {
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			continue
+		}
+		if blockedVerbs[a] {
+			return a
+		}
+		if i == 0 || !strings.HasPrefix(flags[i-1], "-") || strings.Contains(flags[i-1], "=") {
+			return "" // a is the verb
+		}
+	}
+	return ""
 }
 
 func blockedFlag(f string) error {

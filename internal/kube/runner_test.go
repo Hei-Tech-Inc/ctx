@@ -89,6 +89,7 @@ func kubeconfigFile(t *testing.T) string {
 
 func TestRunClearsKUBECONFIG(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/bad")
+	t.Setenv("KUBERC", "/my/kuberc")
 	bin, log := fakeKubectl(t, `printf '[%s]' "$KUBECONFIG"`)
 	f := kubeconfigFile(t)
 	out, err := (&Runner{Kubectl: bin}).Run(context.Background(), Target{Kubeconfig: f, Namespace: "ns"}, "get", "pods")
@@ -97,6 +98,15 @@ func TestRunClearsKUBECONFIG(t *testing.T) {
 	}
 	if string(out) != "[]" {
 		t.Errorf("child KUBECONFIG = %q, want empty", out)
+	}
+	var kuberc []string
+	for _, kv := range childEnv("") {
+		if strings.HasPrefix(kv, "KUBERC=") {
+			kuberc = append(kuberc, kv)
+		}
+	}
+	if !reflect.DeepEqual(kuberc, []string{"KUBERC=off"}) {
+		t.Errorf("child env KUBERC = %q, want [KUBERC=off]", kuberc)
 	}
 	want := [][]string{{"--kubeconfig", f, "-n", "ns", "get", "pods"}}
 	if got := testutil.ReadArgv(t, log); !reflect.DeepEqual(got, want) {

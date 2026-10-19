@@ -152,10 +152,12 @@ func AsAuthError(err error, env string) error {
 	return err
 }
 
-// childEnv is the current environment without KUBECONFIG, plus KUBECONFIG=kc
-// and extra (KEY=value). Variables named in extra are replaced, not duplicated.
+// childEnv is the current environment without KUBECONFIG and KUBERC, plus
+// KUBECONFIG=kc, KUBERC=off (user kubectl preferences can't change what ctx
+// runs) and extra (KEY=value). Variables named in extra are replaced, not
+// duplicated.
 func childEnv(kc string, extra ...string) []string {
-	drop := map[string]bool{"KUBECONFIG": true}
+	drop := map[string]bool{"KUBECONFIG": true, "KUBERC": true}
 	for _, kv := range extra {
 		drop[strings.SplitN(kv, "=", 2)[0]] = true
 	}
@@ -165,7 +167,7 @@ func childEnv(kc string, extra ...string) []string {
 			env = append(env, kv)
 		}
 	}
-	env = append(env, "KUBECONFIG="+kc)
+	env = append(env, "KUBECONFIG="+kc, "KUBERC=off")
 	return append(env, extra...)
 }
 

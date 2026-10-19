@@ -5,7 +5,6 @@ import "strings"
 var readVerbs = map[string]bool{
 	"get": true, "describe": true, "logs": true, "top": true, "events": true,
 	"explain": true, "api-resources": true, "api-versions": true, "version": true,
-	"cluster-info": true,
 }
 
 var readPairs = map[string]bool{
@@ -14,7 +13,8 @@ var readPairs = map[string]bool{
 
 // IsReadOnly reports whether kubectl args only read: the first non-flag
 // arg is a read verb, or the first two are "rollout status",
-// "rollout history" or "auth can-i". A flag before the verb must be in
+// "rollout history" or "auth can-i", or args are a bare "cluster-info".
+// A flag before the verb must be in
 // --name=value form; any other leading flag returns false, because its
 // value could be mistaken for the verb ("-n get delete pod x").
 func IsReadOnly(args []string) bool {
@@ -30,6 +30,11 @@ func IsReadOnly(args []string) bool {
 	}
 	if readVerbs[args[i]] {
 		return true
+	}
+	// Only bare cluster-info: "cluster-info dump" writes files and reads
+	// other namespaces.
+	if args[i] == "cluster-info" {
+		return i == len(args)-1
 	}
 	return i+1 < len(args) && readPairs[args[i]+" "+args[i+1]]
 }

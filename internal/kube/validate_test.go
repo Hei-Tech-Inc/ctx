@@ -30,6 +30,17 @@ func TestValidateUserArgs(t *testing.T) {
 		{"get secret -o name", ""},
 		{"get secret", ""},
 
+		// ctx manages kubeconfig itself: config, kuberc and plugin are refused.
+		{"config use-context other", "kubectl config is not allowed: ctx manages kubeconfig itself"},
+		{"config view --flatten", "kubectl config is not allowed: ctx manages kubeconfig itself"},
+		{"--request-timeout=5s config view", "kubectl config is not allowed: ctx manages kubeconfig itself"},
+		{"-v 5 config view", "kubectl config is not allowed: ctx manages kubeconfig itself"},
+		{"kuberc view", "kubectl kuberc is not allowed: ctx manages kubeconfig itself"},
+		{"plugin list", "kubectl plugin is not allowed: ctx manages kubeconfig itself"},
+		{"get cm config", ""},                   // a configmap named config
+		{"-v 5 get plugin", ""},                 // verb is get
+		{"exec pod -- kubectl config view", ""}, // remote command
+
 		{"get pods --kubeconfig /x", "flag --kubeconfig " + flagMsg},
 		{"get pods --kubeconfig=/x", "flag --kubeconfig " + flagMsg},
 		{"get pods --context other", "flag --context " + flagMsg},
