@@ -45,9 +45,30 @@ func writeAtomic(path string, data []byte) error {
 	return nil
 }
 
+// RecipePath is where SaveRecipe writes the recipe called name.
+func RecipePath(root, name string) (string, error) {
+	if err := validName("recipe", name); err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "recipes", name+".md"), nil
+}
+
+// ScriptPath is where SaveScript writes the script called name (which may
+// end in .sh).
+func ScriptPath(root, name string) (string, error) {
+	if err := validName("script", strings.TrimSuffix(name, ".sh")); err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "scripts", name), nil
+}
+
+// ServicesPath is the file SaveService edits.
+func ServicesPath(root string) string { return filepath.Join(root, "services.yaml") }
+
 // SaveRecipe writes recipes/<name>.md and returns its path.
 func SaveRecipe(root string, r Recipe) (string, error) {
-	if err := validName("recipe", r.Name); err != nil {
+	path, err := RecipePath(root, r.Name)
+	if err != nil {
 		return "", err
 	}
 	fm, err := yaml.Marshal(r)
@@ -59,31 +80,25 @@ func SaveRecipe(root string, r Recipe) (string, error) {
 	b.Write(fm)
 	b.WriteString("---\n")
 	b.WriteString(r.Body)
-	path := filepath.Join(root, "recipes", r.Name+".md")
 	return path, writeAtomic(path, b.Bytes())
 }
 
 // SaveScript writes scripts/<name> (name may end in .sh) and returns its path.
 func SaveScript(root, name, body string) (string, error) {
-	if err := validName("script", strings.TrimSuffix(name, ".sh")); err != nil {
+	path, err := ScriptPath(root, name)
+	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(root, "scripts", name)
 	return path, writeAtomic(path, []byte(body))
 }
 
 // SaveService adds svc to services.yaml, merging aliases into an existing
 // entry. Comments and other entries in the file are preserved.
 func SaveService(root string, svc Service) error {
-	if err := validName("service", svc.Name); err != nil {
+	if err := ValidateService(svc); err != nil {
 		return err
 	}
-	switch svc.Kind {
-	case "", "deployment", "statefulset":
-	default:
-		return fmt.Errorf("unknown kind %q (use deployment or statefulset)", svc.Kind)
-	}
-	path := filepath.Join(root, "services.yaml")
+	path := ServicesPath(root)
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -161,6 +176,18 @@ func SaveService(root string, svc Service) error {
 		return err
 	}
 	return writeAtomic(path, out)
+}
+
+// ValidateService checks the name and kind SaveService would be given.
+func ValidateService(svc Service) error {
+	if err := validName("service", svc.Name); err != nil {
+		return err
+	}
+	switch svc.Kind {
+	case "", "deployment", "statefulset":
+		return nil
+	}
+	return fmt.Errorf("unknown kind %q (use deployment or statefulset)", svc.Kind)
 }
 
 func mergeAliases(a, b []string) []string {

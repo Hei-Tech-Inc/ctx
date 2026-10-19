@@ -69,10 +69,10 @@ func runMCP(args []string, stderr io.Writer) int {
 		return 1
 	}
 	opts.Cwd = cwd
-	srv := mcpserver.New(mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.CLIGetter{}}, opts)
+	d := mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.CLIGetter{}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
+	if err := mcpserver.Run(ctx, d, opts, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(stderr, "ctx-core mcp: %v\n", err)
 		return 1
 	}

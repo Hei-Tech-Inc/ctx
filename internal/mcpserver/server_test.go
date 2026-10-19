@@ -130,6 +130,13 @@ func (f *fixture) deps() Deps {
 // connect starts the server in memory and returns a connected client.
 func connect(t *testing.T, d Deps, opts Options, roots []string) *mcp.ClientSession {
 	t.Helper()
+	return connectClient(t, d, opts, roots, &mcp.ClientOptions{})
+}
+
+// connectClient is connect with the client's options (e.g. an elicitation
+// handler). roots == nil turns off the roots capability.
+func connectClient(t *testing.T, d Deps, opts Options, roots []string, copts *mcp.ClientOptions) *mcp.ClientSession {
+	t.Helper()
 	ctx := context.Background()
 	srv := New(d, opts)
 	ct, st := mcp.NewInMemoryTransports()
@@ -137,7 +144,6 @@ func connect(t *testing.T, d Deps, opts Options, roots []string) *mcp.ClientSess
 	if err != nil {
 		t.Fatal(err)
 	}
-	copts := &mcp.ClientOptions{}
 	if roots == nil {
 		copts.Capabilities = &mcp.ClientCapabilities{} // no roots capability
 	}
@@ -487,6 +493,9 @@ func TestToolsAnnotatedReadOnly(t *testing.T) {
 		"describe_service": true, "kubectl_read": true, "discover_services": true,
 		"search_knowledge": true, "get_recipe": true, "activity": true}
 	for _, tool := range res.Tools {
+		if changeTool[tool.Name] {
+			continue
+		}
 		if !want[tool.Name] {
 			t.Errorf("unexpected tool %s", tool.Name)
 			continue
@@ -500,6 +509,9 @@ func TestToolsAnnotatedReadOnly(t *testing.T) {
 		t.Errorf("missing tool %s", name)
 	}
 }
+
+var changeTool = map[string]bool{"restart": true, "network_test": true, "port_forward": true,
+	"kubectl_change": true, "save_recipe": true, "save_service": true, "save_script": true}
 
 func TestTraceNeedsPattern(t *testing.T) {
 	f := newFixture(t, "")
@@ -557,8 +569,8 @@ func TestBrokenKnowledgeKeepsTools(t *testing.T) {
 	f.acme()
 	f.knowledge("acme", map[string]string{"services.yaml": "services:\n  foo: { kind: bogus }\n"})
 	cs := connect(t, f.deps(), Options{Profile: "acme"}, nil)
-	if names := toolNames(t, cs); len(names) != 10 {
-		t.Errorf("tools/list = %v, want all 10", names)
+	if names := toolNames(t, cs); len(names) != 10+len(changeTool) {
+		t.Errorf("tools/list = %v, want all %d", names, 10+len(changeTool))
 	}
 }
 

@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/knowledge"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
@@ -196,4 +198,84 @@ func TestRunnerObserveSeesRedactedArgv(t *testing.T) {
 	if !reflect.DeepEqual(seen, want) {
 		t.Errorf("observed = %q, want %q", seen, want)
 	}
+}
+
+func TestRunStdinPipesInput(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/bad")
+	bin, _ := fakeKubectl(t, `printf 'kc=[%s] ' "$KUBECONFIG"; cat`)
+	f := kubeconfigFile(t)
+	r := &Runner{Kubectl: bin, Redact: secret.NewRedactor([]string{"hunter22"})}
+	out, err := r.RunStdin(context.Background(), Target{Kubeconfig: f, Namespace: "ns"}, strings.NewReader("echo hunter22\n"), "exec", "-i", "p", "--", "/bin/sh", "-s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "kc=[] echo <redacted>\n" {
+		t.Errorf("out = %q", out)
+	}
+	if _, err := r.RunStdin(context.Background(), Target{Kubeconfig: f, Namespace: "ns"}, strings.NewReader(""), "exec", "-n", "x"); err == nil {
+		t.Error("RunStdin skipped ValidateUserArgs")
+	}
+}
+
+func TestArgvIncludesBinary(t *testing.T) {
+	r := &Runner{Kubectl: "/k"}
+	got := r.Argv(Target{Kubeconfig: "/c", Namespace: "ns"}, "get", "pods")
+	want := []string{"/k", "--kubeconfig", "/c", "-n", "ns", "get", "pods"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Argv = %q, want %q", got, want)
+	}
+	if got := (&Runner{}).Argv(Target{Kubeconfig: "/c", Namespace: "ns"})[0]; got != "kubectl" {
+		t.Errorf("default binary = %q", got)
+	}
+}
+
+func TestStartRunsInBackground(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/bad")
+	bin, _ := fakeKubectl(t, `printf 'kc=[%s] hunter22\n' "$KUBECONFIG"; echo 'to stderr' >&2; exec sleep 60`)
+	f := kubeconfigFile(t)
+	var buf syncBuffer
+	r := &Runner{Kubectl: bin, Redact: secret.NewRedactor([]string{"hunter22"})}
+	p, err := r.Start(Target{Kubeconfig: f, Namespace: "ns"}, &buf, "port-forward", "svc/x", "8080:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Pid() <= 0 {
+		t.Fatalf("pid = %d", p.Pid())
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.Wait() }()
+	for i := 0; !strings.Contains(buf.String(), "to stderr") && i < 200; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := p.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait did not return after Kill")
+	}
+	if got := buf.String(); !strings.Contains(got, "kc=[] <redacted>\n") || !strings.Contains(got, "to stderr") {
+		t.Errorf("output = %q", got)
+	}
+	if _, err := r.Start(Target{Kubeconfig: f, Namespace: "ns"}, &buf, "port-forward", "--context", "x"); err == nil {
+		t.Error("Start skipped ValidateUserArgs")
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

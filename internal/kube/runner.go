@@ -79,6 +79,12 @@ func (r *Runner) Args(t Target, args ...string) []string {
 	return append(out, args...)
 }
 
+// Argv is the full command line a call with args runs: the kubectl binary
+// followed by Args.
+func (r *Runner) Argv(t Target, args ...string) []string {
+	return append([]string{r.bin()}, r.Args(t, args...)...)
+}
+
 // allNamespaces reports whether the kubectl flags (args before "--") turn on
 // all namespaces. Args after "--" belong to a remote command ("exec pod --
 // ls -A") and do not count.
@@ -163,7 +169,7 @@ func (r *Runner) command(ctx context.Context, t Target, args []string) (*exec.Cm
 	if err := ValidateUserArgs(args); err != nil {
 		return nil, nil, err
 	}
-	argv := append([]string{r.bin()}, r.Args(t, args...)...)
+	argv := r.Argv(t, args...)
 	redArgv := make([]string, len(argv))
 	for i, a := range argv {
 		redArgv[i] = r.Redact.String(a)
@@ -199,12 +205,17 @@ func (r *Runner) runErr(argv []string, err error, stderr []byte) error {
 // stdout. args that fail ValidateUserArgs are refused without running
 // kubectl; any other failure is a *RunError.
 func (r *Runner) Run(ctx context.Context, t Target, args ...string) ([]byte, error) {
+	return r.RunStdin(ctx, t, nil, args...)
+}
+
+// RunStdin is Run with stdin fed to kubectl (nil means no input).
+func (r *Runner) RunStdin(ctx context.Context, t Target, stdin io.Reader, args ...string) ([]byte, error) {
 	cmd, argv, err := r.command(ctx, t, args)
 	if err != nil {
 		return nil, err
 	}
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, &stdout, &stderr
 	err = cmd.Run()
 	return r.Redact.Bytes(stdout.Bytes()), r.runErr(argv, err, stderr.Bytes())
 }
@@ -223,6 +234,44 @@ func (r *Runner) Stream(ctx context.Context, t Target, w io.Writer, args ...stri
 		return ferr
 	}
 	return r.runErr(argv, err, stderr.Bytes())
+}
+
+// Process is a kubectl call running in the background (see Start).
+type Process struct {
+	cmd *exec.Cmd
+	out *lineRedactor
+}
+
+// Start runs kubectl scoped to t in the background, like Run but without
+// waiting: stdout and stderr go to w, redacted line by line. The process is
+// not tied to any context; the caller must Kill and Wait it. w must be safe
+// to read while the process writes to it.
+func (r *Runner) Start(t Target, w io.Writer, args ...string) (*Process, error) {
+	cmd, argv, err := r.command(context.Background(), t, args)
+	if err != nil {
+		return nil, err
+	}
+	lw := &lineRedactor{w: w, red: r.Redact}
+	cmd.Stdout, cmd.Stderr = lw, lw // the same writer: exec uses one pipe
+	if err := cmd.Start(); err != nil {
+		return nil, &RunError{Argv: argv, Exit: -1, Stderr: r.Redact.String(err.Error())}
+	}
+	return &Process{cmd: cmd, out: lw}, nil
+}
+
+// Pid is the process id.
+func (p *Process) Pid() int { return p.cmd.Process.Pid }
+
+// Kill stops the process.
+func (p *Process) Kill() error { return p.cmd.Process.Kill() }
+
+// Wait waits for the process to exit and writes any unfinished last line.
+func (p *Process) Wait() error {
+	err := p.cmd.Wait()
+	if ferr := p.out.flush(); err == nil {
+		err = ferr
+	}
+	return err
 }
 
 // lineRedactor buffers partial lines so a secret split across writes is

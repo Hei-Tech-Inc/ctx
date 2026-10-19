@@ -96,6 +96,33 @@ func (s *Store) GetRecipe(name string) (Recipe, error) {
 	return parseRecipe(filepath.Join("recipes", name+".md"), data)
 }
 
+// Script returns the path and contents of an existing file in scripts/.
+// name is a file name (with or without .sh), never a path.
+func (s *Store) Script(name string) (string, []byte, error) {
+	dir := filepath.Join(s.Root, "scripts")
+	if name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\\") {
+		for _, n := range []string{name, name + ".sh"} {
+			p := filepath.Join(dir, n)
+			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+				data, err := os.ReadFile(p)
+				return p, data, err
+			}
+		}
+	}
+	var names []string
+	if ents, err := os.ReadDir(dir); err == nil {
+		for _, e := range ents {
+			if e.Type().IsRegular() {
+				names = append(names, e.Name())
+			}
+		}
+	}
+	if len(names) == 0 {
+		return "", nil, fmt.Errorf("unknown script %q: there are no scripts (use save_script)", name)
+	}
+	return "", nil, fmt.Errorf("unknown script %q; valid: %s", name, strings.Join(names, ", "))
+}
+
 // Search does a case-insensitive substring match over recipes and the YAML
 // files, returning one Hit per matching line.
 func (s *Store) Search(query string) ([]Hit, error) {

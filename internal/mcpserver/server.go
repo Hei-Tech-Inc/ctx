@@ -54,21 +54,37 @@ type server struct {
 
 	scopedTools []string // every tool but client_context
 	hideOnce    sync.Once
+
+	forwards *forwards
 }
 
-// New returns the MCP server with the read tools registered.
+// New returns the MCP server with the read and change tools registered.
 func New(d Deps, opts Options) *mcp.Server {
+	_, srv := newServer(d, opts)
+	return srv
+}
+
+// Run serves one session on t until it ends or ctx is cancelled, then
+// stops every port-forward the session started before returning.
+func Run(ctx context.Context, d Deps, opts Options, t mcp.Transport) error {
+	s, srv := newServer(d, opts)
+	defer s.forwards.stopAll()
+	return srv.Run(ctx, t)
+}
+
+func newServer(d Deps, opts Options) (*server, *mcp.Server) {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	s := &server{deps: d, opts: opts, sessions: map[*mcp.ServerSession]*sessionScope{}}
+	s := &server{deps: d, opts: opts, sessions: map[*mcp.ServerSession]*sessionScope{}, forwards: newForwards()}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ctx", Version: "dev"}, &mcp.ServerOptions{
 		Instructions:              instructions,
 		SupportedProtocolVersions: legacyProtocolVersions(),
 	})
 	s.addReadTools(srv)
+	s.addChangeTools(srv)
 	srv.AddReceivingMiddleware(s.gate(srv))
-	return srv
+	return s, srv
 }
 
 // gate resolves the session's scope before tools/list and tools/call. With
@@ -109,14 +125,46 @@ func (s *server) scopeFor(ctx context.Context, session *mcp.ServerSession) (*Sco
 	return ss.get(ctx, session, s.deps, s.opts)
 }
 
+// reloadScope reloads the session's knowledge store after a save_* write,
+// so later calls see the change.
+func (s *server) reloadScope(session *mcp.ServerSession) {
+	s.mu.Lock()
+	ss := s.sessions[session]
+	s.mu.Unlock()
+	if ss != nil {
+		ss.reload(s.deps)
+	}
+}
+
 var readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true}
+
+var destructive = true
+
+// change annotates change tools; the host should ask before running them
+// (ctx asks too, see confirm).
+var change = &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: &destructive}
 
 // addRead registers a read tool whose body needs a usable scope. Without
 // one, the tool returns the same explanation client_context gives.
 func addRead[In any](srv *mcp.Server, s *server, name, desc string,
 	body func(ctx context.Context, sc *Scope, in In) (string, [][]string, error)) {
+	addScoped(srv, s, name, desc, readOnly,
+		func(ctx context.Context, _ *mcp.CallToolRequest, sc *Scope, in In) (string, [][]string, error) {
+			return body(ctx, sc, in)
+		})
+}
+
+// addChange registers a change tool. Its body gets the request so it can
+// ask the user (Scope.ask) through the request's session before it acts.
+func addChange[In any](srv *mcp.Server, s *server, name, desc string,
+	body func(ctx context.Context, req *mcp.CallToolRequest, sc *Scope, in In) (string, [][]string, error)) {
+	addScoped(srv, s, name, desc, change, body)
+}
+
+func addScoped[In any](srv *mcp.Server, s *server, name, desc string, ann *mcp.ToolAnnotations,
+	body func(ctx context.Context, req *mcp.CallToolRequest, sc *Scope, in In) (string, [][]string, error)) {
 	s.scopedTools = append(s.scopedTools, name)
-	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc, Annotations: readOnly},
+	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc, Annotations: ann},
 		func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
 			sc, err := s.scopeFor(ctx, req.Session)
 			if err != nil {
@@ -125,7 +173,7 @@ func addRead[In any](srv *mcp.Server, s *server, name, desc string,
 			if err := sc.unavailable(); err != nil {
 				return errorResult(err.Error()), nil, nil
 			}
-			res, err := sc.call(name, in, func() (string, [][]string, error) { return body(ctx, sc, in) })
+			res, err := sc.call(name, in, func() (string, [][]string, error) { return body(ctx, req, sc, in) })
 			return res, nil, err
 		})
 }

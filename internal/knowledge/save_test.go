@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,5 +138,27 @@ func TestActivityAppendQuery(t *testing.T) {
 	empty, err := OpenActivity(t.TempDir()).Query(ActivityFilter{})
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty: %v %v", empty, err)
+	}
+}
+
+func TestStoreScript(t *testing.T) {
+	root := t.TempDir()
+	if _, err := SaveScript(root, "ping.sh", "echo ping\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &Store{Root: root}
+	for _, name := range []string{"ping.sh", "ping"} {
+		p, data, err := s.Script(name)
+		if err != nil || p != filepath.Join(root, "scripts", "ping.sh") || string(data) != "echo ping\n" {
+			t.Errorf("Script(%q) = %q %q %v", name, p, data, err)
+		}
+	}
+	for _, name := range []string{"../secret.txt", "..", "", "nope", "/etc/passwd"} {
+		if _, _, err := s.Script(name); err == nil || !strings.Contains(err.Error(), "ping.sh") {
+			t.Errorf("Script(%q) err = %v", name, err)
+		}
 	}
 }

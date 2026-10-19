@@ -183,3 +183,12 @@ func (ss *sessionScope) get(ctx context.Context, session *mcp.ServerSession, d D
 	ss.done = true
 	return ss.scope, ss.err
 }
+
+// reload rebuilds the scope from disk (after a save_* write).
+func (ss *sessionScope) reload(d Deps) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.scope != nil {
+		ss.scope = newScope(ss.scope.Profile, d)
+	}
+}

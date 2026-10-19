@@ -19,7 +19,9 @@ import (
 //
 // args is the tool's input struct; its "env" field, when it names one of
 // the scope's environments, fills the entry's env, cluster and namespace.
-// fn returns the text to show and the argv of every command it ran.
+// fn returns the text to show and the argv of every command it ran. A
+// *notRunError from fn (a change the user did not approve) is shown as a
+// normal result and logged with its result, "declined" or "not_run".
 func (s *Scope) call(tool string, args any, fn func() (string, [][]string, error)) (*mcp.CallToolResult, error) {
 	start := s.now()
 	text, argv, err := fn()
@@ -36,6 +38,11 @@ func (s *Scope) call(tool string, args any, fn func() (string, [][]string, error
 				entry.Env, entry.Cluster, entry.Namespace = e.Name, e.Cluster, e.Namespace
 			}
 		}
+	}
+	var nr *notRunError
+	if errors.As(err, &nr) {
+		entry.Result, entry.Exit = nr.result, -1
+		text, err = nr.text, nil
 	}
 	if err != nil {
 		entry.Result, entry.Exit = "error", -1 // -1: no command exit status
