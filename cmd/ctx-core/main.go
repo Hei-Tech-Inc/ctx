@@ -26,7 +26,7 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|guard> [args]\n"
+const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|guard> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry reports whether it handles the given first argument (the
@@ -41,6 +41,7 @@ var implemented = map[string]func(sub string) bool{
 	"guard":          func(sub string) bool { return sub == "check" },
 	"secret":         func(sub string) bool { return sub == "get" || sub == "list" || sub == "delete" },
 	"config":         func(sub string) bool { return configSubs[sub] },
+	"deactivate":     func(string) bool { return true },
 }
 
 // configSubs are the `config` subcommands ctx-core runs ("" is show).
@@ -103,6 +104,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSecret(args[1:], stdout, stderr)
 	case "config":
 		return cli.Config(stdout, stderr, args[1:])
+	case "deactivate":
+		return cli.Deactivate(stdout, stderr, args[1:])
 	case "guard":
 		if len(args) < 2 || args[1] != "check" {
 			fmt.Fprintln(stderr, "ctx-core: guard supports only check")
