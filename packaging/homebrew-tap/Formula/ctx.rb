@@ -8,23 +8,26 @@ class Ctx < Formula
 
   depends_on "bash"
   depends_on "git"
+  depends_on "go" => :build
 
   def install
     bin.install "bin/ctx"
     lib.install Dir["lib/*.sh"]
     lib.install Dir["lib/*.bash"]
     lib.install Dir["lib/*.fish"]
+    system "go", "build", *std_go_args(output: lib/"ctx-core", ldflags: "-X main.version=#{version}"), "./cmd/ctx-core"
   end
 
   def caveats
     <<~EOS
-      Only the ctx scripts are installed. Optional tools (mise, gum, gh, cloud CLIs)
-      are not — use the full installer from the upstream README, or install tools
+      The ctx scripts and ctx-core (for `ctx mcp`) are installed. Optional tools
+      (mise, gum, gh, cloud CLIs) are not — use the full installer from the upstream README, or install tools
       separately and run `ctx doctor`.
     EOS
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/ctx version")
+    assert_match version.to_s, shell_output("#{lib}/ctx-core version")
   end
 end

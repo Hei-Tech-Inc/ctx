@@ -1,0 +1,16 @@
+# environments.yaml - environment name -> cluster + namespace (+ aliases).
+# Mark production-like environments `protected: true`; change tools then
+# require the full environment name, not an alias.
+#
+# environments:
+#   dev:     { cluster: nonprod, namespace: app-dev }
+#   preprod: { cluster: nonprod, namespace: app-preprod, aliases: [pp] }
+#   prod:    { cluster: prod,    namespace: app-prod,    protected: true }
+#
+# Optional pod used by network_test (a per-environment override is allowed
+# with a `network_tool:` key inside the environment):
+# network_tool:
+#   namespace: network-utility
+#   selector: app=network-tool
+#   container: network-tool
+environments: {}

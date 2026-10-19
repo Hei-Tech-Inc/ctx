@@ -1,0 +1,4 @@
+# services.yaml
+services:
+  subscription-cis-system: { kind: deployment, aliases: [subs, subscription, cis] }
+  customer-kyc-verification-aggregator: { kind: deployment, aliases: [kyc, kyc-verify] }

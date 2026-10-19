@@ -1183,6 +1183,16 @@ cmd_doctor() {
   _chk gcloud    "gcloud"    "$install_hint_gcloud"
   _chk kubectl   "kubectl"   "$install_hint_kubectl" "kubectl version --client=true"
 
+  local core_bin core_ver
+  if core_bin="$(_ctx_core_bin)" && [[ -n "$core_bin" ]]; then
+    core_ver="$("$core_bin" version 2>&1 | sed -n '1p')"
+    core_ver="${core_ver#ctx-core }"
+    success "ctx-core: ${core_ver:-installed} ($core_bin)"
+  else
+    warn "ctx-core missing — ctx mcp unavailable  →  reinstall ctx (install.sh)"
+    all_ok=false
+  fi
+
   echo ""
   hr
 

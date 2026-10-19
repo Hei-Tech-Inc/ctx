@@ -1,0 +1,7 @@
+# services.yaml - service name -> workload kind, plus nicknames.
+# The agent can also fill this in with discover_services + save_service.
+#
+# services:
+#   my-service: { kind: deployment, aliases: [svc, my] }
+#   my-db:      { kind: statefulset }
+services: {}

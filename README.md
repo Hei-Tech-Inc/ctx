@@ -94,7 +94,7 @@ brew tap isaackumi/tap
 brew install ctx
 ```
 
-The formula ships the **`ctx` CLI only**; optional tools (`mise`, `gum`, `gh`, …) still come from the full **`install.sh`** flow or your own installs — run **`ctx doctor`** after setup.
+The formula ships the **`ctx` CLI and `ctx-core`** (the Go binary behind `ctx mcp`, built at install time); optional tools (`mise`, `gum`, `gh`, …) still come from the full **`install.sh`** flow or your own installs — run **`ctx doctor`** after setup.
 
 ### From source
 
@@ -211,6 +211,99 @@ It sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, `GIT_SSH_COMMAND` (the profile's key o
 `ctx env` prints the same variables for `eval "$(ctx env)"` (or `ctx env --fish | source`). Secrets are left out unless you pass `--secrets`, so running it by accident doesn't print them.
 
 `ctx agent-rules --write` adds a short section to the repo's `AGENTS.md` (between markers, safe to re-run). It tells Cursor, Claude Code, Codex and similar agents to check identity with `ctx status --json`, run credentialed commands through `ctx run`, and stop rather than use `--no-verify` when `ctx guard` blocks a commit.
+
+### AI ops agent (`ctx mcp`)
+
+`ctx mcp` is an [MCP](https://modelcontextprotocol.io) server that lets an AI agent (Claude Code, Cursor, and similar) do routine Kubernetes operations for **one client**: log in to a cluster, read and search logs, trace an ID across services, explain where a service gets a setting, restart a deployment, and remember what it learned. It uses the client's own login steps and conventions, which you write once.
+
+It is scoped to the profile that owns the folder the agent was started in. Outside any client folder it offers a single `client_context` tool that says no client is active. It never falls back to the profile marked active in `~/.ctx/config`, and one client's clusters, services, recipes and activity are never visible from another client's folder. If the open folders change mid-session so they no longer resolve to that one client (for example `/add-dir` of another client's folder), ctx stops serving that session: only `client_context` stays, it explains why, and the session's port-forwards are stopped. Start a new session to continue.
+
+It needs `ctx-core`, the Go binary that `install.sh`, `ctx upgrade` and the Homebrew formula install next to the ctx libs. Check with `ctx doctor` (`ctx-core: <version> (<path>)`). If no build exists for your OS and CPU the installer warns `ctx mcp unavailable` and the rest of ctx works as before.
+
+#### 1. Describe the client
+
+```bash
+ctx knowledge init acme     # or run it inside the client's folder with no name
+```
+
+This creates `~/.ctx/knowledge/acme/` (mode `0700`, files `0600`) with three commented YAML files, plus `recipes/` and `scripts/`:
+
+```yaml
+# clusters.yaml: how to log in to each cluster. Two login types exist:
+#   command    steps you write; run in order with KUBECONFIG set to a ctx-owned file
+#   kubeconfig use an existing kubeconfig file and context; `path` (absolute or ~/)
+#              and `context` are both required, ctx never uses current-context
+clusters:
+  nonprod:
+    login:
+      type: command
+      secrets: [CLUSTER_PASSWORD]      # keys in the ctx secret store, passed to the steps as env vars
+      run:
+        - vendor-cli login -a api-nonprod.example.net -u jane.doe -p "$CLUSTER_PASSWORD" -k
+        - vendor-cli get-credentials nonprod
+  prod:
+    login:
+      type: command
+      secrets: [CLUSTER_PASSWORD]
+      run:
+        - vendor-cli login -a api-prod.example.net -u jane.doe -p "$CLUSTER_PASSWORD" -k
+        - vendor-cli get-credentials prod
+```
+
+```yaml
+# environments.yaml: environment name -> cluster + namespace (+ aliases)
+environments:
+  dev:     { cluster: nonprod, namespace: app-dev }
+  preprod: { cluster: nonprod, namespace: app-preprod, aliases: [pp, nonprod] }
+  prod:    { cluster: prod,    namespace: app-prod,    protected: true }
+network_tool:                     # optional: pod for network_test
+  namespace: network-utility
+  selector: app=network-tool
+  container: network-tool
+```
+
+```yaml
+# services.yaml: workload names and the nicknames you use for them
+services:
+  subscription-cis-system: { kind: deployment, aliases: [subs, subscription, cis] }
+  customer-kyc-verification-aggregator: { kind: deployment, aliases: [kyc, kyc-verify] }
+```
+
+Another client's `clusters.yaml` might be a single `az aks get-credentials ...` step, or `type: kubeconfig` with a `path` and `context` that already exist. Nothing in ctx is specific to a cloud or vendor CLI.
+
+Recipes are markdown runbooks in `recipes/*.md` (front matter with `name`, `description`, `tags`, `params`, `changes_state`) that the agent reads and follows with the tools. Scripts for `network_test` go in `scripts/*.sh`. The agent can add services, recipes and scripts through its save tools, each behind a confirmation; `clusters.yaml` and `environments.yaml` are only edited by you.
+
+#### 2. Store login secrets
+
+```bash
+ctx secret set acme CLUSTER_PASSWORD
+```
+
+Login steps reference the secret as `$CLUSTER_PASSWORD`. ctx puts it in the step's environment; it is never written into a knowledge file or the step text.
+
+#### 3. Register the server
+
+```bash
+ctx mcp install claude     # runs: claude mcp add --scope user ctx -- ctx mcp
+ctx mcp install cursor     # merges ctx into ~/.cursor/mcp.json, keeping other servers
+```
+
+`ctx mcp install cursor` writes a backup (`~/.cursor/mcp.json.ctx-backup-<timestamp>`) before changing the file and does nothing on a second run. If `claude` is not on `PATH`, `ctx mcp install claude` prints the command for you to run and exits 1.
+
+Then start the agent inside the client's folder and ask: "log in to preprod", "restart subs on preprod", "trace this MSISDN in kyc and subs on prod for the last hour and export it", "where does SUBSCRIPTION_URL in subs come from on prod?". To pin a profile instead of using the folder, register `ctx mcp --profile NAME`.
+
+#### Confirmation and safety
+
+- **Read tools** (`client_context`, `login`, `logs`, `trace`, `describe_service`, `kubectl_read`, `discover_services`, `search_knowledge`, `get_recipe`, `activity`) run without asking. `login` only changes ctx-owned files.
+- **Change tools** (`restart`, `network_test`, `port_forward`, `kubectl_change`, `save_recipe`, `save_service`, `save_script`) never run on the agent's say-so alone. ctx itself asks you first, through an MCP elicitation that shows the profile, environment, cluster, namespace and the exact command, and runs it only if you accept. Decline, cancel or timeout means it did not run. ctx's confirmation dialog appears even in auto mode and with "always allow" rules, because it comes from ctx and not from the host's permission system.
+- If the host does not support elicitation, change tools run nothing and return the exact command for you to run yourself.
+- Script and recipe bodies are shown in the confirmation in full. A body over 400 lines or 64 KiB is refused rather than truncated; split it or run it yourself.
+- `kubectl config`, `kuberc` and `plugin` are refused in both `kubectl_read` and `kubectl_change`, because ctx manages kubeconfig itself. kubectl runs with `KUBERC=off`, so personal kubectl preferences don't change what ctx runs.
+- **Do not configure a Claude Code `Elicitation` hook that auto-accepts for ctx.** It would answer ctx's confirmation on your behalf and bypass it.
+- Environments marked `protected: true` also require the canonical environment name for change tools, so a nickname cannot reach production by mistake.
+- Every kubectl call ctx makes carries `--kubeconfig <ctx-owned file>` and `-n <namespace>` (plus `--context` for `kubeconfig` logins). `KUBECONFIG` from the environment is ignored and `~/.kube/config` is never written; kubeconfigs live in `~/.ctx/kube/<profile>/<cluster>.yaml`.
+- **Secrets are never shown.** Every value in the profile's `SECRET_KEYS` and every key named in a cluster's `login.secrets` is replaced with `<redacted>` in tool output, errors and the activity log. Kubernetes Secret `data` and `stringData` values are always `<redacted>`, and `describe_service` shows Secret references by name and key only.
+- Calls are recorded in `~/.ctx/knowledge/<profile>/activity.jsonl`; full log exports go to `exports/` in the same folder.
 
 ### Secrets (Keychain or `~/.ctx/secrets`)
 
