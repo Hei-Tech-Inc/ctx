@@ -130,9 +130,12 @@ _ctx_use_apply() {
   # 4. Azure
   if [[ -n "${AZURE_SUBSCRIPTION:-}" ]]; then
     if has az; then
-      az account set --subscription "$AZURE_SUBSCRIPTION" &>/dev/null \
-        && { [[ "$quiet" == "0" ]] && success "Azure → $AZURE_SUBSCRIPTION"; } \
-        || { warn "Azure subscription switch failed"; errors=$((errors+1)); }
+      if az account set --subscription "$AZURE_SUBSCRIPTION" &>/dev/null; then
+        [[ "$quiet" == "0" ]] && success "Azure → $AZURE_SUBSCRIPTION"
+      else
+        warn "Azure subscription switch failed"
+        errors=$((errors+1))
+      fi
     else
       _ctx_use_export AZURE_SUBSCRIPTION "$AZURE_SUBSCRIPTION"
       [[ -n "${AZURE_TENANT:-}" ]] && _ctx_use_export AZURE_TENANT "$AZURE_TENANT"
@@ -142,9 +145,11 @@ _ctx_use_apply() {
   # 5. GCP
   if [[ -n "${GCP_PROJECT:-}" ]]; then
     if has gcloud; then
-      gcloud config set project "$GCP_PROJECT" --quiet 2>/dev/null \
-        && { [[ "$quiet" == "0" ]] && success "GCP → $GCP_PROJECT"; } \
-        || warn "GCP project switch failed"
+      if gcloud config set project "$GCP_PROJECT" --quiet 2>/dev/null; then
+        [[ "$quiet" == "0" ]] && success "GCP → $GCP_PROJECT"
+      else
+        warn "GCP project switch failed"
+      fi
       [[ -n "${GCP_ACCOUNT:-}" ]] && \
         gcloud config set account "$GCP_ACCOUNT" --quiet 2>/dev/null || true
     else
@@ -155,9 +160,11 @@ _ctx_use_apply() {
   # 6. kubectl
   if [[ -n "${KUBE_CONTEXT:-}" ]]; then
     if has kubectl; then
-      kubectl config use-context "$KUBE_CONTEXT" &>/dev/null \
-        && { [[ "$quiet" == "0" ]] && success "kubectl → $KUBE_CONTEXT"; } \
-        || warn "kubectl context '$KUBE_CONTEXT' not found"
+      if kubectl config use-context "$KUBE_CONTEXT" &>/dev/null; then
+        [[ "$quiet" == "0" ]] && success "kubectl → $KUBE_CONTEXT"
+      else
+        warn "kubectl context '$KUBE_CONTEXT' not found"
+      fi
     fi
   fi
 

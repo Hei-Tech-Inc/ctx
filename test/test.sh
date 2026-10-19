@@ -1013,6 +1013,28 @@ test_autoswitch_keeps_manual_lock() {
   pass "autoswitch re-applying the active profile keeps a manual lock"
 }
 
+test_quiet_use_cloud_tools_succeed() {
+  (
+    set -euo pipefail
+    local td t err rc=0
+    _use_eval_fixture
+    mkdir -p "$td/bin"
+    for t in az gcloud kubectl; do
+      printf '#!/bin/sh\nexit 0\n' >"$td/bin/$t"
+      chmod +x "$td/bin/$t"
+    done
+    printf 'AZURE_SUBSCRIPTION=sub\nGCP_PROJECT=proj\nKUBE_CONTEXT=kc\n' >>"$CTX_DIR/profiles/demo.conf"
+    export PATH="$td/bin:$PATH"
+    cd "$td"
+    ctx -q use demo --eval bash >/dev/null 2>"$td/err" || rc=$?
+    err="$(cat "$td/err")"
+    [[ $rc -eq 0 ]] || { echo "quiet use exit $rc: $err"; exit 1; }
+    [[ -z "$err" ]] || { echo "quiet use warned on success: $err"; exit 1; }
+    rm -rf "$td"
+  ) || fail "quiet use with az/gcloud/kubectl"
+  pass "quiet ctx use treats az/gcloud/kubectl success as success"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1046,5 +1068,6 @@ test_use_eval_exports
 test_shell_wrapper_applies_use
 test_autoswitch_exports_profile_env
 test_autoswitch_keeps_manual_lock
+test_quiet_use_cloud_tools_succeed
 
 echo "All tests passed."
