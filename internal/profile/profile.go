@@ -22,6 +22,8 @@ type Profile struct {
 	ExtraEnvs     map[string]string
 	// ExtraEnvsRaw is EXTRA_ENVS exactly as the profile sets it (ordered, duplicates kept).
 	ExtraEnvsRaw string
+	// ProfileName is PROFILE_NAME as the profile sets it; `ctx use` reads secrets under it.
+	ProfileName string
 }
 
 var keys = []string{
@@ -75,7 +77,7 @@ func Load(dir, name string) (*Profile, error) {
 		GCPProject: vals["GCP_PROJECT"], GCPAccount: vals["GCP_ACCOUNT"], KubeContext: vals["KUBE_CONTEXT"],
 		SigningFormat: vals["SIGNING_FORMAT"], SigningKey: vals["SIGNING_KEY"],
 		SecretKeys: strings.Fields(vals["SECRET_KEYS"]), SecretKeysRaw: vals["SECRET_KEYS"],
-		ExtraEnvs: map[string]string{}, ExtraEnvsRaw: vals["EXTRA_ENVS"],
+		ExtraEnvs: map[string]string{}, ExtraEnvsRaw: vals["EXTRA_ENVS"], ProfileName: vals["PROFILE_NAME"],
 	}
 	for _, line := range strings.Split(vals["EXTRA_ENVS"], "\n") {
 		line = strings.TrimSpace(line)

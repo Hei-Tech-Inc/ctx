@@ -26,12 +26,13 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|guard> [args]\n"
+const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|guard> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry reports whether it handles the given first argument (the
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
-// list and status count only with --json; guard only with check.
+// list and status count only with --json; guard only with check; use only
+// with CTX_QUIET=1 in the environment (the non-quiet output stays in Bash).
 var implemented = map[string]func(sub string) bool{
 	"list":           func(sub string) bool { return sub == "--json" },
 	"status":         func(sub string) bool { return sub == "--json" },
@@ -42,6 +43,7 @@ var implemented = map[string]func(sub string) bool{
 	"secret":         func(sub string) bool { return sub == "get" || sub == "list" || sub == "delete" },
 	"config":         func(sub string) bool { return configSubs[sub] },
 	"deactivate":     func(string) bool { return true },
+	"use":            func(string) bool { return os.Getenv("CTX_QUIET") == "1" },
 }
 
 // configSubs are the `config` subcommands ctx-core runs ("" is show).
@@ -106,6 +108,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cli.Config(stdout, stderr, args[1:])
 	case "deactivate":
 		return cli.Deactivate(stdout, stderr, args[1:])
+	case "use":
+		if !implements("use", args[1:]) {
+			fmt.Fprintln(stderr, "ctx-core: use supports only CTX_QUIET=1")
+			return 127
+		}
+		return cli.Use(stdout, stderr, args[1:])
 	case "guard":
 		if len(args) < 2 || args[1] != "check" {
 			fmt.Fprintln(stderr, "ctx-core: guard supports only check")

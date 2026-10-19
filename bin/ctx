@@ -431,7 +431,10 @@ main() {
   case "$cmd" in
     init)             cmd_init ;;
     setup|import|add) cmd_import "$@" ;;
-    use)              cmd_use "$@" ;;
+    use)
+      _ctx_core_forward use "$@" # only when quiet (CTX_QUIET=1)
+      cmd_use "$@"
+      ;;
     deactivate)      cmd_deactivate "$@" ;;
     list|ls)
       [[ "$CTX_JSON" == 1 ]] && _ctx_core_forward list --json

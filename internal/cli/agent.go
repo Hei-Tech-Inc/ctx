@@ -39,7 +39,11 @@ func agentHasKey(key string) bool {
 	if len(want) == 0 {
 		return false
 	}
-	out, _ = exec.Command("ssh-add", "-l").Output()
+	// Under pipefail a failing `ssh-add -l` fails the whole check.
+	out, err = exec.Command("ssh-add", "-l").Output()
+	if err != nil {
+		return false
+	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if f := strings.Fields(line); len(f) >= 2 && want[f[1]] {
 			return true
