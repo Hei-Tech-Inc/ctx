@@ -33,7 +33,7 @@ const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt
 var implemented = map[string]func(sub string) bool{
 	"list":           func(sub string) bool { return sub == "--json" },
 	"status":         func(sub string) bool { return sub == "--json" },
-	"workdir-prompt": func(string) bool { return false },
+	"workdir-prompt": func(string) bool { return true },
 	"env":            func(string) bool { return false },
 	"run":            func(string) bool { return false },
 	"guard":          func(sub string) bool { return false && sub == "check" },
@@ -74,7 +74,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "list", "status":
 		return runListStatus(args, stdout, stderr)
-	case "workdir-prompt", "env", "run", "guard":
+	case "workdir-prompt":
+		pwd, err := os.Getwd()
+		if err == nil {
+			err = cli.WorkdirPrompt(stdout, pwd)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "ctx-core: %v\n", err)
+		}
+		return 0 // the Bash command never fails
+	case "env", "run", "guard":
 		// Not ported yet. bin/ctx asks `implements` first, so this is unreachable via forwarding.
 		fmt.Fprintln(stderr, "not implemented")
 		return 2

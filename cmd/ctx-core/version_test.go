@@ -32,7 +32,7 @@ func TestListStatusImplements(t *testing.T) {
 }
 
 func TestStubsAndImplements(t *testing.T) {
-	for _, c := range []string{"workdir-prompt", "env", "run", "guard"} {
+	for _, c := range []string{"env", "run", "guard"} {
 		var out, errb strings.Builder
 		if rc := run([]string{c}, &out, &errb); rc != 2 {
 			t.Errorf("%s: rc=%d, want 2", c, rc)
@@ -40,5 +40,12 @@ func TestStubsAndImplements(t *testing.T) {
 		if rc := run([]string{"implements", c}, &out, &errb); rc != 1 {
 			t.Errorf("implements %s: rc=%d, want 1", c, rc)
 		}
+	}
+}
+
+func TestWorkdirPromptImplements(t *testing.T) {
+	var out, errb strings.Builder
+	if rc := run([]string{"implements", "workdir-prompt"}, &out, &errb); rc != 0 {
+		t.Errorf("implements workdir-prompt: rc=%d, want 0", rc)
 	}
 }
