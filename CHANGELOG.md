@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **`CTX_QUIET` from the environment:** `bin/ctx` now honors an inherited `CTX_QUIET` instead of resetting it to 0, so the autoswitch hook's `CTX_QUIET=1 ctx use/deactivate` is actually quiet. Anyone who exports `CTX_QUIET=1` globally now gets quiet `ctx` output.
-- **Quiet `use` with az, gcloud or kubectl:** a successful Azure, Google Cloud or kubectl switch in quiet mode was reported as a failure (non-zero exit), so the autoswitch hook never finished setting the active profile and `GH_TOKEN`. It now succeeds.
+- **Quiet `use` with az, gcloud or kubectl:** quiet `use` printed false "switch failed" warnings after successful az, gcloud and kubectl switches, and for Azure profiles it also exited non-zero, which (combined with the inherited-`CTX_QUIET` fix above) would have made the autoswitch hook treat the switch as failed. Successful switches are no longer reported as failures.
 - **Trailing slash in `WORK_DIR`:** the Bash resolver, `workdir-prompt` helpers and the bash/fish autoswitch hook now ignore one trailing `/` in a profile's `WORK_DIR` (for example `~/clients/acme/`), so the profile matches its folder instead of being silently skipped. This matches `ctx-core`. Guard and `env` can now act in folders where such a profile was previously ignored.
 
 ### Added
