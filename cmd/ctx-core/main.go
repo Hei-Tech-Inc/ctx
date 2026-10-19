@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,8 +35,8 @@ var implemented = map[string]func(sub string) bool{
 	"list":           func(sub string) bool { return sub == "--json" },
 	"status":         func(sub string) bool { return sub == "--json" },
 	"workdir-prompt": func(string) bool { return true },
-	"env":            func(string) bool { return false },
-	"run":            func(string) bool { return false },
+	"env":            func(string) bool { return true },
+	"run":            func(string) bool { return true },
 	"guard":          func(sub string) bool { return false && sub == "check" },
 }
 
@@ -83,7 +84,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "ctx-core: %v\n", err)
 		}
 		return 0 // the Bash command never fails
-	case "env", "run", "guard":
+	case "env", "run":
+		return runEnvRun(args, stdout, stderr)
+	case "guard":
 		// Not ported yet. bin/ctx asks `implements` first, so this is unreachable via forwarding.
 		fmt.Fprintln(stderr, "not implemented")
 		return 2
@@ -209,4 +212,24 @@ func runListStatus(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// runEnvRun serves `env` and `run`. run replaces the process and returns only on failure.
+func runEnvRun(args []string, stdout, stderr io.Writer) int {
+	var err error
+	if args[0] == "env" {
+		err = cli.Env(stdout, args[1:])
+	} else {
+		err = cli.Run(args[1:])
+	}
+	if err == nil {
+		return 0
+	}
+	var ee *cli.ExitError
+	if errors.As(err, &ee) {
+		fmt.Fprintln(stderr, ee.Msg)
+		return ee.Code
+	}
+	fmt.Fprintf(stderr, "\u2717 %v\n", err)
+	return 1
 }

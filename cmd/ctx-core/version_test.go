@@ -31,8 +31,17 @@ func TestListStatusImplements(t *testing.T) {
 	}
 }
 
+func TestEnvRunImplements(t *testing.T) {
+	for _, c := range []string{"env", "run"} {
+		var out, errb strings.Builder
+		if rc := run([]string{"implements", c}, &out, &errb); rc != 0 {
+			t.Errorf("implements %s: rc=%d, want 0", c, rc)
+		}
+	}
+}
+
 func TestStubsAndImplements(t *testing.T) {
-	for _, c := range []string{"env", "run", "guard"} {
+	for _, c := range []string{"guard"} {
 		var out, errb strings.Builder
 		if rc := run([]string{c}, &out, &errb); rc != 2 {
 			t.Errorf("%s: rc=%d, want 2", c, rc)

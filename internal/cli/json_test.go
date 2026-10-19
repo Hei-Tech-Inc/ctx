@@ -59,12 +59,17 @@ func bashBin(t *testing.T) string {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
-	p, err := filepath.Abs("../../bin/ctx")
+	return filepath.Join(repoRoot, "bin", "ctx")
+}
+
+// repoRoot is absolute so tests may t.Chdir.
+var repoRoot = func() string {
+	p, err := filepath.Abs("../..")
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
 	return p
-}
+}()
 
 // bash runs the Bash implementation in dir.
 func (f *fixture) bash(dir string, args ...string) (string, int) {
