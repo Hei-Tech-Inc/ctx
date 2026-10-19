@@ -50,10 +50,13 @@ func expandHome(p string) string {
 }
 
 // Runner runs kubectl. Kubectl defaults to "kubectl" on PATH. All output and
-// errors pass through Redact.
+// errors pass through Redact. Observe, when set, is called with the redacted
+// argv (kubectl binary first) of every call just before it runs; it may be
+// called from several goroutines at once.
 type Runner struct {
 	Kubectl string
 	Redact  *secret.Redactor
+	Observe func(argv []string)
 }
 
 func (r *Runner) bin() string {
@@ -168,6 +171,9 @@ func (r *Runner) command(ctx context.Context, t Target, args []string) (*exec.Cm
 	if _, err := os.Stat(t.Kubeconfig); err != nil {
 		return nil, redArgv, &RunError{Argv: redArgv, Exit: -1,
 			Stderr: r.Redact.String(fmt.Sprintf("kubeconfig %s not found", t.Kubeconfig)), missingKubeconfig: true}
+	}
+	if r.Observe != nil {
+		r.Observe(redArgv)
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = childEnv("")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -169,5 +170,30 @@ func TestRunMapsAuthErrors(t *testing.T) {
 	}
 	if AsAuthError(nil, "preprod") != nil {
 		t.Error("AsAuthError(nil) != nil")
+	}
+}
+
+func TestRunnerObserveSeesRedactedArgv(t *testing.T) {
+	bin, _ := fakeKubectl(t, `echo ok`)
+	f := kubeconfigFile(t)
+	var seen [][]string
+	r := &Runner{Kubectl: bin, Redact: secret.NewRedactor([]string{"hunter22"}),
+		Observe: func(argv []string) { seen = append(seen, argv) }}
+	tg := Target{Kubeconfig: f, Namespace: "ns"}
+	if _, err := r.Run(context.Background(), tg, "get", "cm", "hunter22"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Stream(context.Background(), tg, io.Discard, "logs", "x"); err != nil {
+		t.Fatal(err)
+	}
+	// refused and not-run calls are not observed
+	_, _ = r.Run(context.Background(), tg, "get", "pods", "--context", "x")
+	_, _ = r.Run(context.Background(), Target{Kubeconfig: f + ".missing", Namespace: "ns"}, "get", "pods")
+	want := [][]string{
+		{bin, "--kubeconfig", f, "-n", "ns", "get", "cm", "<redacted>"},
+		{bin, "--kubeconfig", f, "-n", "ns", "logs", "x"},
+	}
+	if !reflect.DeepEqual(seen, want) {
+		t.Errorf("observed = %q, want %q", seen, want)
 	}
 }

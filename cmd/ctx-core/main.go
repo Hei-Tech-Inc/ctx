@@ -3,14 +3,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/knowledge"
+	"github.com/Hei-Tech-Inc/ctx/internal/mcpserver"
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
 	"github.com/Hei-Tech-Inc/ctx/internal/resolve"
+	"github.com/Hei-Tech-Inc/ctx/internal/secret"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -34,12 +41,42 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "knowledge":
 		return runKnowledge(args[1:], stdout, stderr)
 	case "mcp":
-		fmt.Fprintf(stderr, "ctx-core %s: not implemented yet\n", args[0])
-		return 2
+		return runMCP(args[1:], stderr)
 	default:
 		fmt.Fprintf(stderr, "ctx-core: unknown command %q\n%s", args[0], usage)
 		return 2
 	}
+}
+
+const mcpUsage = "usage: ctx-core mcp [--profile NAME]\n"
+
+// runMCP serves MCP over stdin/stdout until the client disconnects.
+func runMCP(args []string, stderr io.Writer) int {
+	opts := mcpserver.Options{}
+	switch {
+	case len(args) == 0:
+	case len(args) == 2 && args[0] == "--profile" && args[1] != "":
+		opts.Profile = args[1]
+	case len(args) == 1 && strings.HasPrefix(args[0], "--profile=") && len(args[0]) > len("--profile="):
+		opts.Profile = strings.TrimPrefix(args[0], "--profile=")
+	default:
+		fmt.Fprint(stderr, mcpUsage)
+		return 2
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "ctx-core: %v\n", err)
+		return 1
+	}
+	opts.Cwd = cwd
+	srv := mcpserver.New(mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.CLIGetter{}}, opts)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
+		fmt.Fprintf(stderr, "ctx-core mcp: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 const knowledgeUsage = "usage: ctx-core knowledge init [profile]\n"
