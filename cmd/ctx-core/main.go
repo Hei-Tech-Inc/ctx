@@ -41,6 +41,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "knowledge":
 		return runKnowledge(args[1:], stdout, stderr)
 	case "mcp":
+		if len(args) > 1 && args[1] == "install" {
+			return runMCPInstall(args[2:], stdout, stderr)
+		}
 		return runMCP(args[1:], stderr)
 	default:
 		fmt.Fprintf(stderr, "ctx-core: unknown command %q\n%s", args[0], usage)
@@ -48,7 +51,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-const mcpUsage = "usage: ctx-core mcp [--profile NAME]\n"
+const mcpUsage = "usage: ctx-core mcp [--profile NAME] | mcp install <claude|cursor>\n"
 
 // runMCP serves MCP over stdin/stdout until the client disconnects.
 func runMCP(args []string, stderr io.Writer) int {

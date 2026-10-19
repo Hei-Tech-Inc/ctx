@@ -9,6 +9,8 @@ set -uo pipefail
 
 CTX_VERSION="3.2.0"
 CTX_REPO="https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main"
+# Release assets (ctx-core_<os>_<arch>, checksums.txt) live under <base>/v<version>/.
+CTX_RELEASE_BASE="${CTX_RELEASE_BASE:-https://github.com/Hei-Tech-Inc/ctx/releases/download}"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -303,6 +305,91 @@ activate_mise_in_shell() {
   info "  This makes mise activate automatically per directory (like direnv but better)"
 }
 
+# ─── ctx-core (Go binary for `ctx mcp`) ───────────────────────────────────────
+# Version of the staged lib/core.sh (the version being installed).
+_staged_ctx_version() {
+  tr -d '\r' < "$1" | grep -m1 '^CTX_VERSION=' | sed 's/^CTX_VERSION=//; s/"//g'
+}
+
+_sha256_of() {
+  if command -v sha256sum &>/dev/null; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum &>/dev/null; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# Build ctx-core from a checkout. Args: source dir, dest file, version.
+_build_ctx_core() {
+  local src="$1" dest="$2" ver="$3"
+  command -v go &>/dev/null && [[ -d "$src/cmd/ctx-core" ]] || return 1
+  ( cd "$src" && go build -ldflags "-X main.version=${ver}" -o "$dest" ./cmd/ctx-core ) &>/dev/null
+}
+
+# Download the release build of ctx-core. Args: dest file, version.
+# Returns 1 with a warning when this OS/arch has no build or the asset is missing.
+_download_ctx_core() {
+  local dest="$1" ver="$2"
+  local os arch asset base sums want got
+  case "$OS" in
+    Darwin) os="darwin" ;;
+    Linux)  os="linux" ;;
+    *)      os="$OS" ;;
+  esac
+  case "$ARCH" in
+    x86_64|amd64)  arch="amd64" ;;
+    arm64|aarch64) arch="arm64" ;;
+    *)             arch="$ARCH" ;;
+  esac
+  asset="ctx-core_${os}_${arch}"
+  base="${CTX_RELEASE_BASE}/v${ver}"
+  if [[ "$os" != "darwin" && "$os" != "linux" || "$arch" != "amd64" && "$arch" != "arm64" ]] \
+    || ! { curl -fsSL "$base/$asset" -o "$dest" 2>/dev/null || wget -qO "$dest" "$base/$asset" 2>/dev/null; } \
+    || [[ ! -s "$dest" ]]; then
+    rm -f "$dest"
+    warn "ctx mcp unavailable: no ctx-core build for ${os}/${arch}"
+    return 1
+  fi
+  sums="$(mktemp)" || return 0
+  if [[ -n "$(_sha256_of "$dest")" ]]; then
+    if curl -fsSL "$base/checksums.txt" -o "$sums" 2>/dev/null || wget -qO "$sums" "$base/checksums.txt" 2>/dev/null; then
+      want="$(awk -v a="$asset" '$2 == a || $2 == "*" a {print $1; exit}' "$sums")"
+      got="$(_sha256_of "$dest")"
+      if [[ -n "$want" && "$want" != "$got" ]]; then
+        rm -f "$sums" "$dest"
+        warn "ctx mcp unavailable: checksum mismatch for $asset"
+        return 1
+      fi
+      [[ -n "$want" ]] || warn "ctx-core checksum not verified: $asset not listed in checksums.txt"
+    else
+      warn "ctx-core checksum not verified: checksums.txt not available"
+    fi
+  fi
+  rm -f "$sums"
+  return 0
+}
+
+# Stage ctx-core in $1 (the staged lib dir): build from a checkout when go is
+# available, else download. Never fails the install; leaves no file on failure.
+stage_ctx_core() {
+  local stage_lib="$1" src_dir="$2" ver dest
+  dest="$stage_lib/ctx-core"
+  ver="$(_staged_ctx_version "$stage_lib/core.sh")"
+  [[ -n "$ver" ]] || { warn "ctx mcp unavailable: could not read ctx version"; return 0; }
+  if [[ -n "$src_dir" ]] && _build_ctx_core "$src_dir" "$dest" "$ver"; then
+    :
+  else
+    [[ -z "$src_dir" ]] || info "go not available or build failed — downloading ctx-core..."
+    _download_ctx_core "$dest" "$ver" || return 0
+  fi
+  chmod 755 "$dest"
+  if ! "$dest" version &>/dev/null; then
+    rm -f "$dest"
+    warn "ctx mcp unavailable: ctx-core failed its version check on $OS/$ARCH"
+  fi
+  return 0
+}
+
 # ─── Install ctx itself ───────────────────────────────────────────────────────
 install_ctx() {
   local install_bin="${CTX_INSTALL_BIN:-/usr/local/bin}"
@@ -378,8 +465,15 @@ install_ctx() {
     _dl_text "$CTX_REPO/lib/ctx_autoswitch.fish" "$stage_lib/ctx_autoswitch.fish"
   fi
 
+  if [[ -f "$script_dir/bin/ctx" && -d "$script_dir/lib" ]]; then
+    stage_ctx_core "$stage_lib" "$script_dir"
+  else
+    stage_ctx_core "$stage_lib" ""
+  fi
+
   chmod +x "$stage_bin"
   chmod 644 "$stage_lib"/*.sh "$stage_lib"/*.bash "$stage_lib"/*.fish 2>/dev/null || chmod 644 "$stage_lib"/*.sh
+  [[ -f "$stage_lib/ctx-core" ]] && chmod 755 "$stage_lib/ctx-core"
 
   # Patch the lib path in the binary so it finds its libs after install
   local sed_inplace=(-i)
@@ -400,6 +494,10 @@ install_ctx() {
   cp "$stage_lib/cmd_ops.sh"    "$install_lib/cmd_ops.sh"
   cp "$stage_lib/ctx_autoswitch.bash" "$install_lib/ctx_autoswitch.bash"
   cp "$stage_lib/ctx_autoswitch.fish" "$install_lib/ctx_autoswitch.fish"
+  if [[ -f "$stage_lib/ctx-core" ]]; then
+    cp "$stage_lib/ctx-core" "$install_lib/ctx-core.new" && chmod 755 "$install_lib/ctx-core.new" \
+      && mv -f "$install_lib/ctx-core.new" "$install_lib/ctx-core"
+  fi
   mv "$stage_bin" "$install_bin/ctx"
   rm -rf "$stage_dir"
 

@@ -1,6 +1,6 @@
 # Agent / AI contributor guide
 
-This repository is a **Bash** CLI (`bin/ctx` + `lib/*.sh`). Treat it like production shell: **ShellCheck-clean**, **small diffs**, and **tests for behavior changes**.
+This repository is a **Bash** CLI (`bin/ctx` + `lib/*.sh`) plus a small Go companion binary (`ctx-core`, behind `ctx mcp`). Treat it like production shell: **ShellCheck-clean**, **small diffs**, and **tests for behavior changes**.
 
 ## Before you change code
 
@@ -11,6 +11,7 @@ This repository is a **Bash** CLI (`bin/ctx` + `lib/*.sh`). Treat it like produc
 ## Commands (copy-paste)
 
 ```bash
+go vet ./... && go test ./...
 bash test/test.sh
 shellcheck -x -S warning bin/ctx lib/*.sh lib/*.bash install.sh test/*.sh
 ./bin/ctx help
@@ -33,4 +34,8 @@ When adding scripting fields, extend **`ctx --json`** handlers in `lib/cmd_ops.s
 | Commands | `lib/cmd_ops.sh`, `lib/cmd_import.sh` |
 | Shell autoswitch hook | `lib/ctx_autoswitch.bash`, `lib/ctx_autoswitch.fish` |
 | CLI entry | `bin/ctx` |
-| Installer | `install.sh` |
+| Installer (also builds/downloads `ctx-core`) | `install.sh` |
+| `ctx-core` entry, `mcp install` | `cmd/ctx-core/` |
+| MCP server and tools | `internal/mcpserver/` |
+| Knowledge store, kubectl/login runner, ops | `internal/knowledge/`, `internal/kube/`, `internal/ops/` |
+| Profiles, folder resolution, secrets | `internal/profile/`, `internal/resolve/`, `internal/secret/` |

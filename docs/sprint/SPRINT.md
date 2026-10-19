@@ -30,6 +30,7 @@ Update this file when an item ships (check the box, link PR or commit).
 | B5 | **Per-terminal `GH_TOKEN`** in the autoswitch hook instead of global `gh auth switch` | S | [x] | Hook test: token per profile, cleared outside, user `GH_TOKEN` untouched |
 | B6 | **`ctx run` / `ctx env` / `ctx agent-rules`** for AI agents and scripts | M | [x] | `test_ctx_run_env_agent_rules` |
 | B7 | **Per-profile commit signing** (SSH / GPG) | S | [x] | `test_setup_commit_signing`: real signed commit in `WORK_DIR` |
+| B8 | **`ctx mcp` ops agent** (Go `ctx-core`, MCP server, knowledge store, confirmed change tools) | L | [x] | `go test ./...`; `test_install_builds_ctx_core`, `test_doctor_reports_ctx_core`; manual acceptance on a real cluster |
 
 ## Phase C — Documentation & contributor experience
 
