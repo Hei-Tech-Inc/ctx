@@ -151,6 +151,9 @@ func childEnv(kc string, extra ...string) []string {
 }
 
 func (r *Runner) command(ctx context.Context, t Target, args []string) (*exec.Cmd, []string, error) {
+	if err := ValidateUserArgs(args); err != nil {
+		return nil, nil, err
+	}
 	argv := append([]string{r.bin()}, r.Args(t, args...)...)
 	redArgv := make([]string, len(argv))
 	for i, a := range argv {
@@ -181,7 +184,8 @@ func (r *Runner) runErr(argv []string, err error, stderr []byte) error {
 }
 
 // Run runs kubectl scoped to t with KUBECONFIG cleared, returning redacted
-// stdout. A failure is a *RunError.
+// stdout. args that fail ValidateUserArgs are refused without running
+// kubectl; any other failure is a *RunError.
 func (r *Runner) Run(ctx context.Context, t Target, args ...string) ([]byte, error) {
 	cmd, argv, err := r.command(ctx, t, args)
 	if err != nil {
