@@ -446,7 +446,10 @@ main() {
       _ctx_core_forward workdir-prompt "$@"
       cmd_workdir_prompt
       ;;
-    config)           cmd_config "$@" ;;
+    config)
+      _ctx_core_forward config "$@"
+      cmd_config "$@"
+      ;;
     secret)
       case "${1:-}" in get|list|delete) _ctx_core_forward secret "$@" ;; esac
       cmd_secret "$@"

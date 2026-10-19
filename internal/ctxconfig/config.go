@@ -34,6 +34,11 @@ type Config struct {
 	// SecretProvider is the last secret_provider value, raw (like ctx_secret_provider's
 	// grep | tail -1 | cut -d= -f2-); normalizing is the caller's job.
 	SecretProvider string
+	// PromptWorkdirDepthText is the depth exactly as ctx_config_prompt_workdir_max_depth
+	// prints it (digits as written, e.g. "007"), "2" when unset or invalid.
+	PromptWorkdirDepthText string
+	// Last holds the raw last value of every key (like grep | tail -1 | cut -d= -f2-).
+	Last map[string]string
 }
 
 // Path returns $CTX_DIR/config, defaulting to $HOME/.ctx/config.
@@ -46,7 +51,7 @@ func Path() string {
 
 // Load reads Path(). A missing file yields the defaults and no error.
 func Load() (*Config, error) {
-	cfg := &Config{ActiveSource: "auto", PromptWorkdirMaxDepth: DefaultMaxDepth}
+	cfg := &Config{ActiveSource: "auto", PromptWorkdirMaxDepth: DefaultMaxDepth, PromptWorkdirDepthText: "2", Last: map[string]string{}}
 	data, err := os.ReadFile(Path())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -55,7 +60,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	var actives []string
-	last := map[string]string{}
+	last := cfg.Last
 	for _, line := range strings.Split(string(data), "\n") {
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
@@ -66,7 +71,7 @@ func Load() (*Config, error) {
 			// cut -d= -f2: the text between the first and second "=".
 			f, _, _ := strings.Cut(v, "=")
 			actives = append(actives, f)
-		case "active_source", "manual_pwd", "prompt_extra_paths", "prompt_workdir_max_depth", "ssh_agent_added", "secret_provider":
+		default:
 			last[k] = v
 		}
 	}
@@ -78,11 +83,26 @@ func Load() (*Config, error) {
 	cfg.PromptExtraPaths = stripCR(last["prompt_extra_paths"])
 	cfg.SSHAgentAdded = stripCR(last["ssh_agent_added"])
 	cfg.SecretProvider = last["secret_provider"]
+	cfg.PromptWorkdirDepthText = depthText(last["prompt_workdir_max_depth"])
 	cfg.PromptWorkdirMaxDepth = parseDepth(last["prompt_workdir_max_depth"])
 	return cfg, nil
 }
 
 func stripCR(s string) string { return strings.ReplaceAll(s, "\r", "") }
+
+// depthText mirrors the printed value of ctx_config_prompt_workdir_max_depth.
+func depthText(v string) string {
+	v = strings.ReplaceAll(stripCR(v), " ", "")
+	if v == "" {
+		return "2"
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return "2"
+		}
+	}
+	return v
+}
 
 // parseDepth mirrors ctx_config_prompt_workdir_max_depth: drop CR and spaces,
 // require digits only, else the default.
