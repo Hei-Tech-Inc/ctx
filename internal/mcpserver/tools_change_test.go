@@ -459,3 +459,82 @@ func TestNetworkTestActivityNamespace(t *testing.T) {
 		t.Errorf("activity env/namespace = %+v", e)
 	}
 }
+
+// numbered is n lines "echo line-1" ... "echo line-n".
+func numbered(n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		b.WriteString("echo line-" + strconv.Itoa(i) + "\n")
+	}
+	return b.String()
+}
+
+// R8: the confirmation shows every line of a body that will run or be written.
+func TestChangeConfirmationShowsFullBody(t *testing.T) {
+	f := newFixture(t, `*"get pods -l app=network-tool -o jsonpath={.items[0].metadata.name}"*) printf 'nt-1' ;;`+"\n"+
+		`*"exec -i nt-1 -c network-tool -- /bin/sh -s"*) cat > /dev/null; echo ok ;;`+"\n")
+	f.acme()
+	e := &elicitor{answers: []string{"accept"}}
+	cs := connectAsking(t, f, e)
+	body := numbered(400)
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"network_test", map[string]any{"env": "pp", "inline": body}},
+		{"save_script", map[string]any{"name": "long.sh", "body": body}},
+		{"save_recipe", map[string]any{"name": "long", "description": "d", "body": body}},
+	} {
+		n := len(e.sent())
+		if text, isErr := call(t, cs, c.tool, c.args); isErr {
+			t.Fatalf("%s = %q", c.tool, text)
+		}
+		msgs := e.sent()
+		if len(msgs) != n+1 {
+			t.Fatalf("%s: elicitations = %d", c.tool, len(msgs)-n)
+		}
+		for _, want := range []string{"echo line-1\n", "echo line-21\n", "echo line-400"} {
+			if !strings.Contains(msgs[n], want) {
+				t.Errorf("%s confirmation lacks %q", c.tool, want)
+			}
+		}
+		if strings.Contains(msgs[n], "more lines") {
+			t.Errorf("%s confirmation is truncated", c.tool)
+		}
+	}
+}
+
+// R8: a body too large to show in full is refused before anything is asked or run.
+func TestChangeRefusesBodyTooLargeToConfirm(t *testing.T) {
+	f := newFixture(t, "")
+	f.acme()
+	e := &elicitor{answers: []string{"accept"}}
+	cs := connectAsking(t, f, e)
+	long := numbered(401)
+	big := strings.Repeat("x", 64*1024) + "\n"
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{"network_test", map[string]any{"env": "pp", "inline": long}, "too large to confirm (401 lines / " + strconv.Itoa(len(long)) + " bytes)"},
+		{"save_script", map[string]any{"name": "big.sh", "body": big}, "too large to confirm (1 lines / 65537 bytes)"},
+		{"save_recipe", map[string]any{"name": "big", "description": "d", "body": long}, "too large to confirm (401 lines"},
+	} {
+		text, isErr := call(t, cs, c.tool, c.args)
+		if !isErr || !strings.Contains(text, c.want) || !strings.Contains(text, "limit is 400 lines / 64 KiB — split it or run it yourself") {
+			t.Errorf("%s = %v %q, want refusal %q", c.tool, isErr, text, c.want)
+		}
+	}
+	if n := len(e.sent()); n != 0 {
+		t.Errorf("elicitations = %d, want 0", n)
+	}
+	if calls := testutil.ReadArgv(t, f.kubectlLog); calls != nil {
+		t.Errorf("kubectl ran: %q", calls)
+	}
+	for _, p := range []string{"scripts/big.sh", "recipes/big.md"} {
+		if _, err := os.Stat(filepath.Join(f.ctxDir, "knowledge", "acme", p)); !os.IsNotExist(err) {
+			t.Errorf("%s written: %v", p, err)
+		}
+	}
+}

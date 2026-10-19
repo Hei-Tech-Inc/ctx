@@ -107,6 +107,10 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 				}
 				label, body = "script "+in.Script+" ("+path+")", string(data)
 			}
+			shown, err := fullBody(body)
+			if err != nil {
+				return "", nil, err
+			}
 			rec := &argvRecorder{}
 			r, t := sc.runner(rec), kube.TargetFor(sc.Profile.Name, sc.Store, env)
 			t.Namespace = nt.Namespace
@@ -126,7 +130,7 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 			p := sc.plan("network_test", env)
 			p.Namespace = nt.Namespace
 			p.Commands = [][]string{r.Argv(t, args...)}
-			p.Summary = "Stdin: " + label + "\n" + firstLines(body, 20)
+			p.Summary = "Stdin: " + label + "\n" + shown
 			if err := sc.ask(ctx, req.Session, p); err != nil {
 				return "", rec.list(), err
 			}
@@ -229,6 +233,10 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 			if err != nil {
 				return "", nil, err
 			}
+			shown, err := fullBody(in.Body)
+			if err != nil {
+				return "", nil, err
+			}
 			p := Plan{Tool: "save_recipe", Profile: sc.Profile.Name, Writes: []string{path}}
 			p.Summary = replaces(path) + fmt.Sprintf("Recipe %s: %s\n", in.Name, in.Description)
 			if len(in.Tags) > 0 {
@@ -237,7 +245,7 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 			if len(in.Params) > 0 {
 				p.Summary += "Params: " + strings.Join(in.Params, ", ") + "\n"
 			}
-			p.Summary += fmt.Sprintf("Changes state: %v\n%s", in.ChangesState, firstLines(in.Body, 20))
+			p.Summary += fmt.Sprintf("Changes state: %v\n%s", in.ChangesState, shown)
 			if err := sc.ask(ctx, req.Session, p); err != nil {
 				return "", nil, err
 			}
@@ -281,8 +289,12 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 			if err != nil {
 				return "", nil, err
 			}
+			shown, err := fullBody(in.Body)
+			if err != nil {
+				return "", nil, err
+			}
 			p := Plan{Tool: "save_script", Profile: sc.Profile.Name, Writes: []string{path}}
-			p.Summary = replaces(path) + firstLines(in.Body, 20)
+			p.Summary = replaces(path) + shown
 			if err := sc.ask(ctx, req.Session, p); err != nil {
 				return "", nil, err
 			}

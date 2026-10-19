@@ -165,11 +165,24 @@ func shellJoin(argv []string) string {
 	return strings.Join(out, " ")
 }
 
-// firstLines is the first n lines of text, noting how many were left out.
-func firstLines(text string, n int) string {
-	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	if len(lines) <= n {
-		return strings.Join(lines, "\n")
+// Limits on a body (script or recipe) shown in a confirmation. A body is
+// always shown in full, so a larger one is refused rather than truncated.
+const (
+	maxConfirmLines = 400
+	maxConfirmBytes = 64 * 1024
+)
+
+// fullBody is text for a confirmation, in full, or an error when it is too
+// large to show.
+func fullBody(text string) (string, error) {
+	body := strings.TrimRight(text, "\n")
+	lines := 0
+	if body != "" {
+		lines = strings.Count(body, "\n") + 1
 	}
-	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n... (%d more lines)", len(lines)-n)
+	if lines > maxConfirmLines || len(text) > maxConfirmBytes {
+		return "", fmt.Errorf("too large to confirm (%d lines / %d bytes); limit is %d lines / %d KiB — split it or run it yourself",
+			lines, len(text), maxConfirmLines, maxConfirmBytes/1024)
+	}
+	return body, nil
 }
