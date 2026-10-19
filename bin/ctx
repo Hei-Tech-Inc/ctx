@@ -399,6 +399,22 @@ _ctx_core_exec() {
   exec "$bin" "$@"
 }
 
+# Run a command in ctx-core when it is installed, CTX_CORE is not "off", and the
+# binary says it implements the command (`ctx-core implements <cmd> [sub]`).
+# Once handed over there is no fallback: ctx-core's exit code is final.
+# Returns 1 (caller runs Bash) otherwise.
+_ctx_core_forward() {
+  [[ "${CTX_CORE:-}" == "off" ]] && return 1
+  local bin
+  bin="$(_ctx_core_bin)" || return 1
+  [[ -x "$bin" ]] || return 1
+  export CTX_VERSION CTX_DIR
+  CTX_BIN_PATH="$CTX_BIN/ctx"
+  export CTX_BIN_PATH
+  "$bin" implements "$1" "${2:-}" >/dev/null 2>&1 || return 1
+  exec "$bin" "$@"
+}
+
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
 main() {
   local cmd="${1:-help}"
@@ -409,10 +425,19 @@ main() {
     setup|import|add) cmd_import "$@" ;;
     use)              cmd_use "${1:-}" ;;
     deactivate)      cmd_deactivate "$@" ;;
-    list|ls)          cmd_list ;;
-    status|st)        cmd_status ;;
+    list|ls)
+      [[ "$CTX_JSON" == 1 ]] && _ctx_core_forward list --json
+      cmd_list
+      ;;
+    status|st)
+      [[ "$CTX_JSON" == 1 ]] && _ctx_core_forward status --json
+      cmd_status
+      ;;
     clone)            cmd_clone "$@" ;;
-    workdir-prompt)   cmd_workdir_prompt ;;
+    workdir-prompt)
+      _ctx_core_forward workdir-prompt "$@"
+      cmd_workdir_prompt
+      ;;
     config)           cmd_config "$@" ;;
     secret)           cmd_secret "$@" ;;
     verify)           cmd_verify "${1:-}" ;;
@@ -428,9 +453,18 @@ main() {
     upgrade)          cmd_upgrade "$@" ;;
     uninstall)        cmd_uninstall "$@" ;;
     doctor)           cmd_doctor ;;
-    guard)            cmd_guard "$@" ;;
-    env)              cmd_env "$@" ;;
-    run)              cmd_run "$@" ;;
+    guard)
+      [[ "${1:-}" == "check" ]] && _ctx_core_forward guard "$@"
+      cmd_guard "$@"
+      ;;
+    env)
+      _ctx_core_forward env "$@"
+      cmd_env "$@"
+      ;;
+    run)
+      _ctx_core_forward run "$@"
+      cmd_run "$@"
+      ;;
     agent-rules)      cmd_agent_rules "$@" ;;
     mcp|knowledge)    _ctx_core_exec "$cmd" "$@" ;;
     completion)       cmd_completion "${1:-zsh}" ;;

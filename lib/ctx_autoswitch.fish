@@ -56,6 +56,7 @@ function _ctx_profile_autoswitch --on-variable PWD
     test -e "$conf"; or continue
     set -l work_dir (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")
     set work_dir (string replace -r '^~' "$HOME" -- "$work_dir")
+    test "$work_dir" != "/"; and set work_dir (string replace -r '/$' '' -- "$work_dir")
     test -n "$work_dir"; or continue
     set -l plen (string length -- "$work_dir")
     if test (string length -- "$PWD") -ge "$plen"
@@ -86,6 +87,7 @@ function _ctx_profile_autoswitch --on-variable PWD
         if test -n "$first"; and test -f "$profiles_dir/$first.conf"
           set -l wdc (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$first.conf")
           set wdc (string replace -r '^~' "$HOME" -- "$wdc")
+          test "$wdc" != "/"; and set wdc (string replace -r '/$' '' -- "$wdc")
           test -z "$wdc"; and set wdc "$best_work_dir/$first"
           if test -d "$wdc"
             set -l wlen (string length -- "$wdc")
@@ -136,6 +138,7 @@ function _ctx_profile_autoswitch --on-variable PWD
   if test -n "$path_profile"
     set -l _sync_wd (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$path_profile.conf")
     set _sync_wd (string replace -r '^~' "$HOME" -- "$_sync_wd")
+    test "$_sync_wd" != "/"; and set _sync_wd (string replace -r '/$' '' -- "$_sync_wd")
     test -n "$_sync_wd"; and set best_work_dir "$_sync_wd"
   end
 
@@ -143,10 +146,11 @@ function _ctx_profile_autoswitch --on-variable PWD
   set -l src (grep "^active_source=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string lower)
   set -l manual_anchor ""
   if test "$src" = manual
-    set -l raw (grep "^manual_pwd=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
+    set -l raw (grep "^manual_pwd=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string replace -a \r '')
     if test -n "$raw"
       set manual_anchor (printf '%s' "$raw" | base64 -d 2>/dev/null)
       test -z "$manual_anchor"; and set manual_anchor (printf '%s' "$raw" | base64 -D 2>/dev/null)
+      test -z "$manual_anchor"; and set manual_anchor (printf '%s' "$raw" | base64 --decode 2>/dev/null)
       test -z "$manual_anchor"; and set manual_anchor "$raw"
     end
   end
@@ -170,6 +174,7 @@ function _ctx_profile_autoswitch --on-variable PWD
   if test -n "$path_profile"
     set profwd (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$path_profile.conf")
     set profwd (string replace -r '^~' "$HOME" -- "$profwd")
+    test "$profwd" != "/"; and set profwd (string replace -r '/$' '' -- "$profwd")
     set display_root "$profwd"
     test -z "$display_root"; and test -n "$best_work_dir"; and set display_root "$best_work_dir"
   end

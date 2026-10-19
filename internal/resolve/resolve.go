@@ -22,13 +22,16 @@ func expandTilde(p string) string {
 	return p
 }
 
-// workDir returns the profile's expanded WORK_DIR without trailing slashes ("" if unset or unloadable).
+// workDir returns the profile's expanded WORK_DIR without one trailing slash (like Bash; "/" is kept) ("" if unset or unloadable).
 func workDir(dir, name string) string {
 	p, err := profile.Load(dir, name)
 	if err != nil {
 		return ""
 	}
-	wd := strings.TrimRight(expandTilde(p.WorkDir), "/")
+	wd := expandTilde(p.WorkDir)
+	if wd != "/" {
+		wd = strings.TrimSuffix(wd, "/")
+	}
 	return wd
 }
 

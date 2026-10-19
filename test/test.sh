@@ -280,6 +280,31 @@ test_autoswitch_notify_default_off() {
   pass "autoswitch_notify default off"
 }
 
+test_base64_decode_gnu_style() {
+  (
+    set -euo pipefail
+    local td
+    td="$(mktemp -d)"
+    # GNU-style: -d prints the text, then exits 1 on stray padding; -D is unknown.
+    mkdir -p "$td/bin"
+    cat >"$td/bin/base64" <<'STUB'
+#!/bin/sh
+case "$1" in
+  -d|--decode) printf '/tmp/x'; exit 1 ;;
+  *) exit 1 ;;
+esac
+STUB
+    chmod +x "$td/bin/base64"
+    [[ "$(PATH="$td/bin:$PATH" ctx_base64_decode 'L3RtcC94==')" == /tmp/x ]] || { echo "decoded twice or not at all"; exit 1; }
+    export CTX_DIR="$td/ctx" CTX_CONFIG="$td/ctx/config"
+    mkdir -p "$CTX_DIR"
+    printf 'manual_pwd=L3RtcC94\r\n' >"$CTX_CONFIG"
+    [[ "$(PATH="$td/bin:$PATH" ctx_activation_get_manual_pwd)" == /tmp/x ]] || { echo "manual_pwd with CRLF"; exit 1; }
+    rm -rf "$td"
+  ) || fail "base64 decode (GNU style)"
+  pass "manual_pwd decodes once with GNU base64 and CRLF config"
+}
+
 test_config_upsert_literal_values() {
   (
     set -euo pipefail
@@ -355,6 +380,47 @@ test_autoswitch_hook_resolution() {
     rm -rf "$td"
   ) || fail "autoswitch hook resolution"
   pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx, per-shell GH_TOKEN)"
+}
+
+test_trailing_slash_work_dir() {
+  (
+    set -euo pipefail
+    local td ROOT mode out rc used
+    ROOT="$ROOT_DIR"
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    unset GIT_COMMITTER_EMAIL CTX_GUARD
+    mkdir -p "$CTX_DIR/profiles" "$td/w/acme/r"
+    : >"$CTX_DIR/config"
+    printf 'GIT_EMAIL=dev@acme.com\nWORK_DIR="%s/"\n' "$td/w/acme" >"$CTX_DIR/profiles/acme.conf"
+    git -C "$td/w/acme/r" init -q
+    # Library resolvers
+    [[ "$(ctx_profile_read_work_dir "$CTX_DIR/profiles/acme.conf")" == "$td/w/acme" ]] || { echo "read_work_dir keeps slash"; exit 1; }
+    [[ "$(ctx_resolve_path_with_root "$td/w/acme/r" "$CTX_DIR/profiles")" == "acme"$'\t'"$td/w/acme" ]] || { echo "resolve keeps slash"; exit 1; }
+    printf 'WORK_DIR=/\n' >"$td/root.conf"
+    [[ "$(ctx_profile_read_work_dir "$td/root.conf")" == "/" ]] || { echo "root WORK_DIR trimmed"; exit 1; }
+    # Guard in both modes
+    for mode in off default; do
+      rc=0
+      if [[ $mode == off ]]; then
+        out="$(cd "$td/w/acme/r" && GIT_AUTHOR_EMAIL=x@y.z CTX_CORE=off "$ROOT_DIR/bin/ctx" guard check pre-commit 2>&1)" || rc=$?
+      else
+        out="$(cd "$td/w/acme/r" && env -u CTX_CORE GIT_AUTHOR_EMAIL=x@y.z "$ROOT_DIR/bin/ctx" guard check pre-commit 2>&1)" || rc=$?
+      fi
+      [[ $rc -ne 0 && "$out" == *"commit blocked"* ]] || { echo "guard ($mode): rc=$rc out=$out"; exit 1; }
+    done
+    # Autoswitch hook
+    used="$td/used"
+    ctx() { [[ "$1" == use ]] && printf '%s\n' "$2" >>"$used"; return 0; }
+    # shellcheck source=../lib/ctx_autoswitch.bash
+    source "$ROOT/lib/ctx_autoswitch.bash"
+    cd "$td/w/acme/r"
+    : >"$used"
+    _ctx_profile_autoswitch 2>/dev/null
+    [[ "$(cat "$used")" == acme ]] || { echo "autoswitch: '$(cat "$used")'"; exit 1; }
+    rm -rf "$td"
+  ) || fail "trailing-slash WORK_DIR"
+  pass "trailing-slash WORK_DIR matches in Bash and Go (resolver, guard, autoswitch)"
 }
 
 test_setup_scope_clone_batch() {
@@ -540,6 +606,12 @@ test_ctx_run_env_agent_rules() {
     [[ "$(ctx run -- printf '%s,' --json -q --dry-run)" == "--json,-q,--dry-run," ]] || { echo "flags not passed through"; exit 1; }
     (cd "$td" && ctx run -p acme -- sh -c 'printf %s "$AWS_PROFILE"' | grep -qx acme-prod) || { echo "-p outside folder"; exit 1; }
 
+    printf '#!/bin/sh\necho rel-ran\n' >reltool && chmod +x reltool
+    [[ "$(PATH=".:$PATH" ctx run -- reltool)" == rel-ran ]] || { echo "run: relative PATH entry"; exit 1; }
+    printf 'echo ns-ran "$1"\n' >ns.sh && chmod +x ns.sh
+    [[ "$(ctx run -- ./ns.sh a)" == "ns-ran a" ]] || { echo "run: script without shebang"; exit 1; }
+    rm -f reltool ns.sh
+
     out="$(ctx env)"
     grep -q API_KEY <<<"$out" && { echo "env printed secrets without --secrets"; exit 1; }
     (eval "$out"; [[ "$GIT_AUTHOR_NAME" == "Dev One" && "$FOO" == "bar baz" ]]) || { echo "env eval"; exit 1; }
@@ -625,6 +697,82 @@ test_use_keeps_user_agent_keys() {
   pass "ctx use adds the profile SSH key without flushing the agent; deactivate removes only ctx's key"
 }
 
+test_core_forward_fallback() {
+  (
+    set -euo pipefail
+    local td out want rc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export CTX_DIR="$td/ctx" HOME="$td/home"
+    unset CTX_CORE # the suite may run with CTX_CORE=off; this test sets it where needed
+    mkdir -p "$CTX_DIR/profiles" "$HOME"
+    printf 'PROFILE_NAME=alpha\nGIT_NAME=A\nGIT_EMAIL=a@example.com\n' >"$CTX_DIR/profiles/alpha.conf"
+    : >"$CTX_DIR/config"
+    want="$(CTX_CORE=off "$ROOT_DIR/bin/ctx" --json list)"
+    [[ "$want" == *'"command"'*'list'* ]] || { echo "bash json: $want"; exit 1; }
+    # implements exits 1: Bash runs, silently
+    cat >"$td/fakeno" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"$td/calls"
+exit 1
+EOS
+    chmod +x "$td/fakeno"
+    out="$(CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
+    [[ "$out" == "$want" ]] || { echo "fallback: $out"; exit 1; }
+    [[ ! -s "$td/err" ]] || { echo "fallback stderr: $(cat "$td/err")"; exit 1; }
+    [[ "$(cat "$td/calls")" == "implements list --json" ]] || { echo "calls: $(cat "$td/calls")"; exit 1; }
+    # CTX_CORE=off: Bash JSON and the fake is never called
+    rm -f "$td/calls"
+    out="$(CTX_CORE=off CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --json list)"
+    [[ "$out" == "$want" ]] || { echo "off: $out"; exit 1; }
+    [[ ! -e "$td/calls" ]] || { echo "CTX_CORE=off still called ctx-core"; exit 1; }
+    # Non-executable CTX_CORE_BIN: Bash
+    printf '#!/usr/bin/env bash\necho GO\n' >"$td/noexec"
+    chmod -x "$td/noexec"
+    out="$(CTX_CORE_BIN="$td/noexec" "$ROOT_DIR/bin/ctx" --json list 2>/dev/null)"
+    [[ "$out" == "$want" ]] || { echo "noexec: $out"; exit 1; }
+    # implements exits 0: ctx-core runs with the exported env
+    cat >"$td/fakego" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == implements ]] && exit 0
+echo "GO $*"
+echo "env $CTX_VERSION|$CTX_DIR|$CTX_BIN_PATH" >&2
+EOS
+    chmod +x "$td/fakego"
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
+    [[ "$out" == "GO list --json" ]] || { echo "go list: $out"; exit 1; }
+    [[ "$(cat "$td/err")" == "env "*"|$CTX_DIR|$ROOT_DIR/bin/ctx" ]] || { echo "env: $(cat "$td/err")"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" guard check pre-commit 2>/dev/null </dev/null)"
+    [[ "$out" == "GO guard check pre-commit" ]] || { echo "go guard: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" env -p alpha 2>/dev/null)"
+    [[ "$out" == "GO env -p alpha" ]] || { echo "go env: $out"; exit 1; }
+    # implements 0 but the command exits 127: that is the answer, Bash must not run
+    cat >"$td/fake127" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == implements ]] && exit 0
+exit 127
+EOS
+    chmod +x "$td/fake127"
+    set +e
+    out="$(CTX_CORE_BIN="$td/fake127" "$ROOT_DIR/bin/ctx" --json list 2>/dev/null)"
+    rc=$?
+    set -e
+    [[ $rc -eq 127 && -z "$out" ]] || { echo "rc127: rc=$rc out=$out"; exit 1; }
+    # Text list is not forwarded
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" list 2>/dev/null)"
+    [[ "$out" != GO* ]] || { echo "text list forwarded: $out"; exit 1; }
+    # Any exit code is ctx-core's answer
+    printf '#!/usr/bin/env bash\n[[ "$1" == implements ]] && exit 0\necho nope\nexit 3\n' >"$td/fake3"
+    chmod +x "$td/fake3"
+    set +e
+    out="$(CTX_CORE_BIN="$td/fake3" "$ROOT_DIR/bin/ctx" --json list)"
+    rc=$?
+    set -e
+    [[ $rc -eq 3 && "$out" == nope ]] || { echo "rc3: rc=$rc out=$out"; exit 1; }
+  ) || fail "ctx-core forward fallback"
+  pass "read-only commands forward to ctx-core and run only when ctx-core implements them; otherwise Bash (also CTX_CORE=off)"
+}
+
 test_ctx_core_dispatch() {
   (
     set -euo pipefail
@@ -684,6 +832,35 @@ test_doctor_reports_ctx_core() {
   pass "ctx doctor reports ctx-core version/path or a warning"
 }
 
+# Coverage guard: with CTX_CORE enabled, make sure the suite really exercises the Go
+# path. Without it a missing or unfound bin/ctx-core silently turns the default-mode
+# run into a second Bash-only run. CTX_CORE_OPTIONAL=1 skips it for local runs without Go.
+test_ctx_core_is_exercised() {
+  if [[ "${CTX_CORE:-}" == "off" ]]; then
+    pass "ctx-core coverage guard skipped (CTX_CORE=off)"
+    return 0
+  fi
+  if [[ ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    if [[ "${CTX_CORE_OPTIONAL:-}" == "1" ]]; then
+      pass "ctx-core coverage guard skipped (bin/ctx-core missing, CTX_CORE_OPTIONAL=1)"
+      return 0
+    fi
+    fail "bin/ctx-core is missing: build it (go build -o bin/ctx-core ./cmd/ctx-core) or set CTX_CORE_OPTIONAL=1 to run Bash-only locally"
+  fi
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    mkdir -p "$td/home" "$td/ctx"
+    out="$(env -u CTX_CORE_BIN HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    [[ "$out" == *"($ROOT_DIR/bin/ctx-core)"* ]] || { echo "bin/ctx does not find the repo's bin/ctx-core: $out"; exit 1; }
+    "$ROOT_DIR/bin/ctx-core" implements list --json >/dev/null || { echo "ctx-core implements list --json failed"; exit 1; }
+  ) || fail "ctx-core coverage guard"
+  pass "bin/ctx finds the repo's bin/ctx-core and it implements the forwarded commands"
+}
+
+test_ctx_core_is_exercised
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -699,7 +876,9 @@ test_cmd_workdir_prompt
 test_generate_mise_toml_matches_fixture
 test_autoswitch_notify_default_off
 test_config_upsert_literal_values
+test_base64_decode_gnu_style
 test_autoswitch_hook_resolution
+test_trailing_slash_work_dir
 test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 test_guard_git_hooks
@@ -708,6 +887,7 @@ test_ctx_run_env_agent_rules
 test_setup_commit_signing
 test_use_keeps_user_agent_keys
 test_ctx_core_dispatch
+test_core_forward_fallback
 test_install_builds_ctx_core
 test_doctor_reports_ctx_core
 
