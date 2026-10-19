@@ -102,3 +102,26 @@ func TestDir(t *testing.T) {
 		t.Fatal(Dir())
 	}
 }
+
+func TestLoadFallbackTilde(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	t.Setenv("HOME", "/h/me")
+	t.Setenv("GCP_PROJECT", "leaked")
+	d := t.TempDir()
+	for name, content := range map[string]string{"t1": "WORK_DIR=\\~/c\n", "t2": "WORK_DIR=\\~\n"} {
+		if err := os.WriteFile(filepath.Join(d, name+".conf"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string]string{"t1": "/h/me/c", "t2": "/h/me"} {
+		p, err := Load(d, name)
+		if err != nil || p.WorkDir != want {
+			t.Errorf("%s: %q %v, want %q", name, p.WorkDir, err, want)
+		}
+		if p.GCPProject != "" {
+			t.Errorf("%s: environment leaked into GCPProject: %q", name, p.GCPProject)
+		}
+	}
+}

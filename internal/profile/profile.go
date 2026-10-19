@@ -61,6 +61,7 @@ func Load(dir, name string) (*Profile, error) {
 	if needsBash(vals) {
 		if bv, ok := bashValues(path); ok {
 			vals = bv
+			vals["WORK_DIR"] = expandHome(vals["WORK_DIR"], os.Getenv("HOME"))
 		}
 	}
 	p := &Profile{
@@ -95,7 +96,7 @@ func bashValues(path string) (map[string]string, bool) {
 	if err != nil {
 		return nil, false
 	}
-	script := `source "$1" >/dev/null 2>&1; for k in ` + strings.Join(keys, " ") +
+	script := `unset ` + strings.Join(keys, " ") + `; source "$1" >/dev/null 2>&1; for k in ` + strings.Join(keys, " ") +
 		`; do printf "%s\0%s\0" "$k" "${!k}"; done`
 	out, err := exec.Command(bash, "-c", script, "_", path).Output()
 	if err != nil {
