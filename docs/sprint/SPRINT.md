@@ -55,8 +55,8 @@ Update this file when an item ships (check the box, link PR or commit).
 |----|------|------|--------|-------|
 | E1 | `ctx mcp` in Go (`ctx-core`) | L | [x] | Phase 1 |
 | E2 | Read-only/hot-path commands in Go: `list --json`, `status --json`, `workdir-prompt`, `env`, `run`, `guard check` | M | [x] | Forwarding via `ctx-core implements`; `CTX_CORE=off` forces Bash |
-| E3 | `use`, `deactivate`, `secret`, `config`, `guard install` | M | [ ] | |
-| E4 | Setup wizard and text `list`/`status` with Charm libraries | L | [ ] | Text screens are gum-styled in Bash today |
+| E3 | `use` (quiet), `deactivate`, `secret get/list/delete`, `config`, `guard install/uninstall/status` | M | [x] | Autoswitch path ~152 ms to ~96 ms (median of 20, 10 profiles, fake tools) |
+| E4 | Setup wizard and text `list`/`status` with Charm libraries | L | [ ] | Still Bash: interactive `secret set`/`migrate`, non-quiet `use` (gum output), text `list`/`status`, `setup` wizard; also `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `remove`, `undo`, `edit`, `completion`, `help` |
 | E5 | Shell hook via `ctx hook-env` | M | [ ] | |
 | E6 | Drop Bash | L | [ ] | |
 
@@ -66,7 +66,7 @@ Known follow-ups (found in E2): the Bash `prompt_extra_paths` handling never che
 
 ## Done in this slice (reference)
 
-- A1, A2, B1, B3, C1, C2, C3, E1, E2 (see git history / CHANGELOG [Unreleased]).
+- A1, A2, B1, B3, C1, C2, C3, E1, E2, E3 (see git history / CHANGELOG [Unreleased]).
 
 ## References
 

@@ -5,9 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Go port, phase 3:** `ctx secret get|list|delete`, every `ctx config` subcommand, `ctx guard install|uninstall|status`, `ctx deactivate` and `ctx use` with `CTX_QUIET=1` (the shell autoswitch hook path) now run in `ctx-core` (Go) when it is installed, with the same forwarding and `CTX_CORE=off` escape as phase 2. Output, exit codes and files written are unchanged; interactive `secret set|migrate` and non-quiet `use` stay in Bash. In Go, `ctx-core` takes an exclusive lock on `$CTX_DIR/config.lock` around config updates (Bash does not lock). Autoswitch round trip (`CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use <p> --eval bash` then `ctx deactivate --eval bash`, fake gh/ssh-add/az/gcloud/kubectl/mise, 10 profiles, median of 20 runs on macOS): about 152 ms (Bash) to about 96 ms (Go).
 - **Go port, phase 2:** `ctx list --json`, `ctx status --json`, `ctx workdir-prompt`, `ctx env`, `ctx run` and `ctx guard check` now run in `ctx-core` (Go) when it is installed. `bin/ctx` asks `ctx-core implements <cmd>` and execs it on success; otherwise, or with `CTX_CORE=off`, the Bash implementation runs. Output and exit codes are unchanged (`env` is eval-equivalent). Text `list`/`status` stay in Bash. `ctx mcp` and `ctx knowledge` remain Go-only (no Bash fallback). Median of 20 runs, 10 profiles: `ctx guard check pre-commit` 195 ms (Bash) to 71 ms (Go); `ctx --json list` 195 ms to 49 ms.
 
 ### Fixed
+- **`CTX_QUIET` from the environment:** `bin/ctx` now honors an inherited `CTX_QUIET` instead of resetting it to 0, so the autoswitch hook's `CTX_QUIET=1 ctx use/deactivate` is actually quiet. Anyone who exports `CTX_QUIET=1` globally now gets quiet `ctx` output.
+- **Quiet `use` with az, gcloud or kubectl:** a successful Azure, Google Cloud or kubectl switch in quiet mode was reported as a failure (non-zero exit), so the autoswitch hook never finished setting the active profile and `GH_TOKEN`. It now succeeds.
 - **Trailing slash in `WORK_DIR`:** the Bash resolver, `workdir-prompt` helpers and the bash/fish autoswitch hook now ignore one trailing `/` in a profile's `WORK_DIR` (for example `~/clients/acme/`), so the profile matches its folder instead of being silently skipped. This matches `ctx-core`. Guard and `env` can now act in folders where such a profile was previously ignored.
 
 ### Added
