@@ -1,0 +1,21 @@
+# clusters.yaml - how ctx logs in to each Kubernetes cluster.
+#
+# Login types (the only two):
+#   command     steps you write; each runs with `sh -c`, KUBECONFIG pointing at the
+#               ctx-owned file for this cluster, and each listed secret as an env var.
+#   kubeconfig  use an existing kubeconfig file and context (path, context).
+#
+# clusters:
+#   nonprod:
+#     login:
+#       type: command
+#       secrets: [CLUSTER_PASSWORD]   # keys in the ctx secret store
+#       run:
+#         - my-login-cli -u me -p "$CLUSTER_PASSWORD"
+#         - my-login-cli get-credentials nonprod
+#   homelab:
+#     login:
+#       type: kubeconfig
+#       path: ~/.kube/config
+#       context: homelab
+clusters: {}

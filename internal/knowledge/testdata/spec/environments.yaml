@@ -1,0 +1,9 @@
+# environments.yaml
+environments:
+  dev:     { cluster: nonprod, namespace: madapi-dev }
+  preprod: { cluster: nonprod, namespace: madapi-preprod, aliases: [pp, nonprod] }
+  prod:    { cluster: prod,    namespace: madapi-prod,    protected: true }
+network_tool:                     # optional, per environment override allowed
+  namespace: network-utility
+  selector: app=network-tool
+  container: network-tool

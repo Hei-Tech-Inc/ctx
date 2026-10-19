@@ -1,0 +1,16 @@
+# clusters.yaml  (MTN's file; TKGI is just what this client uses)
+clusters:
+  nonprod:
+    login:
+      type: command              # command | kubeconfig
+      secrets: [TKGI_PASSWORD]   # keys in ctx secret store, given to the steps as env vars
+      run:                       # run in order with KUBECONFIG=<ctx-owned file for this cluster>
+        - tkgi login -a ac2-tkgi-api-nonprod.example.net -u Isaac.Kumi -p "$TKGI_PASSWORD" -k
+        - tkgi get-credentials nonprod
+  prod:
+    login:
+      type: command
+      secrets: [TKGI_PASSWORD]
+      run:
+        - tkgi login -a ac2-tkgi-api-prod.example.net -u Isaac.Kumi -p "$TKGI_PASSWORD" -k
+        - tkgi get-credentials prod

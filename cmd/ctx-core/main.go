@@ -6,6 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/Hei-Tech-Inc/ctx/internal/knowledge"
+	"github.com/Hei-Tech-Inc/ctx/internal/profile"
+	"github.com/Hei-Tech-Inc/ctx/internal/resolve"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -26,11 +31,65 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "ctx-core %s\n", version)
 		return 0
-	case "mcp", "knowledge":
+	case "knowledge":
+		return runKnowledge(args[1:], stdout, stderr)
+	case "mcp":
 		fmt.Fprintf(stderr, "ctx-core %s: not implemented yet\n", args[0])
 		return 2
 	default:
 		fmt.Fprintf(stderr, "ctx-core: unknown command %q\n%s", args[0], usage)
 		return 2
 	}
+}
+
+const knowledgeUsage = "usage: ctx-core knowledge init [profile]\n"
+
+func runKnowledge(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "init" || len(args) > 2 {
+		fmt.Fprint(stderr, knowledgeUsage)
+		return 2
+	}
+	name := ""
+	if len(args) == 2 {
+		name = args[1]
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+			fmt.Fprintf(stderr, "ctx-core: invalid profile name %q\n", name)
+			return 1
+		}
+	}
+	dir := profile.Dir()
+	if name == "" {
+		pwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(stderr, "ctx-core: %v\n", err)
+			return 1
+		}
+		name, _, err = resolve.Path(pwd, dir)
+		if err != nil {
+			fmt.Fprintf(stderr, "ctx-core: %v\n", err)
+			return 1
+		}
+		if name == "" {
+			fmt.Fprintf(stderr, "ctx-core: no profile matches %s; pass a profile name\n", pwd)
+			return 1
+		}
+	}
+	if _, err := profile.Load(dir, name); err != nil {
+		fmt.Fprintf(stderr, "ctx-core: %v\n", err)
+		return 1
+	}
+	root := knowledge.Root(name)
+	created, err := knowledge.Init(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "ctx-core: %v\n", err)
+		return 1
+	}
+	if len(created) == 0 {
+		fmt.Fprintf(stdout, "%s already initialised; nothing created\n", root)
+		return 0
+	}
+	for _, p := range created {
+		fmt.Fprintln(stdout, p)
+	}
+	return 0
 }
