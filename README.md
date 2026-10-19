@@ -220,6 +220,10 @@ It is scoped to the profile that owns the folder the agent was started in. Outsi
 
 It needs `ctx-core`, the Go binary that `install.sh`, `ctx upgrade` and the Homebrew formula install next to the ctx libs. Check with `ctx doctor` (`ctx-core: <version> (<path>)`). If no build exists for your OS and CPU the installer warns `ctx mcp unavailable` and the rest of ctx works as before.
 
+#### ctx-core in everyday commands
+
+When `ctx-core` is installed, `ctx list --json`, `ctx status --json`, `ctx workdir-prompt`, `ctx env`, `ctx run` and `ctx guard check` run in Go for speed; everything else is still Bash. Behavior is unchanged. Set `CTX_CORE=off` to force the Bash implementation. Without `ctx-core`, ctx falls back to Bash silently.
+
 #### 1. Describe the client
 
 ```bash

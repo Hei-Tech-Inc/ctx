@@ -13,6 +13,7 @@ This repository is a **Bash** CLI (`bin/ctx` + `lib/*.sh`) plus a small Go compa
 ```bash
 go vet ./... && go test ./...
 bash test/test.sh
+CTX_CORE=off bash test/test.sh   # Bash-only path (no Go forwarding)
 shellcheck -x -S warning bin/ctx lib/*.sh lib/*.bash install.sh test/*.sh
 ./bin/ctx help
 ```
