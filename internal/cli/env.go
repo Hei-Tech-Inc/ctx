@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -297,7 +298,12 @@ func Run(args []string) error {
 	if xerr != nil {
 		return xerr
 	}
-	if err := syscall.Exec(path, rest, env); err != nil {
+	err = syscall.Exec(path, rest, env)
+	if errors.Is(err, syscall.ENOEXEC) {
+		// An executable without a shebang: Bash runs it as a shell script.
+		err = syscall.Exec("/bin/sh", append([]string{"sh", path}, rest[1:]...), env)
+	}
+	if err != nil {
 		code := 126
 		if os.IsNotExist(err) {
 			code = 127
@@ -312,7 +318,9 @@ func Run(args []string) error {
 func lookCommand(name string) (string, error) {
 	if !strings.Contains(name, "/") {
 		path, err := exec.LookPath(name)
-		if err != nil {
+		// A match in a relative PATH entry (".", "node_modules/.bin") is reported
+		// as ErrDot; Bash runs it, so do the same.
+		if err != nil && !errors.Is(err, exec.ErrDot) {
 			return "", &ExitError{Code: 127, Msg: fmt.Sprintf("ctx: exec: %s: not found", name)}
 		}
 		return path, nil

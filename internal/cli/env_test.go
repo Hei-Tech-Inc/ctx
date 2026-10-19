@@ -246,6 +246,33 @@ func TestRunExecsWithIdentity(t *testing.T) {
 	}
 }
 
+func TestRunRelativePathEntry(t *testing.T) {
+	f := envFixture(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "reltool"), []byte("#!/bin/sh\necho rel-ran\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "."+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, errs, code := runCore(t, dir, "run", "-p", "acme", "--", "reltool")
+	if code != 0 || out != "rel-ran\n" {
+		t.Fatalf("code %d out %q err %q", code, out, errs)
+	}
+	_ = f
+}
+
+func TestRunScriptWithoutShebang(t *testing.T) {
+	f := envFixture(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ns.sh"), []byte("echo hi \"$1\" $CTX_ACTIVE_PROFILE\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := runCore(t, dir, "run", "-p", "acme", "--", "./ns.sh", "arg")
+	if code != 0 || out != "hi arg acme\n" {
+		t.Fatalf("code %d out %q err %q", code, out, errs)
+	}
+	_ = f
+}
+
 func TestRunErrors(t *testing.T) {
 	f := envFixture(t)
 	empty := t.TempDir()

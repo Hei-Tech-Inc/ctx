@@ -581,6 +581,12 @@ test_ctx_run_env_agent_rules() {
     [[ "$(ctx run -- printf '%s,' --json -q --dry-run)" == "--json,-q,--dry-run," ]] || { echo "flags not passed through"; exit 1; }
     (cd "$td" && ctx run -p acme -- sh -c 'printf %s "$AWS_PROFILE"' | grep -qx acme-prod) || { echo "-p outside folder"; exit 1; }
 
+    printf '#!/bin/sh\necho rel-ran\n' >reltool && chmod +x reltool
+    [[ "$(PATH=".:$PATH" ctx run -- reltool)" == rel-ran ]] || { echo "run: relative PATH entry"; exit 1; }
+    printf 'echo ns-ran "$1"\n' >ns.sh && chmod +x ns.sh
+    [[ "$(ctx run -- ./ns.sh a)" == "ns-ran a" ]] || { echo "run: script without shebang"; exit 1; }
+    rm -f reltool ns.sh
+
     out="$(ctx env)"
     grep -q API_KEY <<<"$out" && { echo "env printed secrets without --secrets"; exit 1; }
     (eval "$out"; [[ "$GIT_AUTHOR_NAME" == "Dev One" && "$FOO" == "bar baz" ]]) || { echo "env eval"; exit 1; }
