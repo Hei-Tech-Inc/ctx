@@ -538,3 +538,28 @@ func TestChangeRefusesBodyTooLargeToConfirm(t *testing.T) {
 		}
 	}
 }
+
+func TestKubectlToolsRefuseConfig(t *testing.T) {
+	f := newFixture(t, "")
+	f.acme()
+	e := &elicitor{answers: []string{"accept"}}
+	cs := connectAsking(t, f, e)
+	for _, c := range []struct {
+		tool string
+		args []string
+	}{
+		{"kubectl_change", []string{"config", "use-context", "other"}},
+		{"kubectl_read", []string{"config", "view", "--flatten"}},
+		{"kubectl_read", []string{"cluster-info", "dump", "--output-directory=/tmp/x"}},
+	} {
+		if text, isErr := call(t, cs, c.tool, map[string]any{"env": "pp", "args": c.args}); !isErr {
+			t.Errorf("%s %q allowed: %q", c.tool, c.args, text)
+		}
+	}
+	if n := len(e.sent()); n != 0 {
+		t.Errorf("elicitations = %d", n)
+	}
+	if calls := testutil.ReadArgv(t, f.kubectlLog); calls != nil {
+		t.Errorf("kubectl ran: %q", calls)
+	}
+}
