@@ -8,3 +8,6 @@
 
 # Local agent workspaces
 .superpowers/
+
+# Go build output
+/bin/ctx-core

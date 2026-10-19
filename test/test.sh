@@ -625,6 +625,29 @@ test_use_keeps_user_agent_keys() {
   pass "ctx use adds the profile SSH key without flushing the agent; deactivate removes only ctx's key"
 }
 
+test_ctx_core_dispatch() {
+  (
+    set -euo pipefail
+    local td out err
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    printf '#!/usr/bin/env bash\necho "$*"\n' >"$td/ctx-core"
+    chmod +x "$td/ctx-core"
+    out="$(CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" mcp --x)"
+    [[ "$out" == "mcp --x" ]] || { echo "mcp dispatch: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" knowledge list)"
+    [[ "$out" == "knowledge list" ]] || { echo "knowledge dispatch: $out"; exit 1; }
+    # CTX_CORE_BIN set but missing: no fall-through
+    set +e
+    err="$(CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" mcp 2>&1 >/dev/null)"
+    local rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "missing: rc=$rc"; exit 1; }
+    [[ "$err" == *"ctx-core not found"* ]] || { echo "missing msg: $err"; exit 1; }
+  ) || fail "ctx-core dispatch"
+  pass "ctx mcp/knowledge dispatch to ctx-core; missing binary exits 1 with guidance"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -648,5 +671,6 @@ test_git_identity_github_rewrite
 test_ctx_run_env_agent_rules
 test_setup_commit_signing
 test_use_keeps_user_agent_keys
+test_ctx_core_dispatch
 
 echo "All tests passed."
