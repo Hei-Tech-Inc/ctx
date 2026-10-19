@@ -51,6 +51,9 @@ type server struct {
 
 	mu       sync.Mutex
 	sessions map[*mcp.ServerSession]*sessionScope
+
+	scopedTools []string // every tool but client_context
+	hideOnce    sync.Once
 }
 
 // New returns the MCP server with the read tools registered.
@@ -64,7 +67,33 @@ func New(d Deps, opts Options) *mcp.Server {
 		SupportedProtocolVersions: legacyProtocolVersions(),
 	})
 	s.addReadTools(srv)
+	srv.AddReceivingMiddleware(s.gate(srv))
 	return srv
+}
+
+// gate resolves the session's scope before tools/list and tools/call. With
+// no client it removes every tool but client_context (stdio serves one
+// session per process, so the server's tool set is that session's), and a
+// call to any other tool gets the explanation without running.
+func (s *server) gate(srv *mcp.Server) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method != "tools/list" && method != "tools/call" {
+				return next(ctx, method, req)
+			}
+			session, ok := req.GetSession().(*mcp.ServerSession)
+			if !ok {
+				return next(ctx, method, req)
+			}
+			if _, err := s.scopeFor(ctx, session); err != nil {
+				s.hideOnce.Do(func() { srv.RemoveTools(s.scopedTools...) })
+				if p, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok && p.Name != "client_context" {
+					return errorResult(err.Error()), nil
+				}
+			}
+			return next(ctx, method, req)
+		}
+	}
 }
 
 // scopeFor returns the session's scope, resolving it on first use. A nil
@@ -86,6 +115,7 @@ var readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true}
 // one, the tool returns the same explanation client_context gives.
 func addRead[In any](srv *mcp.Server, s *server, name, desc string,
 	body func(ctx context.Context, sc *Scope, in In) (string, [][]string, error)) {
+	s.scopedTools = append(s.scopedTools, name)
 	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc, Annotations: readOnly},
 		func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
 			sc, err := s.scopeFor(ctx, req.Session)

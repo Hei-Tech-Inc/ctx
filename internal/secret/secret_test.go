@@ -101,3 +101,17 @@ func TestLoadRedactor(t *testing.T) {
 		t.Error("LoadRedactor(nil, nil) returned nil")
 	}
 }
+
+func TestRedactorCatchesJSONEscapedForms(t *testing.T) {
+	const pw = `p&ss<w>"rd\x`
+	r := NewRedactor([]string{pw}).With("other-secret")
+	for _, in := range []string{
+		pw,
+		`p&ss<w>\"rd\\x`, // encoding/json default
+		`p&ss<w>\"rd\\x`, // SetEscapeHTML(false)
+	} {
+		if got := r.String("a " + in + " b"); got != "a <redacted> b" {
+			t.Errorf("String(%q) = %q", in, got)
+		}
+	}
+}

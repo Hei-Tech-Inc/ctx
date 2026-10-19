@@ -64,7 +64,9 @@ func (s *Scope) now() time.Time {
 }
 
 // redactArgs turns the input struct into a JSON object with every secret
-// value replaced.
+// value replaced. It redacts the decoded strings, not the encoded JSON:
+// encoding escapes & < > " and \, so a secret holding one of them would
+// not match in encoded form.
 func (s *Scope) redactArgs(args any) map[string]any {
 	if args == nil {
 		return nil
@@ -74,10 +76,30 @@ func (s *Scope) redactArgs(args any) map[string]any {
 		return nil
 	}
 	var m map[string]any
-	if json.Unmarshal(s.Redact.Bytes(data), &m) != nil || len(m) == 0 {
+	if json.Unmarshal(data, &m) != nil || len(m) == 0 {
 		return nil
 	}
-	return m
+	return s.redactValue(m).(map[string]any)
+}
+
+// redactValue redacts every string (and map key) in a decoded JSON value.
+func (s *Scope) redactValue(v any) any {
+	switch x := v.(type) {
+	case string:
+		return s.Redact.String(x)
+	case []any:
+		for i := range x {
+			x[i] = s.redactValue(x[i])
+		}
+		return x
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[s.Redact.String(k)] = s.redactValue(val)
+		}
+		return out
+	}
+	return v
 }
 
 func (s *Scope) redactArgv(argv [][]string) [][]string {

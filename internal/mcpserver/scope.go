@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -31,8 +30,8 @@ type Scope struct {
 	deps Deps
 }
 
-// noScopeError is a definite "no client for this session" answer. Other
-// errors from resolveScope (a failed roots/list) are transient.
+// noScopeError is the "no client for this session" answer. resolveScope
+// returns no other error, so the answer is fixed for the session.
 type noScopeError struct{ reason string }
 
 func (e *noScopeError) Error() string {
@@ -120,7 +119,7 @@ func listRoots(ctx context.Context, session *mcp.ServerSession) ([]string, error
 	defer cancel()
 	res, err := session.ListRoots(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("list the client's folders (roots): %w", err)
+		return nil, noScope("could not list the client's folders (roots): %v", err)
 	}
 	var paths []string
 	for _, r := range res.Roots {
@@ -129,6 +128,9 @@ func listRoots(ctx context.Context, session *mcp.ServerSession) ([]string, error
 			continue
 		}
 		paths = append(paths, u.Path)
+	}
+	if len(res.Roots) > 0 && len(paths) == 0 {
+		return nil, noScope("the client reported folders but none is a local file:// path")
 	}
 	return paths, nil
 }
@@ -157,9 +159,10 @@ func (s *Scope) unavailable() error {
 	return nil
 }
 
-// sessionScope caches one session's scope. A definite answer (a scope, or
-// no client) is kept for the session; a scope whose knowledge failed to
-// load is rebuilt on the next call so a fixed file is picked up.
+// sessionScope caches one session's scope. The answer (a scope, or no
+// client) is kept for the session, so the tool list never changes back; a
+// scope whose knowledge failed to load is rebuilt on the next call so a
+// fixed file is picked up.
 type sessionScope struct {
 	mu    sync.Mutex
 	done  bool
@@ -176,10 +179,7 @@ func (ss *sessionScope) get(ctx context.Context, session *mcp.ServerSession, d D
 		}
 		return ss.scope, ss.err
 	}
-	sc, err := resolveScope(ctx, session, d, opts)
-	var ns *noScopeError
-	if err == nil || errors.As(err, &ns) {
-		ss.done, ss.scope, ss.err = true, sc, err
-	}
-	return sc, err
+	ss.scope, ss.err = resolveScope(ctx, session, d, opts)
+	ss.done = true
+	return ss.scope, ss.err
 }

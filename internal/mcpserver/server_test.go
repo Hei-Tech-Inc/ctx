@@ -53,6 +53,15 @@ const subsPods = `{"items":[{"metadata":{"name":"subs-1"},"spec":{"containers":[
 
 func newFixture(t *testing.T, kubectlCases string) *fixture {
 	t.Helper()
+	return newFixtureSecret(t, kubectlCases, secretValue)
+}
+
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// newFixtureSecret is newFixture with the value ctx secret get returns for
+// TKGI_PASSWORD.
+func newFixtureSecret(t *testing.T, kubectlCases, secretVal string) *fixture {
+	t.Helper()
 	f := &fixture{t: t, ctxDir: realDir(t)}
 	t.Setenv("CTX_DIR", f.ctxDir)
 	t.Setenv("HOME", realDir(t))
@@ -65,7 +74,7 @@ func newFixture(t *testing.T, kubectlCases string) *fixture {
 		"*) echo \"unexpected: $*\" >&2; exit 1 ;;\nesac\n"
 	dir, log := testutil.FakeBin(t, "kubectl", script)
 	f.kubectl, f.kubectlLog = filepath.Join(dir, "kubectl"), log
-	cdir, _ := testutil.FakeBin(t, "ctx", `case "$4" in TKGI_PASSWORD) echo `+secretValue+` ;; *) echo "no such key" >&2; exit 1 ;; esac`)
+	cdir, _ := testutil.FakeBin(t, "ctx", `case "$4" in TKGI_PASSWORD) printf '%s\n' `+shQuote(secretVal)+` ;; *) echo "no such key" >&2; exit 1 ;; esac`)
 	f.ctxBin = filepath.Join(cdir, "ctx")
 	return f
 }
@@ -165,11 +174,32 @@ func call(t *testing.T, cs *mcp.ClientSession, tool string, args map[string]any)
 	return sb.String(), res.IsError
 }
 
+func toolNames(t *testing.T, cs *mcp.ClientSession) []string {
+	t.Helper()
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tool := range res.Tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func assertOnlyContextTool(t *testing.T, cs *mcp.ClientSession) {
+	t.Helper()
+	if names := toolNames(t, cs); len(names) != 1 || names[0] != "client_context" {
+		t.Errorf("tools/list = %v, want only client_context", names)
+	}
+}
+
 func TestNoProfileOnlyContext(t *testing.T) {
 	f := newFixture(t, "")
 	f.acme()
 	writeFile(t, filepath.Join(f.ctxDir, "config"), "active=acme\n")
 	cs := connect(t, f.deps(), Options{Cwd: realDir(t)}, nil)
+	assertOnlyContextTool(t, cs)
 
 	text, isErr := call(t, cs, "client_context", nil)
 	if isErr || !strings.Contains(text, "No client is active") {
@@ -216,6 +246,7 @@ func TestScopeConflictingRoots(t *testing.T) {
 	acmeWork := f.acme()
 	globexWork := f.profile("globex")
 	cs := connect(t, f.deps(), Options{Cwd: acmeWork}, []string{acmeWork, globexWork})
+	assertOnlyContextTool(t, cs)
 	text, isErr := call(t, cs, "client_context", nil)
 	if isErr || !strings.Contains(text, "No client is active") ||
 		!strings.Contains(text, "folders belong to more than one client: acme, globex") {
@@ -446,6 +477,7 @@ func TestDiscoverServices(t *testing.T) {
 
 func TestToolsAnnotatedReadOnly(t *testing.T) {
 	f := newFixture(t, "")
+	f.acme()
 	cs := connect(t, f.deps(), Options{Profile: "acme"}, nil)
 	res, err := cs.ListTools(context.Background(), nil)
 	if err != nil {
@@ -501,5 +533,62 @@ func TestLoginTool(t *testing.T) {
 	text, isErr := call(t, cs, "login", map[string]any{"env": "pp"})
 	if isErr || !strings.Contains(text, "pw=<redacted>") || strings.Contains(text, secretValue) || !strings.Contains(text, "Logged in to preprod") {
 		t.Errorf("login = %v %q", isErr, text)
+	}
+}
+
+// An early tools/call, before any tools/list, gets the explanation and runs
+// nothing.
+func TestNoProfileEarlyCallExplains(t *testing.T) {
+	f := newFixture(t, "")
+	f.acme()
+	cs := connect(t, f.deps(), Options{Cwd: realDir(t)}, nil)
+	text, isErr := call(t, cs, "logs", map[string]any{"env": "pp", "service": "subs"})
+	if !isErr || !strings.Contains(text, "No client is active") {
+		t.Errorf("logs = %v %q", isErr, text)
+	}
+	if calls := testutil.ReadArgv(t, f.kubectlLog); calls != nil {
+		t.Errorf("kubectl ran: %v", calls)
+	}
+	assertOnlyContextTool(t, cs)
+}
+
+func TestBrokenKnowledgeKeepsTools(t *testing.T) {
+	f := newFixture(t, "")
+	f.acme()
+	f.knowledge("acme", map[string]string{"services.yaml": "services:\n  foo: { kind: bogus }\n"})
+	cs := connect(t, f.deps(), Options{Profile: "acme"}, nil)
+	if names := toolNames(t, cs); len(names) != 10 {
+		t.Errorf("tools/list = %v, want all 10", names)
+	}
+}
+
+func TestJSONEscapableSecretRedacted(t *testing.T) {
+	const pw = `p&ss<w>"rd\x`
+	f := newFixtureSecret(t, `*"logs subs-1"*) printf 'args=%s\n' "$*" ;;`+"\n", pw)
+	f.acme()
+	cs := connect(t, f.deps(), Options{Profile: "acme"}, nil)
+	text, isErr := call(t, cs, "logs", map[string]any{"env": "pp", "service": "subs", "since": pw})
+	if isErr || !strings.Contains(text, "--since <redacted>") {
+		t.Fatalf("logs = %v %q", isErr, text)
+	}
+	atext, isErr := call(t, cs, "activity", nil)
+	if isErr {
+		t.Fatalf("activity: %q", atext)
+	}
+	data, err := os.ReadFile(filepath.Join(f.ctxDir, "knowledge", "acme", "activity.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped, _ := json.Marshal(pw)
+	forms := []string{pw, strings.Trim(string(escaped), `"`), `p&ss<w>\"rd\\x`}
+	for name, out := range map[string]string{"logs": text, "activity tool": atext, "activity.jsonl": string(data)} {
+		for _, form := range forms {
+			if strings.Contains(out, form) {
+				t.Errorf("%s contains %q: %s", name, form, out)
+			}
+		}
+	}
+	if !strings.Contains(string(data), `"since":"\u003credacted\u003e"`) {
+		t.Errorf("activity.jsonl args not redacted: %s", data)
 	}
 }
