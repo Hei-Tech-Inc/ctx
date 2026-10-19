@@ -61,7 +61,7 @@ cmd_help() {
       "  import / add     Alias for setup" \
       "" \
       "$(gum style --faint "DAILY USE")" \
-      "  use  <name>      Activate a profile" \
+      "  use  <name>      Activate a profile (--eval bash|fish: print exports for eval)" \
       "  deactivate       Clear active profile (prints eval for your shell)" \
       "  list             List all profiles" \
       "  status           Active profile + live checks" \
@@ -119,6 +119,7 @@ ${BOLD}SETUP${RESET}
 
 ${BOLD}DAILY USE${RESET}
   use  <name>           Activate a profile (gh, SSH, AWS, Azure, GCP, kubectl)
+                        --eval bash|fish prints exports; the ctx shell function evals it
   deactivate            Clear active profile from ~/.ctx/config; run eval \"\$(ctx deactivate)\"
   list                  List all profiles
   status                Active profile + live checks
@@ -265,10 +266,12 @@ _ctx() {
             -p|--profile) _describe 'profiles' profiles ;;
           esac
           ;;
+        use) local ev=('--eval:Print shell exports for eval'); _describe 'use flags' ev ;;
       esac
       ;;
     5)
       case ${words[2]} in
+        use) [[ ${words[4]} == --eval ]] && { local sh=('bash' 'fish'); _describe 'shells' sh; } ;;
         setup|import|add) _describe 'setup options' setup_flags ;;
         secret)
           [[ ${words[3]} =~ ^(set|get|delete)$ ]] && _describe 'profiles' profiles
@@ -318,6 +321,10 @@ _ctx_comp() {
   if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
     COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
   fi
+  if [[ ${COMP_WORDS[1]} == use ]]; then
+    [[ $COMP_CWORD -eq 3 ]] && COMPREPLY=($(compgen -W "--eval" -- "$cur"))
+    [[ "$prev" == --eval ]] && COMPREPLY=($(compgen -W "bash fish" -- "$cur"))
+  fi
   if [[ ${COMP_WORDS[1]} == secret && ${COMP_WORDS[COMP_CWORD-1]} =~ ^(set|get|delete)$ ]]; then
     COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
   fi
@@ -340,6 +347,7 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard 
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx use' -l eval -d 'Print shell exports for eval' -x -a 'fish bash'
 complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx remove' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx verify' -a '(__fish_ctx_profiles)'
@@ -377,7 +385,7 @@ main() {
   case "$cmd" in
     init)             cmd_init ;;
     setup|import|add) cmd_import "$@" ;;
-    use)              cmd_use "${1:-}" ;;
+    use)              cmd_use "$@" ;;
     deactivate)      cmd_deactivate "$@" ;;
     list|ls)          cmd_list ;;
     status|st)        cmd_status ;;
