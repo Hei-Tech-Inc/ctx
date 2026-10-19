@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/cli"
+	"github.com/Hei-Tech-Inc/ctx/internal/guard"
 	"github.com/Hei-Tech-Inc/ctx/internal/knowledge"
 	"github.com/Hei-Tech-Inc/ctx/internal/mcpserver"
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
@@ -37,7 +38,7 @@ var implemented = map[string]func(sub string) bool{
 	"workdir-prompt": func(string) bool { return true },
 	"env":            func(string) bool { return true },
 	"run":            func(string) bool { return true },
-	"guard":          func(sub string) bool { return false && sub == "check" },
+	"guard":          func(sub string) bool { return sub == "check" },
 }
 
 func implements(cmd string, rest []string) bool {
@@ -87,9 +88,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "env", "run":
 		return runEnvRun(args, stdout, stderr)
 	case "guard":
-		// Not ported yet. bin/ctx asks `implements` first, so this is unreachable via forwarding.
-		fmt.Fprintln(stderr, "not implemented")
-		return 2
+		if len(args) < 2 || args[1] != "check" {
+			fmt.Fprintln(stderr, "ctx-core: guard supports only check")
+			return 127
+		}
+		hook, rest := "", []string(nil)
+		if len(args) > 2 {
+			hook, rest = args[2], args[3:]
+		}
+		return guard.Check(hook, rest, stderr)
 	case "implements":
 		if len(args) >= 2 && implements(args[1], args[2:]) {
 			return 0

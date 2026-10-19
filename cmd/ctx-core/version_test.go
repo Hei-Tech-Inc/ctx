@@ -40,14 +40,19 @@ func TestEnvRunImplements(t *testing.T) {
 	}
 }
 
-func TestStubsAndImplements(t *testing.T) {
-	for _, c := range []string{"guard"} {
-		var out, errb strings.Builder
-		if rc := run([]string{c}, &out, &errb); rc != 2 {
-			t.Errorf("%s: rc=%d, want 2", c, rc)
+func TestGuardImplementsOnlyCheck(t *testing.T) {
+	var out, errb strings.Builder
+	for sub, want := range map[string]int{"check": 0, "install": 1, "status": 1} {
+		if rc := run([]string{"implements", "guard", sub}, &out, &errb); rc != want {
+			t.Errorf("implements guard %s: rc=%d, want %d", sub, rc, want)
 		}
-		if rc := run([]string{"implements", c}, &out, &errb); rc != 1 {
-			t.Errorf("implements %s: rc=%d, want 1", c, rc)
+	}
+	if rc := run([]string{"implements", "guard"}, &out, &errb); rc != 1 {
+		t.Errorf("implements guard: rc=%d, want 1", rc)
+	}
+	for _, args := range [][]string{{"guard"}, {"guard", "install"}} {
+		if rc := run(args, &out, &errb); rc != 127 {
+			t.Errorf("%v: rc=%d, want 127", args, rc)
 		}
 	}
 }
