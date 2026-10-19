@@ -169,3 +169,56 @@ func TestLoadTildeMatchesBashSource(t *testing.T) {
 		}
 	}
 }
+
+// bashProfile is the reference reading: bash itself sources the file.
+func bashProfile(t *testing.T, path string) map[string]string {
+	t.Helper()
+	vals, ok := bashValues(path)
+	if !ok {
+		t.Fatal("bash reference failed")
+	}
+	return vals
+}
+
+func TestLoadMatchesBashSource(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	t.Setenv("HOME", "/h/me")
+	cases := map[string]string{
+		"inline-comment":  "AWS_PROFILE_NAME=demo-prod  # prod account\n",
+		"export":          "export KUBE_CONTEXT=kc\n",
+		"email-comment":   "GIT_EMAIL=dev@acme.com  # work\n",
+		"dq-comment":      "GIT_NAME=\"a\" # c\n",
+		"sq-semicolon":    "GIT_NAME='a';GITHUB_USER=b\n",
+		"unquoted-space":  "GIT_NAME=a b\n",
+		"plain-mixed":     "# c\n\nGIT_NAME=\"dq\"\nGIT_EMAIL='sq@x'\nGITHUB_USER=bare\nSECRET_KEYS=\"A B\"\n",
+		"multiline":       "EXTRA_ENVS=\"A=1\nB=two words\"\nGIT_NAME=x\n",
+		"later-fallback":  "GIT_NAME=first\nexport GIT_NAME=second\n",
+		"quoted-trailing": "GIT_NAME=\"a\"   \nKUBE_CONTEXT=k\n",
+	}
+	for name, content := range cases {
+		d := t.TempDir()
+		path := filepath.Join(d, name+".conf")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want := bashProfile(t, path)
+		p, err := Load(d, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{
+			"GIT_NAME": p.GitName, "GIT_EMAIL": p.GitEmail, "WORK_DIR": p.WorkDir, "GITHUB_USER": p.GithubUser,
+			"SSH_KEY_PATH": p.SSHKeyPath, "AWS_PROFILE_NAME": p.AWSProfile, "AZURE_SUBSCRIPTION": p.AzureSubscription,
+			"AZURE_TENANT": p.AzureTenant, "GCP_PROJECT": p.GCPProject, "GCP_ACCOUNT": p.GCPAccount,
+			"KUBE_CONTEXT": p.KubeContext, "SIGNING_FORMAT": p.SigningFormat, "SIGNING_KEY": p.SigningKey,
+			"SECRET_KEYS": strings.Join(p.SecretKeys, " "),
+		}
+		for k, g := range got {
+			if g != want[k] {
+				t.Errorf("%s: %s = %q, bash says %q", name, k, g, want[k])
+			}
+		}
+	}
+}

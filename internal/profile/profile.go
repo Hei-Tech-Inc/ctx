@@ -61,8 +61,8 @@ func Load(dir, name string) (*Profile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", name, err)
 	}
-	vals := parse(string(data))
-	if needsBash(vals) {
+	vals, plain := parse(string(data))
+	if !plain || needsBash(vals) {
 		if bv, ok := bashValues(path); ok {
 			vals = bv
 			vals["WORK_DIR"] = expandHome(vals["WORK_DIR"], os.Getenv("HOME"), true, true)
@@ -129,14 +129,18 @@ func isKey(k string) bool {
 }
 
 // parse reads KEY=value assignments (bare, 'single' or "double" quoted, quoted values may
-// span lines); the last assignment wins. Only known keys are kept.
-func parse(src string) map[string]string {
+// span lines); the last assignment wins. Only known keys are kept. plain is false when any
+// line is not blank, a full-line comment or a simple assignment (leading export, inline
+// comment, ';', text after a closing quote, unquoted whitespace, ...): the caller must then
+// let bash read the file.
+func parse(src string) (vals map[string]string, plain bool) {
+	plain = true
 	src = strings.ReplaceAll(src, "\r\n", "\n")
 	known := map[string]bool{}
 	for _, k := range keys {
 		known[k] = true
 	}
-	vals := map[string]string{}
+	vals = map[string]string{}
 	home := os.Getenv("HOME")
 	for len(src) > 0 {
 		line := src
@@ -146,8 +150,12 @@ func parse(src string) map[string]string {
 			src = ""
 		}
 		line = strings.TrimLeft(line, " \t")
+		if strings.TrimRight(line, " \t") == "" || line[0] == '#' {
+			continue
+		}
 		k, rest, ok := strings.Cut(line, "=")
 		if !ok || !isKey(k) {
+			plain = false
 			continue
 		}
 		var v string
@@ -169,11 +177,15 @@ func parse(src string) map[string]string {
 					}
 				}
 				if end >= 0 {
+					if strings.TrimRight(buf[end+1:], " \t") != "" {
+						plain = false
+					}
 					sb.WriteString(buf[:end])
 					break
 				}
 				sb.WriteString(buf)
 				if src == "" {
+					plain = false
 					break
 				}
 				sb.WriteByte('\n')
@@ -187,6 +199,9 @@ func parse(src string) map[string]string {
 			v = sb.String()
 		} else {
 			v = strings.TrimRight(rest, " \t")
+			if !plainBare(v) {
+				plain = false
+			}
 		}
 		// $HOME expands unless single-quoted. A leading ~ expands in WORK_DIR always
 		// (Bash's WORK_DIR readers do) and in other fields only when unquoted, as
@@ -196,7 +211,16 @@ func parse(src string) map[string]string {
 			vals[k] = v
 		}
 	}
-	return vals
+	return vals, plain
+}
+
+// plainBare reports whether an unquoted value is a single literal word that bash reads
+// verbatim (a leading ~ only as ~ or ~/..., which expandHome mirrors).
+func plainBare(v string) bool {
+	if strings.ContainsAny(v, " \t\r#;'\"$`\\&|<>()") {
+		return false
+	}
+	return !strings.HasPrefix(v, "~") || v == "~" || strings.HasPrefix(v, "~/")
 }
 
 func expandHome(v, home string, vars, tilde bool) string {
