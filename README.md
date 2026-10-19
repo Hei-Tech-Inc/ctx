@@ -222,7 +222,7 @@ It needs `ctx-core`, the Go binary that `install.sh`, `ctx upgrade` and the Home
 
 #### ctx-core in everyday commands
 
-When `ctx-core` is installed, `ctx list --json`, `ctx status --json`, `ctx workdir-prompt`, `ctx env`, `ctx run` and `ctx guard check` run in Go for speed; everything else is still Bash. Behavior is unchanged. Set `CTX_CORE=off` to force the Bash implementation. Without `ctx-core`, ctx falls back to Bash silently.
+`ctx mcp` and `ctx knowledge` always run in `ctx-core` and error if it is missing. `ctx list --json`, `ctx status --json`, `ctx workdir-prompt`, `ctx env`, `ctx run` and `ctx guard check` run in Go when `ctx-core` is installed, for speed, and fall back to the Bash implementation silently when it is not; their behavior is unchanged. Set `CTX_CORE=off` to force Bash for those six. Everything else is Bash.
 
 #### 1. Describe the client
 
