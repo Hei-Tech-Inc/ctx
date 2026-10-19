@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -162,26 +163,64 @@ func (s *Scope) unavailable() error {
 // sessionScope caches one session's scope. The answer (a scope, or no
 // client) is kept for the session, so the tool list never changes back; a
 // scope whose knowledge failed to load is rebuilt on the next call so a
-// fixed file is picked up.
+// fixed file is picked up. When the client's roots change (stale), the
+// next get resolves them again: a different client, or none, drops the
+// session to no scope for good. It never switches to another client.
 type sessionScope struct {
 	mu    sync.Mutex
 	done  bool
+	stale bool
 	scope *Scope
 	err   error
 }
 
-func (ss *sessionScope) get(ctx context.Context, session *mcp.ServerSession, d Deps, opts Options) (*Scope, error) {
+// markStale notes that the client's roots changed.
+func (ss *sessionScope) markStale() {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	if ss.done {
-		if ss.scope != nil && ss.scope.LoadErr != nil {
-			ss.scope = newScope(ss.scope.Profile, d)
-		}
-		return ss.scope, ss.err
+	ss.stale = ss.done
+}
+
+// get returns the session's scope. dropped is true on the call that took a
+// scope away because the roots changed.
+func (ss *sessionScope) get(ctx context.Context, session *mcp.ServerSession, d Deps, opts Options) (sc *Scope, dropped bool, err error) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if !ss.done {
+		ss.scope, ss.err = resolveScope(ctx, session, d, opts)
+		ss.done = true
+		return ss.scope, false, ss.err
 	}
-	ss.scope, ss.err = resolveScope(ctx, session, d, opts)
-	ss.done = true
-	return ss.scope, ss.err
+	if ss.stale {
+		ss.stale = false
+		if ss.scope != nil && opts.Profile == "" {
+			if err := rootsStillMatch(ctx, session, d, opts, ss.scope.Profile.Name); err != nil {
+				ss.scope, ss.err = nil, err
+				return nil, true, ss.err
+			}
+		}
+	}
+	if ss.scope != nil && ss.scope.LoadErr != nil {
+		ss.scope = newScope(ss.scope.Profile, d)
+	}
+	return ss.scope, false, ss.err
+}
+
+// rootsStillMatch resolves the client's roots again and returns the
+// no-scope error to switch to unless they still resolve to current.
+func rootsStillMatch(ctx context.Context, session *mcp.ServerSession, d Deps, opts Options, current string) error {
+	name, err := resolveProfileName(ctx, session, d, opts)
+	if err == nil && name == current {
+		return nil
+	}
+	reason := fmt.Sprintf("they now belong to client %s", name)
+	var ns *noScopeError
+	if errors.As(err, &ns) {
+		reason = ns.reason
+	} else if err != nil {
+		reason = err.Error()
+	}
+	return noScope("the open folders changed during this session (%s), so ctx stopped serving client %s; start a new session", reason, current)
 }
 
 // reload rebuilds the scope from disk (after a save_* write).

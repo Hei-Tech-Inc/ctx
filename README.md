@@ -216,7 +216,7 @@ It sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, `GIT_SSH_COMMAND` (the profile's key o
 
 `ctx mcp` is an [MCP](https://modelcontextprotocol.io) server that lets an AI agent (Claude Code, Cursor, and similar) do routine Kubernetes operations for **one client**: log in to a cluster, read and search logs, trace an ID across services, explain where a service gets a setting, restart a deployment, and remember what it learned. It uses the client's own login steps and conventions, which you write once.
 
-It is scoped to the profile that owns the folder the agent was started in. Outside any client folder it offers a single `client_context` tool that says no client is active. It never falls back to the profile marked active in `~/.ctx/config`, and one client's clusters, services, recipes and activity are never visible from another client's folder.
+It is scoped to the profile that owns the folder the agent was started in. Outside any client folder it offers a single `client_context` tool that says no client is active. It never falls back to the profile marked active in `~/.ctx/config`, and one client's clusters, services, recipes and activity are never visible from another client's folder. If the open folders change mid-session (for example `/add-dir` of another client's folder), ctx stops serving that session: only `client_context` stays, it explains why, and the session's port-forwards are stopped. Start a new session to continue.
 
 It needs `ctx-core`, the Go binary that `install.sh`, `ctx upgrade` and the Homebrew formula install next to the ctx libs. Check with `ctx doctor` (`ctx-core: <version> (<path>)`). If no build exists for your OS and CPU the installer warns `ctx mcp unavailable` and the rest of ctx works as before.
 

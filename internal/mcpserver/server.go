@@ -56,6 +56,7 @@ type server struct {
 	hideOnce    sync.Once
 
 	forwards *forwards
+	srv      *mcp.Server
 }
 
 // New returns the MCP server with the read and change tools registered.
@@ -80,10 +81,12 @@ func newServer(d Deps, opts Options) (*server, *mcp.Server) {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ctx", Version: "dev"}, &mcp.ServerOptions{
 		Instructions:              instructions,
 		SupportedProtocolVersions: legacyProtocolVersions(),
+		RootsListChangedHandler:   s.rootsChanged,
 	})
+	s.srv = srv
 	s.addReadTools(srv)
 	s.addChangeTools(srv)
-	srv.AddReceivingMiddleware(s.gate(srv))
+	srv.AddReceivingMiddleware(s.gate())
 	return s, srv
 }
 
@@ -91,7 +94,7 @@ func newServer(d Deps, opts Options) (*server, *mcp.Server) {
 // no client it removes every tool but client_context (stdio serves one
 // session per process, so the server's tool set is that session's), and a
 // call to any other tool gets the explanation without running.
-func (s *server) gate(srv *mcp.Server) mcp.Middleware {
+func (s *server) gate() mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if method != "tools/list" && method != "tools/call" {
@@ -102,7 +105,7 @@ func (s *server) gate(srv *mcp.Server) mcp.Middleware {
 				return next(ctx, method, req)
 			}
 			if _, err := s.scopeFor(ctx, session); err != nil {
-				s.hideOnce.Do(func() { srv.RemoveTools(s.scopedTools...) })
+				s.hideScopedTools()
 				if p, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok && p.Name != "client_context" {
 					return errorResult(err.Error()), nil
 				}
@@ -112,17 +115,45 @@ func (s *server) gate(srv *mcp.Server) mcp.Middleware {
 	}
 }
 
-// scopeFor returns the session's scope, resolving it on first use. A nil
-// scope comes with the error explaining why.
-func (s *server) scopeFor(ctx context.Context, session *mcp.ServerSession) (*Scope, error) {
+// hideScopedTools removes every tool but client_context (once).
+func (s *server) hideScopedTools() {
+	s.hideOnce.Do(func() { s.srv.RemoveTools(s.scopedTools...) })
+}
+
+func (s *server) sessionScope(session *mcp.ServerSession) *sessionScope {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	ss := s.sessions[session]
 	if ss == nil {
 		ss = &sessionScope{}
 		s.sessions[session] = ss
 	}
-	s.mu.Unlock()
-	return ss.get(ctx, session, s.deps, s.opts)
+	return ss
+}
+
+// scopeFor returns the session's scope, resolving it on first use. A nil
+// scope comes with the error explaining why. When a roots change takes the
+// scope away, the session's port-forwards are stopped.
+func (s *server) scopeFor(ctx context.Context, session *mcp.ServerSession) (*Scope, error) {
+	sc, dropped, err := s.sessionScope(session).get(ctx, session, s.deps, s.opts)
+	if dropped {
+		s.forwards.stopSession(session)
+	}
+	return sc, err
+}
+
+// rootsChanged handles notifications/roots/list_changed: the session's
+// scope is marked stale so no later call uses it unchecked, then resolved
+// again in the background (a notification handler must not wait on a
+// request to the client) so a dropped scope hides the tools right away.
+func (s *server) rootsChanged(_ context.Context, req *mcp.RootsListChangedRequest) {
+	session := req.Session
+	s.sessionScope(session).markStale()
+	go func() {
+		if _, err := s.scopeFor(context.Background(), session); err != nil {
+			s.hideScopedTools()
+		}
+	}()
 }
 
 // reloadScope reloads the session's knowledge store after a save_* write,
