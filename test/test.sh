@@ -764,6 +764,13 @@ EOS
     [[ "$out" == "GO guard check pre-commit" ]] || { echo "go guard: $out"; exit 1; }
     out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" env -p alpha 2>/dev/null)"
     [[ "$out" == "GO env -p alpha" ]] || { echo "go env: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" deactivate --eval bash 2>/dev/null)"
+    [[ "$out" == "GO deactivate --eval bash" ]] || { echo "go deactivate: $out"; exit 1; }
+    # deactivate falls back to Bash when ctx-core does not implement it
+    rm -f "$td/calls"
+    out="$(CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" deactivate --eval bash 2>"$td/err")"
+    [[ -z "$out" && "$(cat "$td/err")" == "No active profile." ]] || { echo "deactivate fallback: $out / $(cat "$td/err")"; exit 1; }
+    [[ "$(cat "$td/calls")" == "implements deactivate --eval" ]] || { echo "deactivate calls: $(cat "$td/calls")"; exit 1; }
     # implements 0 but the command exits 127: that is the answer, Bash must not run
     cat >"$td/fake127" <<'EOS'
 #!/usr/bin/env bash
@@ -1063,6 +1070,32 @@ test_inherited_quiet_use() {
   pass "ctx use honors an inherited CTX_QUIET=1 (the autoswitch hook); quiet use runs in ctx-core"
 }
 
+# With the real bin/ctx-core, quiet use and deactivate are served by Go (a wrapper logs each ctx-core argv).
+test_use_deactivate_served_by_go() {
+  if [[ "${CTX_CORE:-}" == off || ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    pass "Go use/deactivate check skipped (CTX_CORE=off or no bin/ctx-core)"
+    return 0
+  fi
+  (
+    set -euo pipefail
+    local td out
+    _use_eval_fixture
+    cd "$td"
+    printf '#!/bin/sh\necho "$*" >>"%s/core-calls"\nexec "%s" "$@"\n' "$td" "$ROOT_DIR/bin/ctx-core" >"$td/core"
+    chmod +x "$td/core"
+    : >"$td/core-calls"
+    export CTX_CORE_BIN="$td/core"
+    out="$(CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use demo --eval bash 2>/dev/null)"
+    grep -qx 'export AWS_PROFILE=demo-prod' <<<"$out" || { echo "use exports: $out"; exit 1; }
+    out="$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)"
+    grep -q '^unset AWS_PROFILE ' <<<"$out" || { echo "deactivate unsets: $out"; exit 1; }
+    grep -qx 'use demo --eval bash' "$td/core-calls" || { echo "use not run by ctx-core: $(cat "$td/core-calls")"; exit 1; }
+    grep -qx 'deactivate --eval bash' "$td/core-calls" || { echo "deactivate not run by ctx-core: $(cat "$td/core-calls")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "use/deactivate served by ctx-core"
+  pass "quiet ctx use and ctx deactivate run in ctx-core"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1098,5 +1131,6 @@ test_autoswitch_exports_profile_env
 test_autoswitch_keeps_manual_lock
 test_quiet_use_cloud_tools_succeed
 test_inherited_quiet_use
+test_use_deactivate_served_by_go
 
 echo "All tests passed."

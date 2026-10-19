@@ -435,7 +435,10 @@ main() {
       _ctx_core_forward use "$@" # only when quiet (CTX_QUIET=1)
       cmd_use "$@"
       ;;
-    deactivate)      cmd_deactivate "$@" ;;
+    deactivate)
+      _ctx_core_forward deactivate "$@"
+      cmd_deactivate "$@"
+      ;;
     list|ls)
       [[ "$CTX_JSON" == 1 ]] && _ctx_core_forward list --json
       cmd_list
