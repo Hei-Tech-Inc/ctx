@@ -86,6 +86,9 @@ func mergeCursorConfig(path string, now time.Time) (bool, error) {
 			if err := json.Unmarshal(existing, &doc); err != nil {
 				return false, fmt.Errorf("%s is not valid JSON, leaving it alone: %w", path, err)
 			}
+			if doc == nil { // the file is JSON null
+				doc = map[string]any{}
+			}
 		}
 	case errors.Is(err, os.ErrNotExist):
 		existing = nil

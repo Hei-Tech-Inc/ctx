@@ -140,3 +140,23 @@ func TestInstallUsage(t *testing.T) {
 		t.Fatalf("exit %d, want 2", code)
 	}
 }
+
+func TestInstallCursorNullFileIsEmptyObject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mcp.json"), []byte("null\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"mcp", "install", "cursor"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	m := readJSON(t, filepath.Join(dir, "mcp.json"))
+	if _, ok := m["mcpServers"].(map[string]any)["ctx"]; !ok {
+		t.Fatalf("no ctx entry: %v", m)
+	}
+}
