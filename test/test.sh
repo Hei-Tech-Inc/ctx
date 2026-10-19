@@ -625,6 +625,56 @@ test_use_keeps_user_agent_keys() {
   pass "ctx use adds the profile SSH key without flushing the agent; deactivate removes only ctx's key"
 }
 
+test_core_forward_fallback() {
+  (
+    set -euo pipefail
+    local td out want rc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export CTX_DIR="$td/ctx" HOME="$td/home"
+    unset CTX_CORE # the suite may run with CTX_CORE=off; this test sets it where needed
+    mkdir -p "$CTX_DIR/profiles" "$HOME"
+    printf 'PROFILE_NAME=alpha\nGIT_NAME=A\nGIT_EMAIL=a@example.com\n' >"$CTX_DIR/profiles/alpha.conf"
+    : >"$CTX_DIR/config"
+    want="$(CTX_CORE=off "$ROOT_DIR/bin/ctx" --json list)"
+    [[ "$want" == *'"command"'*'list'* ]] || { echo "bash json: $want"; exit 1; }
+    # 127 from ctx-core: silent fallback to Bash
+    printf '#!/usr/bin/env bash\necho CALLED >>"%s/calls"\nexit 127\n' "$td" >"$td/fake127"
+    chmod +x "$td/fake127"
+    out="$(CTX_CORE_BIN="$td/fake127" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
+    [[ "$out" == "$want" ]] || { echo "fallback: $out"; exit 1; }
+    [[ ! -s "$td/err" ]] || { echo "fallback stderr: $(cat "$td/err")"; exit 1; }
+    grep -q CALLED "$td/calls" || { echo "fake127 not called"; exit 1; }
+    # CTX_CORE=off: Bash JSON and the fake is never called
+    rm -f "$td/calls"
+    out="$(CTX_CORE=off CTX_CORE_BIN="$td/fake127" "$ROOT_DIR/bin/ctx" --json list)"
+    [[ "$out" == "$want" ]] || { echo "off: $out"; exit 1; }
+    [[ ! -e "$td/calls" ]] || { echo "CTX_CORE=off still called ctx-core"; exit 1; }
+    # A working ctx-core: its output and env are used
+    printf '#!/usr/bin/env bash\necho "GO $*"\necho "env $CTX_VERSION|$CTX_DIR|$CTX_BIN_PATH" >&2\n' >"$td/fakego"
+    chmod +x "$td/fakego"
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
+    [[ "$out" == "GO list --json" ]] || { echo "go list: $out"; exit 1; }
+    [[ "$(cat "$td/err")" == "env "*"|$CTX_DIR|$ROOT_DIR/bin/ctx" ]] || { echo "env: $(cat "$td/err")"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" guard check pre-commit 2>/dev/null </dev/null)"
+    [[ "$out" == "GO guard check pre-commit" ]] || { echo "go guard: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" env -p alpha 2>/dev/null)"
+    [[ "$out" == "GO env -p alpha" ]] || { echo "go env: $out"; exit 1; }
+    # Text list is not forwarded
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" list 2>/dev/null)"
+    [[ "$out" != GO* ]] || { echo "text list forwarded: $out"; exit 1; }
+    # An exit code other than 126/127 is ctx-core's answer
+    printf '#!/usr/bin/env bash\necho nope\nexit 3\n' >"$td/fake3"
+    chmod +x "$td/fake3"
+    set +e
+    out="$(CTX_CORE_BIN="$td/fake3" "$ROOT_DIR/bin/ctx" --json list)"
+    rc=$?
+    set -e
+    [[ $rc -eq 3 && "$out" == nope ]] || { echo "rc3: rc=$rc out=$out"; exit 1; }
+  ) || fail "ctx-core forward fallback"
+  pass "read-only commands forward to ctx-core and fall back to Bash on 126/127 or CTX_CORE=off"
+}
+
 test_ctx_core_dispatch() {
   (
     set -euo pipefail
@@ -708,6 +758,7 @@ test_ctx_run_env_agent_rules
 test_setup_commit_signing
 test_use_keeps_user_agent_keys
 test_ctx_core_dispatch
+test_core_forward_fallback
 test_install_builds_ctx_core
 test_doctor_reports_ctx_core
 

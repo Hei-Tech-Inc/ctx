@@ -48,6 +48,8 @@ jobs:
         run: go build -o bin/ctx-core ./cmd/ctx-core
       - name: Run unit tests
         run: bash test/test.sh
+      - name: Run unit tests (Bash only, ctx-core disabled)
+        run: CTX_CORE=off bash test/test.sh
 
   # Ensures default-branch history never credits the IDE vendor bot (GitHub Contributors graph keys off authors + Co-authored-by lines).
   git-history-hygiene:

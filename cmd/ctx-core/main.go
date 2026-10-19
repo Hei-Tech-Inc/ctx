@@ -23,7 +23,15 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge> [args]\n"
+const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|guard> [args]\n"
+
+// ctxVersion is the ctx version bin/ctx passes in CTX_VERSION, else the build version.
+func ctxVersion() string {
+	if v := os.Getenv("CTX_VERSION"); v != "" {
+		return v
+	}
+	return version
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -38,6 +46,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "ctx-core %s\n", version)
 		return 0
+	case "list", "status", "workdir-prompt", "env", "run", "guard":
+		// Not ported yet: 127 tells bin/ctx to run its Bash implementation.
+		if os.Getenv("CTX_CORE_DEBUG") != "" {
+			fmt.Fprintln(stderr, "not implemented")
+		}
+		return 127
 	case "knowledge":
 		return runKnowledge(args[1:], stdout, stderr)
 	case "mcp":
