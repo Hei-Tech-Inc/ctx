@@ -67,6 +67,28 @@ func TestValidateUserArgs(t *testing.T) {
 		{"get secret -o jsonpath-file=f", "output format jsonpath-file is not allowed for secrets"},
 		{"get cm,secret -o jsonpath={..data}", "output format jsonpath is not allowed for secrets"},
 		{"get secret x --template={{.data}}", "output format go-template is not allowed for secrets"},
+
+		// Review fix round 1.
+		// C2: a bool shorthand before n/s in a group must not hide them.
+		{"logs deploy/x -fn kube-system", "flag -n " + flagMsg},
+		{"logs x -fs https://attacker", "flag -s " + flagMsg},
+		{"logs x -pfn kube-system", "flag -n " + flagMsg},
+		{"get pods -wn=kube-system", "flag -n " + flagMsg},
+		{"logs x -f", ""},
+		{"logs x -c sidecar", ""},
+		{"logs x -csidecar", ""},
+		{"get pods -lservice=subs", ""},
+		{"get pods -ojsonpath={.items[*].metadata.name}", ""},
+		// C3: secret references after "--" still count.
+		{"get -o jsonpath={.data} -- secret x", "output format jsonpath is not allowed for secrets"},
+		{"get -o yaml -- secret x", ""},
+		// C4: --raw ignores -n.
+		{"get --raw /api/v1/namespaces/kube-system/secrets", "flag --raw " + flagMsg},
+		{"get --raw=/api/v1/namespaces/kube-system/secrets", "flag --raw " + flagMsg},
+		// Objects from files could be Secrets.
+		{"get -f x.yaml -o jsonpath={.data}", "output format jsonpath is not allowed for secrets"},
+		{"get --filename=x.yaml -o go-template={{.data}}", "output format go-template is not allowed for secrets"},
+		{"get -f x.yaml -o yaml", ""},
 	}
 	for _, c := range cases {
 		err := ValidateUserArgs(strings.Fields(c.args))

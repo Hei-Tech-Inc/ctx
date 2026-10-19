@@ -13,31 +13,38 @@ var blockedLong = map[string]bool{
 	"--as-uid": true, "--certificate-authority": true, "--client-certificate": true,
 	"--client-key": true, "--insecure-skip-tls-verify": true, "--username": true,
 	"--password": true,
+	// --raw sends a request to any API path, ignoring -n.
+	"--raw": true,
 }
 
-// blockedShort are the shorthand forms (-n namespace, -s server).
-var blockedShort = map[byte]string{'n': "-n", 's': "-s"}
-
-// valueShort are shorthands that take a value; the rest of a combined
-// shorthand group ("-ojson", "-lapp=x") is that value, not more flags.
-var valueShort = map[byte]bool{'o': true, 'c': true, 'l': true, 'f': true, 'k': true}
+// leadingValueShort are shorthands that take a value. When one starts a
+// shorthand group, the rest of the group is its value ("-ojson",
+// "-lapp=x", "-cname"), not more flags.
+var leadingValueShort = map[byte]bool{'o': true, 'l': true, 'c': true}
 
 var secretSafeFormats = map[string]bool{"": true, "json": true, "yaml": true, "wide": true, "name": true}
 
 // ValidateUserArgs rejects caller-supplied kubectl args that would override
-// the cluster, identity or namespace ctx sets, and, when the args name
+// the cluster, identity or namespace ctx sets, and, when the args may name
 // Secrets, output formats that would print Secret data unredacted.
-// Arguments after "--" belong to the remote command and are not checked.
+//
+// Flags are only read before "--" (kubectl parses no flags after it). A
+// shorthand group that does not start with o, l or c is rejected if it
+// contains n or s anywhere: pflag reads "-fn x" as "-f -n x", and which
+// letters are bools depends on the subcommand, so this errs on refusing.
+// Secret references are looked for in every arg, before and after "--".
 func ValidateUserArgs(args []string) error {
+	flags := args
 	if i := indexOf(args, "--"); i >= 0 {
-		args = args[:i]
+		flags = args[:i]
 	}
 	var formats []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
+	fromFiles := false // -f/-k: the objects could be Secrets
+	for i := 0; i < len(flags); i++ {
+		a := flags[i]
 		next := func() string {
-			if i+1 < len(args) {
-				return args[i+1]
+			if i+1 < len(flags) {
+				return flags[i+1]
 			}
 			return ""
 		}
@@ -56,31 +63,29 @@ func ValidateUserArgs(args []string) error {
 			case "--template":
 				// kubectl implies -o go-template when --template is set.
 				formats = append(formats, "go-template")
+			case "--filename", "--kustomize":
+				fromFiles = true
 			}
 		case strings.HasPrefix(a, "-") && len(a) > 1:
-			// A shorthand group like "-it" or "-in ns" (= -i -n ns).
-			for j := 1; j < len(a); j++ {
-				c := a[j]
-				if c == '=' {
-					break
+			g := a[1:]
+			if leadingValueShort[g[0]] {
+				if g[0] == 'o' {
+					formats = append(formats, shortValue(g, next))
 				}
-				if f, ok := blockedShort[c]; ok {
-					return blockedFlag(f)
-				}
-				if valueShort[c] {
-					if c == 'o' {
-						val := strings.TrimPrefix(a[j+1:], "=")
-						if val == "" {
-							val = next()
-						}
-						formats = append(formats, val)
-					}
-					break
-				}
+				continue
+			}
+			if j := strings.IndexAny(g, "ns"); j >= 0 {
+				return blockedFlag("-" + string(g[j]))
+			}
+			if strings.ContainsAny(g, "fk") {
+				fromFiles = true
+			}
+			if j := strings.IndexByte(g, 'o'); j >= 0 {
+				formats = append(formats, shortValue(g[j:], next))
 			}
 		}
 	}
-	if !namesSecrets(args) {
+	if !fromFiles && !namesSecrets(args) {
 		return nil
 	}
 	for _, f := range formats {
@@ -90,6 +95,15 @@ func ValidateUserArgs(args []string) error {
 		}
 	}
 	return nil
+}
+
+// shortValue is the value of the shorthand starting g ("ojson", "o=json",
+// or "o" followed by the next arg).
+func shortValue(g string, next func() string) string {
+	if v := strings.TrimPrefix(g[1:], "="); v != "" {
+		return v
+	}
+	return next()
 }
 
 func blockedFlag(f string) error {

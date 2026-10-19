@@ -76,9 +76,15 @@ func (r *Runner) Args(t Target, args ...string) []string {
 	return append(out, args...)
 }
 
+// allNamespaces reports whether the kubectl flags (args before "--") turn on
+// all namespaces. Args after "--" belong to a remote command ("exec pod --
+// ls -A") and do not count.
 func allNamespaces(args []string) bool {
+	if i := indexOf(args, "--"); i >= 0 {
+		args = args[:i]
+	}
 	for _, a := range args {
-		if a == "-A" || a == "--all-namespaces" || strings.HasPrefix(a, "--all-namespaces=") {
+		if a == "-A" || a == "--all-namespaces" || a == "--all-namespaces=true" {
 			return true
 		}
 	}

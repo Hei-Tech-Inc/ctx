@@ -47,7 +47,20 @@ func TestArgsAlwaysScoped(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Args with context = %q, want %q", got, want)
 	}
-	for _, all := range []string{"-A", "--all-namespaces"} {
+	// C1: args after "--" are the remote command, and =false is not all.
+	for _, args := range [][]string{
+		{"exec", "mypod", "--", "ls", "-A"},
+		{"exec", "mypod", "--", "ls", "--all-namespaces"},
+		{"get", "pods", "--all-namespaces=false"},
+		{"get", "pods", "-A=false"},
+	} {
+		got = r.Args(Target{Kubeconfig: f, Namespace: "ns"}, args...)
+		want = append([]string{"--kubeconfig", f, "-n", "ns"}, args...)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Args %q = %q, want %q", args, got, want)
+		}
+	}
+	for _, all := range []string{"-A", "--all-namespaces", "--all-namespaces=true"} {
 		got = r.Args(Target{Kubeconfig: f, Namespace: "ns"}, "get", "pods", all)
 		want = []string{"--kubeconfig", f, "get", "pods", all}
 		if !reflect.DeepEqual(got, want) {

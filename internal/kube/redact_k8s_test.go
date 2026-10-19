@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -105,4 +106,82 @@ func TestRedactSecretObjectsConcatenatedJSON(t *testing.T) {
 	in := `{"kind":"Secret","data":{"k":"Zmlyc3Q="}}
 {"kind":"Secret","data":{"k":"c2Vjb25k"}}`
 	assertRedacted(t, string(RedactSecretObjects([]byte(in))), "Zmlyc3Q=", "c2Vjb25k")
+}
+
+// I1: kubectl apply stores the whole Secret, data included, in an annotation.
+const appliedJSON = `{"apiVersion":"v1","data":{"password":"aHVudGVyMjI="},"kind":"Secret","metadata":{"annotations":{},"name":"db","namespace":"subs"}}`
+
+func TestRedactSecretObjectsLastAppliedJSON(t *testing.T) {
+	in := `{"apiVersion":"v1","kind":"Secret","data":{"password":"aHVudGVyMjI="},
+"metadata":{"name":"db","annotations":{"kubectl.kubernetes.io/last-applied-configuration":` + strconvQuote(appliedJSON) + `,"team":"payments"}}}`
+	out := string(RedactSecretObjects([]byte(in)))
+	assertRedacted(t, out, "aHVudGVyMjI=")
+	if !strings.Contains(out, "payments") {
+		t.Errorf("other annotations lost:\n%s", out)
+	}
+}
+
+func TestRedactSecretObjectsLastAppliedYAML(t *testing.T) {
+	in := `apiVersion: v1
+data:
+  password: aHVudGVyMjI=
+kind: Secret
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      ` + appliedJSON + `
+    team: payments
+  name: db
+type: Opaque
+`
+	out := string(RedactSecretObjects([]byte(in)))
+	assertRedacted(t, out, "aHVudGVyMjI=")
+	if !strings.Contains(out, "team: payments") {
+		t.Errorf("other annotations lost:\n%s", out)
+	}
+}
+
+func TestRedactSecretObjectsLastAppliedListYAML(t *testing.T) {
+	in := `apiVersion: v1
+items:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: '` + appliedJSON + `'
+    name: db
+kind: List
+`
+	assertRedacted(t, string(RedactSecretObjects([]byte(in))), "aHVudGVyMjI=")
+}
+
+func TestRedactSecretObjectsLastAppliedDescribeText(t *testing.T) {
+	in := `Name:         db
+Namespace:    subs
+Labels:       <none>
+Annotations:  kubectl.kubernetes.io/last-applied-configuration:
+                ` + appliedJSON + `
+
+Type:  Opaque
+
+Data
+====
+password:  8 bytes
+`
+	out := string(RedactSecretObjects([]byte(in)))
+	assertRedacted(t, out, "aHVudGVyMjI=")
+	for _, keep := range []string{"Name:         db", "Type:  Opaque", "password:  8 bytes"} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("lost %q:\n%s", keep, out)
+		}
+	}
+
+	// A blob that never closes is redacted to the end.
+	out = string(RedactSecretObjects([]byte("Annotations: kubectl.kubernetes.io/last-applied-configuration: {\"data\":{\"p\":\"aHVudGVyMjI=\"\n")))
+	assertRedacted(t, out, "aHVudGVyMjI=")
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
