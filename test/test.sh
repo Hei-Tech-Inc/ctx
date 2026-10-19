@@ -807,6 +807,35 @@ test_doctor_reports_ctx_core() {
   pass "ctx doctor reports ctx-core version/path or a warning"
 }
 
+# Coverage guard: with CTX_CORE enabled, make sure the suite really exercises the Go
+# path. Without it a missing or unfound bin/ctx-core silently turns the default-mode
+# run into a second Bash-only run. CTX_CORE_OPTIONAL=1 skips it for local runs without Go.
+test_ctx_core_is_exercised() {
+  if [[ "${CTX_CORE:-}" == "off" ]]; then
+    pass "ctx-core coverage guard skipped (CTX_CORE=off)"
+    return 0
+  fi
+  if [[ ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    if [[ "${CTX_CORE_OPTIONAL:-}" == "1" ]]; then
+      pass "ctx-core coverage guard skipped (bin/ctx-core missing, CTX_CORE_OPTIONAL=1)"
+      return 0
+    fi
+    fail "bin/ctx-core is missing: build it (go build -o bin/ctx-core ./cmd/ctx-core) or set CTX_CORE_OPTIONAL=1 to run Bash-only locally"
+  fi
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    mkdir -p "$td/home" "$td/ctx"
+    out="$(env -u CTX_CORE_BIN HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    [[ "$out" == *"($ROOT_DIR/bin/ctx-core)"* ]] || { echo "bin/ctx does not find the repo's bin/ctx-core: $out"; exit 1; }
+    "$ROOT_DIR/bin/ctx-core" implements list --json >/dev/null || { echo "ctx-core implements list --json failed"; exit 1; }
+  ) || fail "ctx-core coverage guard"
+  pass "bin/ctx finds the repo's bin/ctx-core and it implements the forwarded commands"
+}
+
+test_ctx_core_is_exercised
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
