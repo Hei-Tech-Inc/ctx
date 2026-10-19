@@ -280,6 +280,31 @@ test_autoswitch_notify_default_off() {
   pass "autoswitch_notify default off"
 }
 
+test_base64_decode_gnu_style() {
+  (
+    set -euo pipefail
+    local td
+    td="$(mktemp -d)"
+    # GNU-style: -d prints the text, then exits 1 on stray padding; -D is unknown.
+    mkdir -p "$td/bin"
+    cat >"$td/bin/base64" <<'STUB'
+#!/bin/sh
+case "$1" in
+  -d|--decode) printf '/tmp/x'; exit 1 ;;
+  *) exit 1 ;;
+esac
+STUB
+    chmod +x "$td/bin/base64"
+    [[ "$(PATH="$td/bin:$PATH" ctx_base64_decode 'L3RtcC94==')" == /tmp/x ]] || { echo "decoded twice or not at all"; exit 1; }
+    export CTX_DIR="$td/ctx" CTX_CONFIG="$td/ctx/config"
+    mkdir -p "$CTX_DIR"
+    printf 'manual_pwd=L3RtcC94\r\n' >"$CTX_CONFIG"
+    [[ "$(PATH="$td/bin:$PATH" ctx_activation_get_manual_pwd)" == /tmp/x ]] || { echo "manual_pwd with CRLF"; exit 1; }
+    rm -rf "$td"
+  ) || fail "base64 decode (GNU style)"
+  pass "manual_pwd decodes once with GNU base64 and CRLF config"
+}
+
 test_config_upsert_literal_values() {
   (
     set -euo pipefail
@@ -1003,6 +1028,7 @@ test_cmd_workdir_prompt
 test_generate_mise_toml_matches_fixture
 test_autoswitch_notify_default_off
 test_config_upsert_literal_values
+test_base64_decode_gnu_style
 test_autoswitch_hook_resolution
 test_trailing_slash_work_dir
 test_setup_scope_clone_batch

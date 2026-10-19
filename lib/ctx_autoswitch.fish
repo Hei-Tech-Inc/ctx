@@ -184,10 +184,11 @@ function _ctx_profile_autoswitch --on-variable PWD
   set -l src (grep "^active_source=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string lower)
   set -l manual_anchor ""
   if test "$src" = manual
-    set -l raw (grep "^manual_pwd=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
+    set -l raw (grep "^manual_pwd=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string replace -a \r '')
     if test -n "$raw"
       set manual_anchor (printf '%s' "$raw" | base64 -d 2>/dev/null)
       test -z "$manual_anchor"; and set manual_anchor (printf '%s' "$raw" | base64 -D 2>/dev/null)
+      test -z "$manual_anchor"; and set manual_anchor (printf '%s' "$raw" | base64 --decode 2>/dev/null)
       test -z "$manual_anchor"; and set manual_anchor "$raw"
     end
   end

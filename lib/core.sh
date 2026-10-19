@@ -577,12 +577,25 @@ ctx_activation_get_source() {
   [[ "$v" == "manual" ]] && echo manual || echo auto
 }
 
+# First base64 flag spelling that produces output wins (GNU -d, BSD -D, --decode).
+# GNU base64 prints the decoded text and then exits 1 on stray padding, so an
+# `a || b` chain would print it twice; never concatenate attempts.
+ctx_base64_decode() {
+  local f out
+  for f in -d -D --decode; do
+    out="$(printf '%s' "$1" | base64 "$f" 2>/dev/null)"
+    [[ -n "$out" ]] && { printf '%s' "$out"; return 0; }
+  done
+  return 1
+}
+
 # Decoded manual anchor PWD (when active_source=manual), or empty.
 ctx_activation_get_manual_pwd() {
   local raw dec
   raw="$(grep "^manual_pwd=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  raw="${raw//$'\r'/}"
   [[ -z "$raw" ]] && return 1
-  dec="$(printf '%s' "$raw" | base64 -d 2>/dev/null || printf '%s' "$raw" | base64 -D 2>/dev/null || printf '%s' "$raw" | base64 --decode 2>/dev/null || true)"
+  dec="$(ctx_base64_decode "$raw")"
   [[ -n "$dec" ]] && printf '%s\n' "$dec" && return 0
   printf '%s\n' "$raw"
 }

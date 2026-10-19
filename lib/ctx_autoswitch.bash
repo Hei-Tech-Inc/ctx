@@ -271,9 +271,13 @@ _ctx_profile_autoswitch() {
   if [[ "$src_manual" == "1" && -n "$_cfg_manual_pwd" ]]; then
     # Decode once per change: the manual lock persists across many prompts.
     if [[ "$_cfg_manual_pwd" != "${_CTX_AS_MANUAL_RAW:-}" ]]; then
-      local raw="$_cfg_manual_pwd" dec
-      dec="$(printf '%s' "$raw" | base64 -d 2>/dev/null || printf '%s' "$raw" | base64 -D 2>/dev/null || printf '%s' "$raw" | base64 --decode 2>/dev/null || true)"
-      _CTX_AS_MANUAL_RAW="$raw"
+      local raw="${_cfg_manual_pwd//$'\r'/}" dec="" _f
+      # First flag spelling with output wins; GNU prints then exits 1 on stray padding.
+      for _f in -d -D --decode; do
+        dec="$(printf '%s' "$raw" | base64 "$_f" 2>/dev/null)"
+        [[ -n "$dec" ]] && break
+      done
+      _CTX_AS_MANUAL_RAW="$_cfg_manual_pwd"
       _CTX_AS_MANUAL_DEC="${dec:-$raw}"
     fi
     manual_anchor="$_CTX_AS_MANUAL_DEC"
