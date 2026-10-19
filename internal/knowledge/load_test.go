@@ -135,3 +135,21 @@ func TestUnknownEnvListsChoices(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestLoadKubeconfigLoginNeedsPathAndContext(t *testing.T) {
+	for _, tc := range []struct{ login, want string }{
+		{"{type: kubeconfig, path: /k/config}", "context"},
+		{"{type: kubeconfig, context: home}", "path"},
+		{"{type: kubeconfig, path: k/config, context: home}", "absolute"},
+	} {
+		le := loadErr(t, map[string]string{"clusters.yaml": "clusters:\n  homelab:\n    login: " + tc.login + "\n"})
+		if le.File != "clusters.yaml" || le.Line != 2 || !strings.Contains(le.Msg, `"homelab"`) || !strings.Contains(le.Msg, tc.want) {
+			t.Errorf("%s: le = %+v, want cluster homelab on line 2 mentioning %q", tc.login, le, tc.want)
+		}
+	}
+	for _, p := range []string{"/k/config", "~/.kube/config"} {
+		if _, err := Load(writeFiles(t, map[string]string{"clusters.yaml": "clusters:\n  homelab:\n    login: {type: kubeconfig, path: " + p + ", context: home}\n"})); err != nil {
+			t.Errorf("path %s: %v", p, err)
+		}
+	}
+}

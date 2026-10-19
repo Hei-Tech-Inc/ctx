@@ -109,6 +109,15 @@ func Load(root string) (*Store, error) {
 				return nil, fail("login type command needs a non-empty run list")
 			}
 		case "kubeconfig":
+			// Never fall back to the file's ambient current-context.
+			switch {
+			case c.Login.Path == "":
+				return nil, fail("login type kubeconfig needs a path")
+			case !filepath.IsAbs(c.Login.Path) && c.Login.Path != "~" && !strings.HasPrefix(c.Login.Path, "~/"):
+				return nil, fail(fmt.Sprintf("login path %q must be absolute or start with ~/", c.Login.Path))
+			case c.Login.Context == "":
+				return nil, fail("login type kubeconfig needs a context (ctx never uses the kubeconfig's current-context)")
+			}
 		default:
 			return nil, fail(fmt.Sprintf("unknown login type %q (use command or kubeconfig)", c.Login.Type))
 		}

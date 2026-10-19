@@ -182,4 +182,12 @@ func TestLoginKubeconfigType(t *testing.T) {
 	if _, err := Login(context.Background(), "acs", s, "aks", mapGetter{}, nil); err == nil || !strings.Contains(err.Error(), "missing.yaml") {
 		t.Errorf("missing path err = %v", err)
 	}
+
+	s.Clusters["aks"] = knowledge.Cluster{Login: knowledge.Login{Type: "kubeconfig", Path: path}}
+	if _, err := Login(context.Background(), "acs", s, "aks", mapGetter{}, nil); err == nil || !strings.Contains(err.Error(), "no context") {
+		t.Errorf("no-context err = %v", err)
+	}
+	if got := testutil.ReadArgv(t, klog); len(got) != 1 {
+		t.Errorf("kubectl ran without a context: %q", got)
+	}
 }

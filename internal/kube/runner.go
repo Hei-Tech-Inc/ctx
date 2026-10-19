@@ -18,8 +18,12 @@ import (
 )
 
 // Target is where a kubectl call goes. Every call carries all three.
+// NeedsContext is set for a kubeconfig-type login: such a target must name
+// its Context, or the Runner refuses it rather than fall back to the file's
+// current-context.
 type Target struct {
 	Kubeconfig, Context, Namespace string
+	NeedsContext                   bool
 }
 
 // KubeDir returns $CTX_DIR/kube/<profile>, with CTX_DIR defaulting to ~/.ctx.
@@ -37,7 +41,7 @@ func KubeDir(profileName string) string {
 func TargetFor(profileName string, s *knowledge.Store, env knowledge.Env) Target {
 	login := s.Clusters[env.Cluster].Login
 	if login.Type == "kubeconfig" {
-		return Target{Kubeconfig: expandHome(login.Path), Context: login.Context, Namespace: env.Namespace}
+		return Target{Kubeconfig: expandHome(login.Path), Context: login.Context, Namespace: env.Namespace, NeedsContext: true}
 	}
 	return Target{Kubeconfig: filepath.Join(KubeDir(profileName), env.Cluster+".yaml"), Namespace: env.Namespace}
 }
@@ -168,6 +172,9 @@ func childEnv(kc string, extra ...string) []string {
 func (r *Runner) command(ctx context.Context, t Target, args []string) (*exec.Cmd, []string, error) {
 	if err := ValidateUserArgs(args); err != nil {
 		return nil, nil, err
+	}
+	if t.NeedsContext && t.Context == "" {
+		return nil, nil, fmt.Errorf("refusing to run kubectl: kubeconfig login for %s has no context set (ctx never uses the current-context)", t.Kubeconfig)
 	}
 	argv := r.Argv(t, args...)
 	redArgv := make([]string, len(argv))

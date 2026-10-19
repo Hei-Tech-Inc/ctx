@@ -41,6 +41,9 @@ func Login(ctx context.Context, profileName string, s *knowledge.Store, cluster 
 	case "command":
 		return loginCommand(ctx, profileName, cluster, c.Login, g, red)
 	case "kubeconfig":
+		if c.Login.Context == "" {
+			return "", fmt.Errorf("login %s: kubeconfig login has no context set (ctx never uses the current-context)", cluster)
+		}
 		path := expandHome(c.Login.Path)
 		if _, err := os.Stat(path); err != nil {
 			return "", fmt.Errorf("login %s: kubeconfig %s not found", cluster, red.String(path))

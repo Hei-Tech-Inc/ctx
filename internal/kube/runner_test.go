@@ -31,7 +31,7 @@ func TestTargetFor(t *testing.T) {
 		t.Errorf("command target = %+v, want %+v", got, want)
 	}
 	got = TargetFor("acs", s, knowledge.Env{Name: "dev", Cluster: "aks", Namespace: "app"})
-	want = Target{Kubeconfig: "/k/config", Context: "acs-aks", Namespace: "app"}
+	want = Target{Kubeconfig: "/k/config", Context: "acs-aks", Namespace: "app", NeedsContext: true}
 	if got != want {
 		t.Errorf("kubeconfig target = %+v, want %+v", got, want)
 	}
@@ -278,4 +278,25 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func TestRunnerRefusesKubeconfigLoginWithoutContext(t *testing.T) {
+	dir := t.TempDir()
+	kc := filepath.Join(dir, "config")
+	if err := os.WriteFile(kc, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &knowledge.Store{Clusters: map[string]knowledge.Cluster{
+		"homelab": {Login: knowledge.Login{Type: "kubeconfig", Path: kc}},
+	}}
+	tgt := TargetFor("p", s, knowledge.Env{Name: "dev", Cluster: "homelab", Namespace: "app"})
+	ran := false
+	r := &Runner{Kubectl: "/bin/echo", Observe: func([]string) { ran = true }}
+	_, err := r.Run(context.Background(), tgt, "get", "pods")
+	if err == nil || !strings.Contains(err.Error(), "context") || ran {
+		t.Fatalf("err = %v, ran = %v; want refusal naming the missing context", err, ran)
+	}
+	if _, err := r.Start(tgt, io.Discard, "port-forward", "svc/x", "1:1"); err == nil {
+		t.Fatal("Start ran with no context")
+	}
 }

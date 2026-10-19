@@ -231,7 +231,8 @@ This creates `~/.ctx/knowledge/acme/` (mode `0700`, files `0600`) with three com
 ```yaml
 # clusters.yaml: how to log in to each cluster. Two login types exist:
 #   command    steps you write; run in order with KUBECONFIG set to a ctx-owned file
-#   kubeconfig use an existing kubeconfig file and context
+#   kubeconfig use an existing kubeconfig file and context; `path` (absolute or ~/)
+#              and `context` are both required, ctx never uses current-context
 clusters:
   nonprod:
     login:
