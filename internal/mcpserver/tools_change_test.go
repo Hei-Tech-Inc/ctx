@@ -410,3 +410,52 @@ func TestChangeToolsHiddenWithoutClient(t *testing.T) {
 		t.Errorf("kubectl ran: %q", calls)
 	}
 }
+
+func TestChangeToolsRefuseAllNamespaces(t *testing.T) {
+	f := newFixture(t, `*) echo ran ;;`+"\n")
+	f.acme()
+	e := &elicitor{answers: []string{"accept"}}
+	cs := connectAsking(t, f, e)
+	want := "all-namespaces is not allowed for changes: they run in the environment's namespace (madapi-preprod)"
+	for _, flag := range []string{"-A", "--all-namespaces", "--all-namespaces=true", "--all-namespaces=1", "-iA"} {
+		text, isErr := call(t, cs, "kubectl_change", map[string]any{"env": "pp", "args": []string{"delete", "pods", "--all", flag}})
+		if !isErr || text != want {
+			t.Errorf("kubectl_change %s = %v %q", flag, isErr, text)
+		}
+		text, isErr = call(t, cs, "port_forward", map[string]any{"action": "start", "env": "pp", "target": "svc/subs", "ports": []string{"8080:80", flag}})
+		if !isErr || text != want {
+			t.Errorf("port_forward %s = %v %q", flag, isErr, text)
+		}
+	}
+	// after "--" it belongs to the remote command
+	if text, isErr := call(t, cs, "kubectl_change", map[string]any{"env": "pp", "args": []string{"exec", "subs-1", "--", "ls", "-A"}}); isErr {
+		t.Errorf("exec -- ls -A = %q", text)
+	}
+	if n := len(e.sent()); n != 1 {
+		t.Errorf("elicitations = %d, want 1 (only the exec)", n)
+	}
+	if calls := testutil.ReadArgv(t, f.kubectlLog); len(calls) != 1 || !strings.Contains(strings.Join(calls[0], " "), "-n madapi-preprod exec subs-1 -- ls -A") {
+		t.Errorf("kubectl calls = %q", calls)
+	}
+}
+
+func TestNetworkTestActivityNamespace(t *testing.T) {
+	f := newFixture(t, `*"get pods -l app=network-tool"*) printf 'nt-1' ;;`+"\n"+`*"exec -i nt-1"*) cat >/dev/null; echo ok ;;`+"\n")
+	f.acme()
+	f.knowledge("acme", map[string]string{"scripts/s.sh": "echo hi\n"})
+	cs := connectAsking(t, f, &elicitor{answers: []string{"accept"}})
+	if text, isErr := call(t, cs, "network_test", map[string]any{"env": "pp", "script": "s.sh"}); isErr {
+		t.Fatalf("network_test = %q", text)
+	}
+	data, err := os.ReadFile(filepath.Join(f.ctxDir, "knowledge", "acme", "activity.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e struct{ Env, Namespace string }
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Env != "preprod" || e.Namespace != "network-utility" {
+		t.Errorf("activity env/namespace = %+v", e)
+	}
+}

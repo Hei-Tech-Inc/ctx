@@ -170,6 +170,9 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 			if err != nil {
 				return "", nil, err
 			}
+			if err := refuseAllNamespaces(args, env); err != nil {
+				return "", nil, err
+			}
 			rec := &argvRecorder{}
 			r, t := sc.runner(rec), kube.TargetFor(sc.Profile.Name, sc.Store, env)
 			p := sc.plan("port_forward", env)
@@ -197,6 +200,9 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 			}
 			env, err := sc.Store.EnvForChange(in.Env)
 			if err != nil {
+				return "", nil, err
+			}
+			if err := refuseAllNamespaces(in.Args, env); err != nil {
 				return "", nil, err
 			}
 			rec := &argvRecorder{}
@@ -286,6 +292,15 @@ func (s *server) addChangeTools(srv *mcp.Server) {
 			s.reloadScope(req.Session)
 			return "saved script " + in.Name + " to " + path, nil, nil
 		})
+}
+
+// refuseAllNamespaces rejects change args that would act outside the
+// environment's namespace (the confirmation names that namespace).
+func refuseAllNamespaces(args []string, env knowledge.Env) error {
+	if kube.WantsAllNamespaces(args) {
+		return fmt.Errorf("all-namespaces is not allowed for changes: they run in the environment's namespace (%s)", env.Namespace)
+	}
+	return nil
 }
 
 // networkToolFor is the environment's network tool: its own settings,

@@ -39,6 +39,9 @@ func (s *Scope) call(tool string, args any, fn func() (string, [][]string, error
 			}
 		}
 	}
+	if ns := argvNamespace(entry.Argv); ns != "" {
+		entry.Namespace = ns // where commands actually ran (network_test uses the tool's namespace)
+	}
 	var nr *notRunError
 	if errors.As(err, &nr) {
 		entry.Result, entry.Exit = nr.result, -1
@@ -107,6 +110,18 @@ func (s *Scope) redactValue(v any) any {
 		return out
 	}
 	return v
+}
+
+// argvNamespace is the -n value of the first recorded command, or "".
+func argvNamespace(argv [][]string) string {
+	for _, a := range argv {
+		for i := 0; i+1 < len(a); i++ {
+			if a[i] == "-n" {
+				return a[i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func (s *Scope) redactArgv(argv [][]string) [][]string {

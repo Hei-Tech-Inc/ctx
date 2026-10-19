@@ -134,3 +134,24 @@ func indexOf(args []string, s string) int {
 	}
 	return -1
 }
+
+// WantsAllNamespaces reports whether kubectl flags (args before "--") could
+// turn on all namespaces in any form: -A, --all-namespaces with any value,
+// or a shorthand group containing A ("-iA"). It is stricter than the check
+// Args uses to drop -n, so change tools can refuse anything cluster-wide.
+func WantsAllNamespaces(args []string) bool {
+	if i := indexOf(args, "--"); i >= 0 {
+		args = args[:i]
+	}
+	for _, a := range args {
+		switch {
+		case a == "--all-namespaces" || strings.HasPrefix(a, "--all-namespaces="):
+			return true
+		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 1:
+			if !leadingValueShort[a[1]] && strings.ContainsRune(a[1:], 'A') {
+				return true
+			}
+		}
+	}
+	return false
+}

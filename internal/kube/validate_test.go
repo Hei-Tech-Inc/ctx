@@ -119,3 +119,21 @@ func TestRunRejectsUserArgsWithoutExecuting(t *testing.T) {
 		t.Errorf("kubectl ran: %q", got)
 	}
 }
+
+func TestWantsAllNamespaces(t *testing.T) {
+	for _, args := range [][]string{
+		{"delete", "pods", "-A"}, {"get", "--all-namespaces"}, {"x", "--all-namespaces=true"},
+		{"x", "--all-namespaces=1"}, {"x", "-iA"}, {"x", "-Ai"},
+	} {
+		if !WantsAllNamespaces(args) {
+			t.Errorf("WantsAllNamespaces(%q) = false", args)
+		}
+	}
+	for _, args := range [][]string{
+		{"exec", "p", "--", "ls", "-A"}, {"get", "pods"}, {"get", "-lapp=A"}, {"x", "-oAbc"}, {"x", "-cAPP"},
+	} {
+		if WantsAllNamespaces(args) {
+			t.Errorf("WantsAllNamespaces(%q) = true", args)
+		}
+	}
+}
