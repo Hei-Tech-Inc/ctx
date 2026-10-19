@@ -20,7 +20,7 @@ source "$CTX_LIB/cmd_ops.sh"
 
 # ─── Flag parsing ─────────────────────────────────────────────────────────────
 CTX_DRY_RUN=0
-CTX_QUIET=0
+CTX_QUIET="${CTX_QUIET:-0}" # inherited (e.g. the autoswitch hook); --quiet/-q sets 1
 CTX_JSON=0
 POSITIONAL=()
 _ctx_passthrough=0

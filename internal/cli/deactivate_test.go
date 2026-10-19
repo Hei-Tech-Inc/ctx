@@ -75,7 +75,7 @@ func TestDeactivateMatchesBash(t *testing.T) {
 				return deactivateRun{out, errb, string(cfg), code, testutil.ReadArgv(t, argvLog)}
 			}
 			env := append(os.Environ(), "CTX_CORE=off", "HOME="+f.home, "CTX_DIR="+f.dir, "PWD="+cwd)
-			bashArgs := []string{"deactivate"} // bin/ctx ignores a CTX_QUIET env var; only --quiet counts
+			bashArgs := []string{"deactivate"} // CTX_QUIET is "" here; --quiet sets it
 			if c.quiet {
 				bashArgs = []string{"--quiet", "deactivate"}
 			}

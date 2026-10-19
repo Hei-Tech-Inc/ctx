@@ -1035,6 +1035,23 @@ test_quiet_use_cloud_tools_succeed() {
   pass "quiet ctx use treats az/gcloud/kubectl success as success"
 }
 
+test_inherited_quiet_use() {
+  (
+    set -euo pipefail
+    local td out mode
+    _use_eval_fixture
+    cd "$td"
+    # The autoswitch hook runs `CTX_QUIET=1 CTX_AUTO_SWITCH=1 command ctx use --eval bash <p>`.
+    for mode in off on; do
+      out="$(CTX_CORE="$mode" CTX_QUIET=1 ctx use demo --eval bash 2>"$td/err")" || { echo "use failed ($mode): $(cat "$td/err")"; exit 1; }
+      [[ -z "$(cat "$td/err")" ]] || { echo "inherited CTX_QUIET=1 not quiet ($mode): $(cat "$td/err")"; exit 1; }
+      grep -qx 'export AWS_PROFILE=demo-prod' <<<"$out" || { echo "exports ($mode): $out"; exit 1; }
+    done
+    rm -rf "$td"
+  ) || fail "inherited CTX_QUIET"
+  pass "ctx use honors an inherited CTX_QUIET=1 (the autoswitch hook)"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1069,5 +1086,6 @@ test_shell_wrapper_applies_use
 test_autoswitch_exports_profile_env
 test_autoswitch_keeps_manual_lock
 test_quiet_use_cloud_tools_succeed
+test_inherited_quiet_use
 
 echo "All tests passed."
