@@ -23,9 +23,72 @@ _ctx_agent_drop_added_key() {
   _ctx_config_rm_key ssh_agent_added
 }
 
+# One shell-code line that sets NAME=VALUE in the caller's shell (bash/zsh or fish).
+_ctx_emit_export() {
+  local shell_kind="$1" k="$2" v="$3"
+  if [[ "$shell_kind" == fish ]]; then
+    printf "set -gx %s '%s'\n" "$k" "$(printf '%s' "$v" | sed "s/[\\\\']/\\\\&/g")"
+  else
+    printf 'export %s=%q\n' "$k" "$v"
+  fi
+}
+
+# Variables ctx use wants in the caller's shell. ctx is a child process, so these only reach
+# the shell through `ctx use --eval` (the ctx shell function and autoswitch hook eval it).
+# Keep in sync with _ctx_deactivate_emit_unsets.
+_ctx_use_export() {
+  export "$1=$2"
+  _ctx_use_k+=("$1")
+  _ctx_use_v+=("$2")
+}
+
+# ctx use <profile> [--eval bash|fish]
+# With --eval: messages go to stderr, stdout is only shell code for the caller to eval.
 cmd_use() {
-  local name="${1:-}" quiet="${CTX_QUIET:-0}"
-  [[ -z "$name" ]] && die "Usage: ctx use <profile>"
+  local name="" eval_shell="" i rc
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --eval)
+        eval_shell="bash"
+        if [[ -n "${2:-}" && ( "$2" == bash || "$2" == zsh || "$2" == fish ) ]]; then
+          eval_shell="$2"
+          shift
+        fi
+        ;;
+      --eval=*) eval_shell="${1#--eval=}" ;;
+      -*) die "Usage: ctx use <profile> [--eval bash|fish]" ;;
+      *) [[ -z "$name" ]] || die "Usage: ctx use <profile> [--eval bash|fish]"; name="$1" ;;
+    esac
+    shift
+  done
+  [[ -z "$name" ]] && die "Usage: ctx use <profile> [--eval bash|fish]"
+
+  _ctx_use_k=() _ctx_use_v=()
+  if [[ -n "$eval_shell" ]]; then
+    [[ "$eval_shell" == fish ]] || eval_shell=bash
+    _ctx_use_apply "$name" >&2
+    rc=$?
+    for ((i = 0; i < ${#_ctx_use_k[@]}; i++)); do
+      _ctx_emit_export "$eval_shell" "${_ctx_use_k[i]}" "${_ctx_use_v[i]}"
+    done
+    return "$rc"
+  fi
+
+  _ctx_use_apply "$name"
+  rc=$?
+  # CTX_ACTIVE_PROFILE is always recorded; warn only when the profile sets something real.
+  if [[ "${CTX_QUIET:-0}" == "0" && ${#_ctx_use_k[@]} -gt 1 ]]; then
+    local names=""
+    for ((i = 0; i < ${#_ctx_use_k[@]}; i++)); do
+      [[ "${_ctx_use_k[i]}" == CTX_ACTIVE_PROFILE ]] || names+="${names:+, }${_ctx_use_k[i]}"
+    done
+    warn "These variables were not applied to this shell: ${names}. Run ctx install-hook and open a new shell, or run: eval \"\$(ctx use ${name} --eval bash)\"  (fish: ctx use ${name} --eval fish | source)" >&2
+  fi
+  return "$rc"
+}
+
+_ctx_use_apply() {
+  local name="$1" quiet="${CTX_QUIET:-0}"
   load_profile "$name"
 
   [[ "$quiet" == "0" ]] && info "Switching to: ${BOLD}${name}${RESET}"
@@ -60,7 +123,7 @@ cmd_use() {
 
   # 3. AWS
   if [[ -n "${AWS_PROFILE_NAME:-}" ]]; then
-    export AWS_PROFILE="$AWS_PROFILE_NAME"
+    _ctx_use_export AWS_PROFILE "$AWS_PROFILE_NAME"
     [[ "$quiet" == "0" ]] && success "AWS_PROFILE → $AWS_PROFILE_NAME"
   fi
 
@@ -71,8 +134,8 @@ cmd_use() {
         && { [[ "$quiet" == "0" ]] && success "Azure → $AZURE_SUBSCRIPTION"; } \
         || { warn "Azure subscription switch failed"; errors=$((errors+1)); }
     else
-      export AZURE_SUBSCRIPTION="$AZURE_SUBSCRIPTION"
-      [[ -n "${AZURE_TENANT:-}" ]] && export AZURE_TENANT="$AZURE_TENANT"
+      _ctx_use_export AZURE_SUBSCRIPTION "$AZURE_SUBSCRIPTION"
+      [[ -n "${AZURE_TENANT:-}" ]] && _ctx_use_export AZURE_TENANT "$AZURE_TENANT"
     fi
   fi
 
@@ -85,7 +148,7 @@ cmd_use() {
       [[ -n "${GCP_ACCOUNT:-}" ]] && \
         gcloud config set account "$GCP_ACCOUNT" --quiet 2>/dev/null || true
     else
-      export GCLOUD_PROJECT="${GCP_PROJECT:-}"
+      _ctx_use_export GCLOUD_PROJECT "$GCP_PROJECT"
     fi
   fi
 
@@ -110,7 +173,7 @@ cmd_use() {
       local val
       val=$(keychain_get "$PROFILE_NAME" "$key")
       if [[ -n "$val" ]]; then
-        declare -x "$key=$val"
+        _ctx_use_export "$key" "$val"
         [[ "$quiet" == "0" ]] && success "Secret → $key ($_sec_label)"
       else
         warn "Secret '$key' missing ($_sec_label) — run: ctx secret set $PROFILE_NAME $key"
@@ -127,10 +190,16 @@ cmd_use() {
     fi
   fi
 
+  local prev_active
+  prev_active="$(active_profile)"
   set_active_profile "$name"
+  _ctx_use_export CTX_ACTIVE_PROFILE "$name"
 
   if [[ "${CTX_AUTO_SWITCH:-0}" == "1" ]]; then
-    ctx_activation_set_auto
+    # The hook re-applying a profile already locked by hand (e.g. in a new terminal) keeps the lock.
+    if [[ "$prev_active" != "$name" || "$(ctx_activation_get_source)" != manual ]]; then
+      ctx_activation_set_auto
+    fi
   else
     ctx_activation_set_manual "${PWD:-$HOME}"
   fi
@@ -1583,11 +1652,7 @@ cmd_env() {
   done
   _ctx_profile_env_collect "$_ctx_cmd_profile" "$with_secrets"
   for ((i = 0; i < ${#_ctx_env_k[@]}; i++)); do
-    if [[ "$shell_kind" == fish ]]; then
-      printf "set -gx %s '%s'\n" "${_ctx_env_k[i]}" "$(printf '%s' "${_ctx_env_v[i]}" | sed "s/[\\\\']/\\\\&/g")"
-    else
-      printf 'export %s=%q\n' "${_ctx_env_k[i]}" "${_ctx_env_v[i]}"
-    fi
+    _ctx_emit_export "$shell_kind" "${_ctx_env_k[i]}" "${_ctx_env_v[i]}"
   done
 }
 
