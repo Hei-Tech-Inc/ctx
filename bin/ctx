@@ -399,17 +399,20 @@ _ctx_core_exec() {
   exec "$bin" "$@"
 }
 
-# Run a read-only command in ctx-core when it is installed and CTX_CORE is not "off".
-# ctx-core exiting 126/127 (not executable / not implemented) means "use Bash":
-# return 1 silently. Any other exit code is ctx-core's answer and ends ctx here.
+# Run a command in ctx-core when it is installed, CTX_CORE is not "off", and the
+# binary says it implements the command (`ctx-core implements <cmd> [sub]`).
+# Once handed over there is no fallback: ctx-core's exit code is final.
+# Returns 1 (caller runs Bash) otherwise.
 _ctx_core_forward() {
   [[ "${CTX_CORE:-}" == "off" ]] && return 1
-  local bin rc
+  local bin
   bin="$(_ctx_core_bin)" || return 1
-  CTX_VERSION="$CTX_VERSION" CTX_DIR="$CTX_DIR" CTX_BIN_PATH="$CTX_BIN/ctx" "$bin" "$@"
-  rc=$?
-  if [[ $rc -eq 126 || $rc -eq 127 ]]; then return 1; fi
-  exit "$rc"
+  [[ -x "$bin" ]] || return 1
+  export CTX_VERSION CTX_DIR
+  CTX_BIN_PATH="$CTX_BIN/ctx"
+  export CTX_BIN_PATH
+  "$bin" implements "$1" "${2:-}" >/dev/null 2>&1 || return 1
+  exec "$bin" "$@"
 }
 
 # ─── Dispatch ─────────────────────────────────────────────────────────────────

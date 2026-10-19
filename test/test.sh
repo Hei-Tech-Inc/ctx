@@ -638,20 +638,34 @@ test_core_forward_fallback() {
     : >"$CTX_DIR/config"
     want="$(CTX_CORE=off "$ROOT_DIR/bin/ctx" --json list)"
     [[ "$want" == *'"command"'*'list'* ]] || { echo "bash json: $want"; exit 1; }
-    # 127 from ctx-core: silent fallback to Bash
-    printf '#!/usr/bin/env bash\necho CALLED >>"%s/calls"\nexit 127\n' "$td" >"$td/fake127"
-    chmod +x "$td/fake127"
-    out="$(CTX_CORE_BIN="$td/fake127" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
+    # implements exits 1: Bash runs, silently
+    cat >"$td/fakeno" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"$td/calls"
+exit 1
+EOS
+    chmod +x "$td/fakeno"
+    out="$(CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
     [[ "$out" == "$want" ]] || { echo "fallback: $out"; exit 1; }
     [[ ! -s "$td/err" ]] || { echo "fallback stderr: $(cat "$td/err")"; exit 1; }
-    grep -q CALLED "$td/calls" || { echo "fake127 not called"; exit 1; }
+    [[ "$(cat "$td/calls")" == "implements list --json" ]] || { echo "calls: $(cat "$td/calls")"; exit 1; }
     # CTX_CORE=off: Bash JSON and the fake is never called
     rm -f "$td/calls"
-    out="$(CTX_CORE=off CTX_CORE_BIN="$td/fake127" "$ROOT_DIR/bin/ctx" --json list)"
+    out="$(CTX_CORE=off CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --json list)"
     [[ "$out" == "$want" ]] || { echo "off: $out"; exit 1; }
     [[ ! -e "$td/calls" ]] || { echo "CTX_CORE=off still called ctx-core"; exit 1; }
-    # A working ctx-core: its output and env are used
-    printf '#!/usr/bin/env bash\necho "GO $*"\necho "env $CTX_VERSION|$CTX_DIR|$CTX_BIN_PATH" >&2\n' >"$td/fakego"
+    # Non-executable CTX_CORE_BIN: Bash
+    printf '#!/usr/bin/env bash\necho GO\n' >"$td/noexec"
+    chmod -x "$td/noexec"
+    out="$(CTX_CORE_BIN="$td/noexec" "$ROOT_DIR/bin/ctx" --json list 2>/dev/null)"
+    [[ "$out" == "$want" ]] || { echo "noexec: $out"; exit 1; }
+    # implements exits 0: ctx-core runs with the exported env
+    cat >"$td/fakego" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == implements ]] && exit 0
+echo "GO $*"
+echo "env $CTX_VERSION|$CTX_DIR|$CTX_BIN_PATH" >&2
+EOS
     chmod +x "$td/fakego"
     out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
     [[ "$out" == "GO list --json" ]] || { echo "go list: $out"; exit 1; }
@@ -660,11 +674,23 @@ test_core_forward_fallback() {
     [[ "$out" == "GO guard check pre-commit" ]] || { echo "go guard: $out"; exit 1; }
     out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" env -p alpha 2>/dev/null)"
     [[ "$out" == "GO env -p alpha" ]] || { echo "go env: $out"; exit 1; }
+    # implements 0 but the command exits 127: that is the answer, Bash must not run
+    cat >"$td/fake127" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == implements ]] && exit 0
+exit 127
+EOS
+    chmod +x "$td/fake127"
+    set +e
+    out="$(CTX_CORE_BIN="$td/fake127" "$ROOT_DIR/bin/ctx" --json list 2>/dev/null)"
+    rc=$?
+    set -e
+    [[ $rc -eq 127 && -z "$out" ]] || { echo "rc127: rc=$rc out=$out"; exit 1; }
     # Text list is not forwarded
     out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" list 2>/dev/null)"
     [[ "$out" != GO* ]] || { echo "text list forwarded: $out"; exit 1; }
-    # An exit code other than 126/127 is ctx-core's answer
-    printf '#!/usr/bin/env bash\necho nope\nexit 3\n' >"$td/fake3"
+    # Any exit code is ctx-core's answer
+    printf '#!/usr/bin/env bash\n[[ "$1" == implements ]] && exit 0\necho nope\nexit 3\n' >"$td/fake3"
     chmod +x "$td/fake3"
     set +e
     out="$(CTX_CORE_BIN="$td/fake3" "$ROOT_DIR/bin/ctx" --json list)"
@@ -672,7 +698,7 @@ test_core_forward_fallback() {
     set -e
     [[ $rc -eq 3 && "$out" == nope ]] || { echo "rc3: rc=$rc out=$out"; exit 1; }
   ) || fail "ctx-core forward fallback"
-  pass "read-only commands forward to ctx-core and fall back to Bash on 126/127 or CTX_CORE=off"
+  pass "read-only commands forward to ctx-core and run only when ctx-core implements them; otherwise Bash (also CTX_CORE=off)"
 }
 
 test_ctx_core_dispatch() {

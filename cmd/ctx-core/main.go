@@ -25,6 +25,31 @@ var version = "dev"
 
 const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|guard> [args]\n"
 
+// implemented is the single table of commands ctx-core runs instead of Bash.
+// Each entry reports whether it handles the given first argument (the
+// subcommand or flag; "" when absent). Later tasks flip entries to true.
+// list and status count only with --json; guard only with check.
+var implemented = map[string]func(sub string) bool{
+	"list":           func(sub string) bool { return false && sub == "--json" },
+	"status":         func(sub string) bool { return false && sub == "--json" },
+	"workdir-prompt": func(string) bool { return false },
+	"env":            func(string) bool { return false },
+	"run":            func(string) bool { return false },
+	"guard":          func(sub string) bool { return false && sub == "check" },
+}
+
+func implements(cmd string, rest []string) bool {
+	f, ok := implemented[cmd]
+	if !ok {
+		return false
+	}
+	sub := ""
+	if len(rest) > 0 {
+		sub = rest[0]
+	}
+	return f(sub)
+}
+
 // ctxVersion is the ctx version bin/ctx passes in CTX_VERSION, else the build version.
 func ctxVersion() string {
 	if v := os.Getenv("CTX_VERSION"); v != "" {
@@ -47,11 +72,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "ctx-core %s\n", version)
 		return 0
 	case "list", "status", "workdir-prompt", "env", "run", "guard":
-		// Not ported yet: 127 tells bin/ctx to run its Bash implementation.
-		if os.Getenv("CTX_CORE_DEBUG") != "" {
-			fmt.Fprintln(stderr, "not implemented")
+		// Not ported yet. bin/ctx asks `implements` first, so this is unreachable via forwarding.
+		fmt.Fprintln(stderr, "not implemented")
+		return 2
+	case "implements":
+		if len(args) >= 2 && implements(args[1], args[2:]) {
+			return 0
 		}
-		return 127
+		return 1
 	case "knowledge":
 		return runKnowledge(args[1:], stdout, stderr)
 	case "mcp":

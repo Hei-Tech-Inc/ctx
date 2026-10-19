@@ -16,11 +16,14 @@ func TestCtxVersion(t *testing.T) {
 	}
 }
 
-func TestForwardedStubsExit127(t *testing.T) {
+func TestStubsAndImplements(t *testing.T) {
 	for _, c := range []string{"list", "status", "workdir-prompt", "env", "run", "guard"} {
 		var out, errb strings.Builder
-		if rc := run([]string{c}, &out, &errb); rc != 127 {
-			t.Errorf("%s: rc=%d, want 127", c, rc)
+		if rc := run([]string{c}, &out, &errb); rc != 2 {
+			t.Errorf("%s: rc=%d, want 2", c, rc)
+		}
+		if rc := run([]string{"implements", c}, &out, &errb); rc != 1 {
+			t.Errorf("implements %s: rc=%d, want 1", c, rc)
 		}
 	}
 }
