@@ -65,7 +65,7 @@ func Load(dir, name string) (*Profile, error) {
 	if needsBash(vals) {
 		if bv, ok := bashValues(path); ok {
 			vals = bv
-			vals["WORK_DIR"] = expandHome(vals["WORK_DIR"], os.Getenv("HOME"))
+			vals["WORK_DIR"] = expandHome(vals["WORK_DIR"], os.Getenv("HOME"), true, true)
 		}
 	}
 	p := &Profile{
@@ -188,9 +188,10 @@ func parse(src string) map[string]string {
 		} else {
 			v = strings.TrimRight(rest, " \t")
 		}
-		if quote != '\'' {
-			v = expandHome(v, home)
-		}
+		// $HOME expands unless single-quoted. A leading ~ expands in WORK_DIR always
+		// (Bash's WORK_DIR readers do) and in other fields only when unquoted, as
+		// `source` does (ruling R6).
+		v = expandHome(v, home, quote != '\'', quote == 0 || k == "WORK_DIR")
 		if known[k] {
 			vals[k] = v
 		}
@@ -198,13 +199,13 @@ func parse(src string) map[string]string {
 	return vals
 }
 
-func expandHome(v, home string) string {
+func expandHome(v, home string, vars, tilde bool) string {
 	for _, p := range []string{"${HOME}", "$HOME"} {
-		if v == p || strings.HasPrefix(v, p+"/") {
+		if vars && (v == p || strings.HasPrefix(v, p+"/")) {
 			return home + v[len(p):]
 		}
 	}
-	if v == "~" || strings.HasPrefix(v, "~/") {
+	if tilde && (v == "~" || strings.HasPrefix(v, "~/")) {
 		return home + v[1:]
 	}
 	return v

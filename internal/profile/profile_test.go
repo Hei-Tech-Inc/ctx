@@ -125,3 +125,47 @@ func TestLoadFallbackTilde(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadTildeMatchesBashSource compares Load with `source` in bash (ruling R6):
+// outside WORK_DIR a leading ~ expands only when the value is unquoted.
+func TestLoadTildeMatchesBashSource(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	t.Setenv("HOME", "/h/me")
+	d := t.TempDir()
+	cases := map[string]string{
+		"unquoted": "SSH_KEY_PATH=~/.ssh/k\n",
+		"dquoted":  "SSH_KEY_PATH=\"~/.ssh/k\"\n",
+		"squoted":  "SSH_KEY_PATH='~/.ssh/k'\n",
+		"dhome":    "SSH_KEY_PATH=\"$HOME/.ssh/k\"\n",
+		"shome":    "SSH_KEY_PATH='$HOME/.ssh/k'\n",
+	}
+	for name, content := range cases {
+		path := filepath.Join(d, name+".conf")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(bash, "-c", `source "$1"; printf %s "$SSH_KEY_PATH"`, "_", path).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := Load(d, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.SSHKeyPath != string(out) {
+			t.Errorf("%s: Go %q != bash %q", name, p.SSHKeyPath, out)
+		}
+	}
+	// WORK_DIR expands a leading ~ whatever the quoting.
+	for name, content := range map[string]string{"w1": "WORK_DIR=\"~/c\"\n", "w2": "WORK_DIR='~/c'\n", "w3": "WORK_DIR=~/c\n"} {
+		if err := os.WriteFile(filepath.Join(d, name+".conf"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if p, err := Load(d, name); err != nil || p.WorkDir != "/h/me/c" {
+			t.Errorf("%s: %q %v", name, p.WorkDir, err)
+		}
+	}
+}
