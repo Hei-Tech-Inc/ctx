@@ -16,8 +16,23 @@ func TestCtxVersion(t *testing.T) {
 	}
 }
 
+func TestListStatusImplements(t *testing.T) {
+	for _, c := range []string{"list", "status"} {
+		var out, errb strings.Builder
+		if rc := run([]string{"implements", c, "--json"}, &out, &errb); rc != 0 {
+			t.Errorf("implements %s --json: rc=%d, want 0", c, rc)
+		}
+		if rc := run([]string{"implements", c}, &out, &errb); rc != 1 {
+			t.Errorf("implements %s: rc=%d, want 1", c, rc)
+		}
+		if rc := run([]string{c}, &out, &errb); rc != 127 {
+			t.Errorf("%s without --json: rc=%d, want 127", c, rc)
+		}
+	}
+}
+
 func TestStubsAndImplements(t *testing.T) {
-	for _, c := range []string{"list", "status", "workdir-prompt", "env", "run", "guard"} {
+	for _, c := range []string{"workdir-prompt", "env", "run", "guard"} {
 		var out, errb strings.Builder
 		if rc := run([]string{c}, &out, &errb); rc != 2 {
 			t.Errorf("%s: rc=%d, want 2", c, rc)

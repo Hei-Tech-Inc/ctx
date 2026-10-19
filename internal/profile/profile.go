@@ -17,7 +17,9 @@ type Profile struct {
 	AzureSubscription, AzureTenant, GCPProject, GCPAccount, KubeContext  string
 	SigningFormat, SigningKey                                            string
 	SecretKeys                                                           []string
-	ExtraEnvs                                                            map[string]string
+	// SecretKeysRaw is SECRET_KEYS exactly as the profile sets it (SecretKeys is its fields).
+	SecretKeysRaw string
+	ExtraEnvs     map[string]string
 }
 
 var keys = []string{
@@ -70,8 +72,8 @@ func Load(dir, name string) (*Profile, error) {
 		AzureSubscription: vals["AZURE_SUBSCRIPTION"], AzureTenant: vals["AZURE_TENANT"],
 		GCPProject: vals["GCP_PROJECT"], GCPAccount: vals["GCP_ACCOUNT"], KubeContext: vals["KUBE_CONTEXT"],
 		SigningFormat: vals["SIGNING_FORMAT"], SigningKey: vals["SIGNING_KEY"],
-		SecretKeys: strings.Fields(vals["SECRET_KEYS"]),
-		ExtraEnvs:  map[string]string{},
+		SecretKeys: strings.Fields(vals["SECRET_KEYS"]), SecretKeysRaw: vals["SECRET_KEYS"],
+		ExtraEnvs: map[string]string{},
 	}
 	for _, line := range strings.Split(vals["EXTRA_ENVS"], "\n") {
 		line = strings.TrimSpace(line)

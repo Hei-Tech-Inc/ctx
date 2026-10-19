@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/cli"
 	"github.com/Hei-Tech-Inc/ctx/internal/knowledge"
 	"github.com/Hei-Tech-Inc/ctx/internal/mcpserver"
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
@@ -30,8 +31,8 @@ const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
 // list and status count only with --json; guard only with check.
 var implemented = map[string]func(sub string) bool{
-	"list":           func(sub string) bool { return false && sub == "--json" },
-	"status":         func(sub string) bool { return false && sub == "--json" },
+	"list":           func(sub string) bool { return sub == "--json" },
+	"status":         func(sub string) bool { return sub == "--json" },
 	"workdir-prompt": func(string) bool { return false },
 	"env":            func(string) bool { return false },
 	"run":            func(string) bool { return false },
@@ -71,7 +72,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "ctx-core %s\n", version)
 		return 0
-	case "list", "status", "workdir-prompt", "env", "run", "guard":
+	case "list", "status":
+		return runListStatus(args, stdout, stderr)
+	case "workdir-prompt", "env", "run", "guard":
 		// Not ported yet. bin/ctx asks `implements` first, so this is unreachable via forwarding.
 		fmt.Fprintln(stderr, "not implemented")
 		return 2
@@ -172,6 +175,29 @@ func runKnowledge(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, p := range created {
 		fmt.Fprintln(stdout, p)
+	}
+	return 0
+}
+
+// runListStatus serves `list --json` and `status --json`. Any other form is not
+// ported (the text screens stay in Bash) and exits 127 so a caller can fall back.
+func runListStatus(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 || args[1] != "--json" {
+		fmt.Fprintf(stderr, "ctx-core: %s supports only --json\n", args[0])
+		return 127
+	}
+	var err error
+	if args[0] == "list" {
+		err = cli.ListJSON(stdout, ctxVersion())
+	} else {
+		var pwd string
+		if pwd, err = os.Getwd(); err == nil {
+			err = cli.StatusJSON(stdout, ctxVersion(), pwd)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "\u2717 %v\n", err)
+		return 1
 	}
 	return 0
 }
