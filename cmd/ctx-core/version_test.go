@@ -40,20 +40,19 @@ func TestEnvRunImplements(t *testing.T) {
 	}
 }
 
-func TestGuardImplementsOnlyCheck(t *testing.T) {
+func TestGuardImplements(t *testing.T) {
 	var out, errb strings.Builder
-	for sub, want := range map[string]int{"check": 0, "install": 1, "status": 1} {
-		if rc := run([]string{"implements", "guard", sub}, &out, &errb); rc != want {
-			t.Errorf("implements guard %s: rc=%d, want %d", sub, rc, want)
+	for sub, want := range map[string]int{"check": 0, "install": 0, "uninstall": 0, "remove": 0, "status": 0, "": 0, "bogus": 1} {
+		args := []string{"implements", "guard"}
+		if sub != "" {
+			args = append(args, sub)
+		}
+		if rc := run(args, &out, &errb); rc != want {
+			t.Errorf("implements guard %q: rc=%d, want %d", sub, rc, want)
 		}
 	}
-	if rc := run([]string{"implements", "guard"}, &out, &errb); rc != 1 {
-		t.Errorf("implements guard: rc=%d, want 1", rc)
-	}
-	for _, args := range [][]string{{"guard"}, {"guard", "install"}} {
-		if rc := run(args, &out, &errb); rc != 127 {
-			t.Errorf("%v: rc=%d, want 127", args, rc)
-		}
+	if rc := run([]string{"guard", "bogus"}, &out, &errb); rc != 127 {
+		t.Errorf("guard bogus: rc=%d, want 127", rc)
 	}
 }
 

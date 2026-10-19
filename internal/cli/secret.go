@@ -204,3 +204,9 @@ func profileExists(name string) bool {
 	st, err := os.Stat(profile.Dir() + "/" + name + ".conf")
 	return err == nil && st.Mode().IsRegular()
 }
+
+// EchoE is echoE for packages that print Bash-style messages.
+func EchoE(s string) string { return echoE(s) }
+
+// TTYColors is ttyColors for packages that print Bash-style messages.
+func TTYColors(w io.Writer) bool { return ttyColors(w) }

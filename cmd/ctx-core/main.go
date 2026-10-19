@@ -31,7 +31,7 @@ const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry reports whether it handles the given first argument (the
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
-// list and status count only with --json; guard only with check; use only
+// list and status count only with --json; guard for every subcommand; use only
 // with CTX_QUIET=1 in the environment (the non-quiet output stays in Bash).
 var implemented = map[string]func(sub string) bool{
 	"list":           func(sub string) bool { return sub == "--json" },
@@ -39,12 +39,15 @@ var implemented = map[string]func(sub string) bool{
 	"workdir-prompt": func(string) bool { return true },
 	"env":            func(string) bool { return true },
 	"run":            func(string) bool { return true },
-	"guard":          func(sub string) bool { return sub == "check" },
+	"guard":          func(sub string) bool { return guardSubs[sub] },
 	"secret":         func(sub string) bool { return sub == "get" || sub == "list" || sub == "delete" },
 	"config":         func(sub string) bool { return configSubs[sub] },
 	"deactivate":     func(string) bool { return true },
 	"use":            func(string) bool { return os.Getenv("CTX_QUIET") == "1" },
 }
+
+// guardSubs are the `guard` subcommands ctx-core runs ("" is status).
+var guardSubs = map[string]bool{"": true, "check": true, "install": true, "uninstall": true, "remove": true, "status": true}
 
 // configSubs are the `config` subcommands ctx-core runs ("" is show).
 var configSubs = map[string]bool{
@@ -115,15 +118,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return cli.Use(stdout, stderr, args[1:])
 	case "guard":
-		if len(args) < 2 || args[1] != "check" {
-			fmt.Fprintln(stderr, "ctx-core: guard supports only check")
-			return 127
+		sub := ""
+		if len(args) > 1 {
+			sub = args[1]
 		}
-		hook, rest := "", []string(nil)
-		if len(args) > 2 {
-			hook, rest = args[2], args[3:]
+		switch sub {
+		case "", "status":
+			return guard.Status(stdout, stderr)
+		case "install":
+			return guard.Install(stdout, stderr)
+		case "uninstall", "remove":
+			return guard.Uninstall(stdout, stderr)
+		case "check":
+			hook, rest := "", []string(nil)
+			if len(args) > 2 {
+				hook, rest = args[2], args[3:]
+			}
+			return guard.Check(hook, rest, stderr)
 		}
-		return guard.Check(hook, rest, stderr)
+		fmt.Fprintln(stderr, "ctx-core: guard supports only status, install, uninstall and check")
+		return 127
 	case "implements":
 		if len(args) >= 2 && implements(args[1], args[2:]) {
 			return 0

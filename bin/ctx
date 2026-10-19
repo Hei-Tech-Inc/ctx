@@ -474,7 +474,7 @@ main() {
     uninstall)        cmd_uninstall "$@" ;;
     doctor)           cmd_doctor ;;
     guard)
-      [[ "${1:-}" == "check" ]] && _ctx_core_forward guard "$@"
+      case "${1:-}" in ""|check|status|install|uninstall|remove) _ctx_core_forward guard "$@" ;; esac
       cmd_guard "$@"
       ;;
     env)
