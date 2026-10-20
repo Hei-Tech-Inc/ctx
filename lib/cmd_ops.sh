@@ -974,13 +974,13 @@ cmd_clone() {
     for ((_i = idx + 1; _i < ${#rest[@]}; _i++)); do
       after+=("${rest[_i]}")
     done
-    git clone "${before[@]}" "$clone_url" "${after[@]}"
+    git clone ${before[@]+"${before[@]}"} "$clone_url" ${after[@]+"${after[@]}"}
   else
     local after=()
     for ((_i = 1; _i < ${#rest[@]}; _i++)); do
       after+=("${rest[_i]}")
     done
-    git clone "$clone_url" "${after[@]}"
+    git clone "$clone_url" ${after[@]+"${after[@]}"}
   fi
 }
 

@@ -1512,6 +1512,67 @@ test_setup_no_secrets_bash32() {
   pass "setup with no secrets works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
 }
 
+test_edit_editor_with_args() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset EDITOR VISUAL CTX_NO_GUM
+    mkdir -p "$CTX_DIR/profiles" "$td/fake"
+    echo 'GIT_EMAIL=a@b.co' >"$CTX_DIR/profiles/acme.conf"
+    cat >"$td/fake/fake ed" <<EOS
+#!/bin/sh
+{ printf 'ed'; printf ' [%s]' "\$@"; echo; } >>"$td/argv.log"
+EOS
+    cp "$td/fake/fake ed" "$td/fake/ed1"
+    sed 's/printf .ed./printf "ed2"/' "$td/fake/ed1" >"$td/fake/ed2"
+    chmod +x "$td/fake/ed1" "$td/fake/ed2"
+    : >"$td/argv.log"
+    EDITOR="$td/fake/ed1 -w" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme \
+      || { echo "edit failed"; exit 1; }
+    grep -qx "ed \[-w\] \[$CTX_DIR/profiles/acme.conf\]" "$td/argv.log" \
+      || { echo "EDITOR with args: $(cat "$td/argv.log")"; exit 1; }
+    : >"$td/argv.log"
+    VISUAL="$td/fake/ed2" EDITOR="$td/fake/ed1" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme \
+      || { echo "edit failed"; exit 1; }
+    out="$(cat "$td/argv.log")"
+    [[ "$out" == "ed2 [$CTX_DIR/profiles/acme.conf]" ]] || { echo "VISUAL should win: $out"; exit 1; }
+    # a path with a space and a failing editor: exit status is the editor's
+    printf '#!/bin/sh\nexit 7\n' >"$td/fake/bad"; chmod +x "$td/fake/bad"
+    rc=0; EDITOR="$td/fake/bad" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme || rc=$?
+    [[ $rc -eq 7 ]] || { echo "exit status $rc, want 7"; exit 1; }
+    rm -rf "$td"
+  ) || fail "edit runs EDITOR/VISUAL like git"
+  pass "edit honors VISUAL, EDITOR with arguments"
+}
+
+test_clone_no_extra_args_bash32() {
+  (
+    set -euo pipefail
+    local td
+    [[ -x /bin/bash ]] || { pass "clone under /bin/bash (skipped: no /bin/bash)"; exit 0; }
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$CTX_DIR/profiles" "$td/fake"
+    echo 'GIT_EMAIL=a@b.co' >"$CTX_DIR/profiles/acme.conf"
+    printf '#!/bin/sh\n{ printf "git"; printf " [%%s]" "$@"; echo; } >>"%s/argv.log"\n' "$td" >"$td/fake/git"
+    chmod +x "$td/fake/git"
+    : >"$td/argv.log"
+    out="$(PATH="$td/fake:$PATH" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum clone -p acme git@gitlab.com:o/r.git 2>&1)" \
+      || { echo "clone failed: $out"; exit 1; }
+    ! grep -q 'unbound variable' <<<"$out" || { echo "unbound: $out"; exit 1; }
+    grep -qx 'git \[clone\] \[git@gitlab.com:o/r.git\]' "$td/argv.log" || { echo "argv: $(cat "$td/argv.log")"; exit 1; }
+    : >"$td/argv.log"
+    out="$(PATH="$td/fake:$PATH" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum clone -p acme -- git@gitlab.com:o/r.git 2>&1)" \
+      || { echo "clone -- failed: $out"; exit 1; }
+    grep -qx 'git \[clone\] \[git@gitlab.com:o/r.git\]' "$td/argv.log" || { echo "argv --: $(cat "$td/argv.log")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "clone with no extra git args under /bin/bash"
+  pass "clone with no extra args works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
+}
+
 test_setup_cancel_exits_130() {
   (
     set -euo pipefail
@@ -1693,4 +1754,6 @@ test_setup_keygen_failure_dies
 test_mise_hook_comment_no_injection
 test_setup_batch_checks_before_side_effects
 test_setup_cfg_quoted_bash32
+test_edit_editor_with_args
+test_clone_no_extra_args_bash32
 echo "All tests passed."

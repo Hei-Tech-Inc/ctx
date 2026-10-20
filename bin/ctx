@@ -437,7 +437,7 @@ _ctx_core_forward() {
   local bin
   bin="$(_ctx_core_bin)" || return 1
   [[ -x "$bin" ]] || return 1
-  export CTX_VERSION CTX_DIR
+  export CTX_VERSION CTX_DIR CTX_LIB
   CTX_BIN_PATH="$CTX_BIN/ctx"
   export CTX_BIN_PATH
   "$bin" implements "$@" >/dev/null 2>&1 || return 1
@@ -489,7 +489,9 @@ main() {
       local pname="${1:-}"
       [[ -z "$pname" ]] && die "Usage: ctx edit <profile>"
       profile_exists "$pname" || die "Profile '$pname' not found."
-      "${EDITOR:-nano}" "$CTX_PROFILES_DIR/${pname}.conf"
+      # Like git: VISUAL, then EDITOR, then nano; the value may carry arguments.
+      local editor="${VISUAL:-${EDITOR:-nano}}"
+      sh -c "$editor \"\$@\"" sh "$CTX_PROFILES_DIR/${pname}.conf"
       ;;
     remove|rm|del)
       _ctx_core_forward remove "$@"
