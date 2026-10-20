@@ -26,12 +26,12 @@ const EOF = "EOF"
 const CtrlC = "CTRL-C"
 
 // RunPTY timing. An answer is written once the output has been quiet for
-// quietGap and the output since the previous answer looks like a prompt (see
-// promptLike). When there is no output since then, or it does not look like
-// a prompt (a full-screen UI ending in escape codes or help text, or a
-// program that reads without prompting), the answer waits for slowGap of
-// quiet instead. Both gaps are stretched by loadScale on a busy machine,
-// where a program can pause that long between its writes.
+// quietGap and the output since the previous answer shows the program waiting
+// for input (see answerState): a line prompt, or a full-screen UI that has
+// turned bracketed paste on. A program that has never shown such a UI and
+// prints something else, or nothing (it reads without prompting), gets the
+// answer after slowGap of quiet instead. Both gaps are stretched by loadScale
+// on a busy machine, where a program can pause that long between its writes.
 const (
 	quietGap = 300 * time.Millisecond
 	slowGap  = time.Second
@@ -52,10 +52,12 @@ const (
 // cmd has not exited within timeout, it is killed and the test fails with the
 // transcript so far.
 //
-// The timing is a heuristic: a program that pauses for more than slowGap
-// (times loadScale) before printing its prompt can receive an answer early. Answers typed early
-// still wait in the terminal's line buffer for a canonical-mode read, but a
-// program that flushes input when it switches to raw mode loses them.
+// The timing is a heuristic for programs without a full-screen UI: one that
+// pauses for more than slowGap (times loadScale) before printing its prompt
+// can receive an answer early. Answers typed early still wait in the
+// terminal's line buffer for a canonical-mode read. Once a program has shown
+// a full-screen UI, answers wait for a prompt or the next UI instead: input
+// typed between two UIs can be read and dropped by the one shutting down.
 func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration) (transcript string, exit int) {
 	t.Helper()
 	ptmx, tty, err := pty.Open()
@@ -136,17 +138,16 @@ func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration
 		}
 		mu.Lock()
 		since := lastOut
-		tail := out[mark:]
-		ready := len(tail) > 0 && promptLike(tail)
+		state := answerState(out[mark:], bytes.Contains(out, pasteOn))
 		mu.Unlock()
 		if lastWrite.After(since) {
 			since = lastWrite
 		}
 		gap := slowGap
-		if ready {
+		if state == stateReady {
 			gap = quietGap
 		}
-		if time.Since(since) < scaled(gap) {
+		if state == stateWait || time.Since(since) < scaled(gap) {
 			time.Sleep(poll)
 			continue
 		}
@@ -207,6 +208,45 @@ func loadScale() float64 {
 // scaled stretches gap by the current loadScale.
 func scaled(gap time.Duration) time.Duration {
 	return time.Duration(float64(gap) * loadScale())
+}
+
+// Bracketed paste mode on and off: a full-screen UI (bubbletea, readline)
+// turns it on once it is reading input and off when it ends.
+var (
+	pasteOn  = []byte("\x1b[?2004h")
+	pasteOff = []byte("\x1b[?2004l")
+)
+
+const (
+	stateReady = iota // waiting for input: answer after quietGap
+	stateMaybe        // unclear: answer after slowGap
+	stateWait         // not waiting for input yet: do not answer
+)
+
+// answerState tells from tail, the output since the previous answer, whether
+// the program waits for the next one. ui is whether it has ever shown a
+// full-screen UI.
+//
+// A UI turned on in tail and not off again is ready. After a UI turned off
+// (and while a UI program prints between two UIs) only a line prompt is: an
+// answer typed before the next UI starts can be swallowed by the one
+// shutting down. A program that never showed a UI may read without
+// prompting, so silence or other output only delays the answer.
+func answerState(tail []byte, ui bool) int {
+	on, off := bytes.LastIndex(tail, pasteOn), bytes.LastIndex(tail, pasteOff)
+	if on > off {
+		return stateReady
+	}
+	if off >= 0 {
+		tail = tail[off+len(pasteOff):]
+	}
+	switch {
+	case promptLike(tail):
+		return stateReady
+	case ui:
+		return stateWait
+	}
+	return stateMaybe
 }
 
 // promptLike reports whether output ends like a line prompt: after dropping

@@ -4,6 +4,7 @@ package testutil
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,6 +36,47 @@ func TestRunPTY(t *testing.T) {
 	_, rc = RunPTY(t, exec.Command("bash", "-c", `kill -TERM $$`), nil, 10*time.Second)
 	if rc != 143 {
 		t.Errorf("signal rc = %d, want 143", rc)
+	}
+}
+
+// TestRunPTYWaitsBetweenUIs: once a program has shown a full-screen UI
+// (bracketed paste on), an answer is not typed into the silence after that UI
+// ends; it waits for the next UI. The script drops input typed in the gap, as
+// a UI shutting down can.
+func TestRunPTYWaitsBetweenUIs(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+	script := `on=$'\e[?2004h' off=$'\e[?2004l'
+printf '%sone' "$on"; read -r a; printf '%s' "$off"
+sleep 1.5
+while read -r -t 0.05 junk; do :; done
+printf '%stwo' "$on"; read -r b; printf '%s' "$off"
+echo "got:$a,$b"`
+	got, rc := RunPTY(t, exec.Command("bash", "-c", script), []string{"A", "B"}, 20*time.Second)
+	if rc != 0 || !strings.HasSuffix(got, "got:A,B\n") {
+		t.Errorf("transcript %q rc %d, want got:A,B", got, rc)
+	}
+}
+
+func TestAnswerState(t *testing.T) {
+	for _, c := range []struct {
+		tail string
+		ui   bool
+		want int
+	}{
+		{"\x1b[?2004h> pick one\nenter submit", true, stateReady},
+		{"final frame\x1b[?2004l", true, stateWait},
+		{"", true, stateWait},
+		{"\x1b[?2004l\n? Name: ", true, stateReady},
+		{"\x1b[?2004l✓ Using key\n\x1b[?2004h> type here", true, stateReady},
+		{"Scanning...", false, stateMaybe},
+		{"", false, stateMaybe},
+		{"? Name: ", false, stateReady},
+	} {
+		if got := answerState([]byte(c.tail), c.ui); got != c.want {
+			t.Errorf("answerState(%q, %v) = %d, want %d", c.tail, c.ui, got, c.want)
+		}
 	}
 }
 
