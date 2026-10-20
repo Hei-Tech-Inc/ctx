@@ -58,17 +58,25 @@ Update this file when an item ships (check the box, link PR or commit).
 | E3 | `use` (quiet), `deactivate`, `secret get/list/delete`, `config`, `guard install/uninstall/status` | M | [x] | Autoswitch path ~152 ms to ~96 ms (median of 20, 10 profiles, fake tools) |
 | E4a | Text `list`/`status`, non-quiet `use`, `secret set`/`migrate`, `remove`/`rm`/`del`, with Charm (`internal/tui`) | M | [x] | Rich UI without gum; `ctx-core` 13.27 MB to 15.75 MB |
 | E4b | `setup` wizard with its `import`/`add` aliases, plus `Ask`/`PickOne`/`Spin` | L | [x] | `internal/setup`, `internal/gitssh`, `internal/shquote`; `--extend` fixed |
-| E4c | Remaining Bash-only commands: `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `completion`, `help`, `version` | L | [ ] | |
-| E5 | Shell hook via `ctx hook-env` | M | [ ] | |
-| E6 | Drop Bash | L | [ ] | |
+| E4c | Remaining Bash-only commands: `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `completion`, `help`, `version` | L | [x] | `internal/ghacct`, `internal/atomicfile`; fixes listed in CHANGELOG; Bash stays as fallback |
+| E5 | Shell hook via `ctx hook-env` | M | [ ] | Move the autoswitch logic (`lib/ctx_autoswitch.bash`/`.fish`) into `ctx-core`; the rc stub calls it |
+| E6 | Drop Bash | L | [ ] | Needs a new version source (today `CTX_VERSION` in `lib/core.sh`, also read by `upgrade --check`); `install.sh` file list (no `lib/*.sh`); `CTX_REPO` in `install.sh` line 11 must honor the environment (`${CTX_REPO:-…}`) so forks and `CTX_UPGRADE_REPO` reach the downloads |
 
 Known follow-ups (found in E2): the Bash `prompt_extra_paths` handling never checks the last entry; Go mirrors it for parity. Fix both together in a later phase.
+
+## Backlog (requested 2026-10-20)
+
+| Item | Notes |
+|------|-------|
+| Profile dashboard | A comprehensive, intuitive visual view of profiles, opened by a command (for example a `ctx dashboard` TUI) or something better. |
+| ctx logo | A logo for the project. |
+| Project website | Modeled on https://go-tui.dev/: simple and clean, with docs and its color palette as the reference; ctx's own branding and copy. |
 
 ---
 
 ## Done in this slice (reference)
 
-- A1, A2, B1, B3, C1, C2, C3, E1, E2, E3 (see git history / CHANGELOG [Unreleased]).
+- A1, A2, B1, B3, C1, C2, C3, E1, E2, E3, E4a, E4b, E4c (see git history / CHANGELOG [Unreleased]).
 
 ## References
 

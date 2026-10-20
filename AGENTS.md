@@ -45,6 +45,9 @@ When adding scripting fields, extend **`ctx --json`** handlers in `lib/cmd_ops.s
 | Setup wizard, `--config`, `--extend` (`setup`, `import`, `add`) | `internal/setup/` |
 | SSH keys, hosts, gitconfig includes for setup | `internal/gitssh/` |
 | Shell quoting (bash `printf %q`, mise.toml escaping) | `internal/shquote/` |
+| Active GitHub account detection (`gh auth status` parsing; used by `setup`, `verify`) | `internal/ghacct/` |
+| Atomic file replace that writes through symlinks and keeps mode | `internal/atomicfile/` |
 | Config, git guard, shared command code (`use`, `deactivate`, `secret`, `config`, `guard`) | `internal/ctxconfig/`, `internal/guard/`, `internal/cli/` |
+| Other commands (`agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `help`, `completion`); embedded help/completion text | `internal/cli/`, `internal/cli/text/` |
 
 Commands implemented in Go are listed in the `implemented` table in `cmd/ctx-core/main.go`; `bin/ctx` forwards to them. A behavior change to one of them must be made in both the Bash and Go implementations (`CTX_CORE=off` runs Bash).
