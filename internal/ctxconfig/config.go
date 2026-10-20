@@ -135,3 +135,33 @@ func decodeManualPWD(raw string) string {
 	}
 	return raw
 }
+
+// WorkRoot is `$(ctx_work_root)`: $CTX_WORK_ROOT, else work_root from the
+// config, else $HOME/clients, with a leading "~" expanded.
+func WorkRoot() string {
+	configured := os.Getenv("CTX_WORK_ROOT")
+	if configured == "" {
+		if cfg, err := Load(); err == nil && cfg != nil {
+			configured = cfg.Last["work_root"]
+		}
+	}
+	if configured == "" {
+		configured = os.Getenv("HOME") + "/clients"
+	}
+	if strings.HasPrefix(configured, "~") {
+		configured = os.Getenv("HOME") + configured[1:]
+	}
+	return strings.TrimRight(echoText(configured), "\n")
+}
+
+// echoText is what `echo "$s"` prints (a value that is only echo options is
+// swallowed by the builtin).
+func echoText(s string) string {
+	if len(s) > 1 && s[0] == '-' && strings.Trim(s[1:], "neE") == "" {
+		if strings.Contains(s, "n") {
+			return ""
+		}
+		return "\n"
+	}
+	return s + "\n"
+}

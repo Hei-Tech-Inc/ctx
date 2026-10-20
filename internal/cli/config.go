@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
+	"github.com/Hei-Tech-Inc/ctx/internal/gitssh"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
+	"github.com/Hei-Tech-Inc/ctx/internal/setup"
 )
 
 const (
@@ -21,6 +23,25 @@ const (
 
 // ui prints like the Bash helpers info/success/warn/bold/dim (stdout) and
 // error/die (stderr); every message goes through echo -e semantics.
+// setupOut adapts ui to setup.Out with the same bytes as the Bash helpers.
+type setupOut struct{ u ui }
+
+func (o setupOut) Info(m string)    { o.u.info(m) }
+func (o setupOut) Success(m string) { o.u.success(m) }
+func (o setupOut) Warn(m string)    { o.u.warn(m) }
+func (o setupOut) Dim(m string)     { o.u.dim(m) }
+func (o setupOut) Bold(m string)    { o.u.bold(m) }
+func (o setupOut) Say(m string)     { o.u.say(m) }
+func (o setupOut) Error(m string)   { o.u.error(m) }
+func (o setupOut) Colors() bool     { return o.u.colors }
+
+// Streams is where git and other tools run by setup write: the raw streams,
+// as a Bash child process inherits them.
+func (o setupOut) Streams() (io.Writer, io.Writer) { return o.u.out, o.u.err }
+
+// setupOut returns u as a setup.Out.
+func (u ui) setupOut() setup.Out { return setupOut{u} }
+
 type ui struct {
 	out, err io.Writer
 	colors   bool
@@ -40,6 +61,7 @@ func (u ui) success(msg string) { u.line(u.out, u.c(ansiGreen)+"✓"+u.c(ansiRes
 func (u ui) warn(msg string)    { u.line(u.out, u.c(ansiYellow)+"!"+u.c(ansiReset)+" "+msg) }
 func (u ui) bold(msg string)    { u.line(u.out, u.c(ansiBold)+msg+u.c(ansiReset)) }
 func (u ui) dim(msg string)     { u.line(u.out, u.c(ansiDim)+msg+u.c(ansiReset)) }
+func (u ui) warnErr(msg string) { u.line(u.err, u.c(ansiYellow)+"!"+u.c(ansiReset)+" "+msg) }
 func (u ui) error(msg string)   { u.line(u.err, u.c(ansiRed)+"✗"+u.c(ansiReset)+" "+msg) }
 func (u ui) say(s string)       { _, _ = io.WriteString(u.out, s+"\n") }
 
@@ -95,18 +117,6 @@ func lastValue(key string) string {
 		return ""
 	}
 	return cfg.Last[key]
-}
-
-// workRoot is `$(ctx_work_root)`.
-func workRoot() string {
-	configured := os.Getenv("CTX_WORK_ROOT")
-	if configured == "" {
-		configured = lastValue("work_root")
-	}
-	if configured == "" {
-		configured = os.Getenv("HOME") + "/clients"
-	}
-	return strings.TrimRight(echoPlain(expandTilde(configured)), "\n")
 }
 
 func secretProviderLine() string {
@@ -168,7 +178,7 @@ func configCmd(u ui, args []string) int {
 	switch key {
 	case "", "show":
 		u.bold(`\n  ctx config\n`)
-		u.say("  work_root: " + workRoot())
+		u.say("  work_root: " + ctxconfig.WorkRoot())
 		u.say("  secret_provider: " + secretProviderLine())
 		u.say("  prompt_workdir_max_depth: " + promptDepthText() + " (prompt: CTX_PROMPT_* under each profile WORK_DIR)")
 		u.say("  prompt_extra_paths: " + promptExtraPaths())
@@ -186,7 +196,7 @@ func configCmd(u ui, args []string) int {
 		u.info("      or: ctx config export <dir> / ctx config import <dir>")
 	case "work-root":
 		if value == "" {
-			u.say("  work_root: " + workRoot())
+			u.say("  work_root: " + ctxconfig.WorkRoot())
 			u.say("")
 			u.info("Usage: ctx config work-root <path>")
 			return 0
@@ -361,9 +371,11 @@ func configImport(u ui, indir string) int {
 		u.warn("No manifest found in import directory (continuing).")
 	}
 
-	_ = ctxconfig.BackupFile(ctxconfig.Path())
-	_ = ctxconfig.BackupFile(sshConfigPath())
-	_ = ctxconfig.BackupFile(filepath.Join(home, ".gitconfig"))
+	for _, f := range []string{ctxconfig.Path(), sshConfigPath(), filepath.Join(home, ".gitconfig")} {
+		if ctxconfig.BackupFile(f) != nil {
+			u.warnErr("Could not back up " + f)
+		}
+	}
 
 	if src := filepath.Join(indir, "config"); isRegular(src) {
 		err := ctxconfig.WithLock(func() error { return ctxconfig.CopyFile(src, ctxconfig.Path()) })
@@ -383,7 +395,7 @@ func configImport(u ui, indir string) int {
 		}
 	}
 
-	ensureSSHInclude()
+	gitssh.EnsureInclude(u.warnErr)
 
 	ents, _ := os.ReadDir(profilesDir)
 	var confs []string
@@ -401,7 +413,7 @@ func configImport(u ui, indir string) int {
 		identity := filepath.Join(gitDir, "ctx-"+strings.TrimSuffix(n, ".conf"))
 		workDir := sourcedWorkDir(conf)
 		if workDir != "" && isRegular(identity) {
-			gitconfigAddInclude(workDir, identity)
+			_, _ = gitssh.GitconfigAddInclude(workDir, identity, nil) // Bash: >/dev/null 2>&1 || true
 		}
 	}
 

@@ -195,23 +195,42 @@ var (
 	coreOnce sync.Once
 	coreBin  string
 	coreErr  error
+	coreDir  string   // removed by TestMain
+	coreGo   = "go"   // the go command, resolved by startCoreBuild
+	coreEnv  []string // its environment, as TestMain started
 )
 
+// startCoreBuild starts building ctx-core in the background, from TestMain
+// before any test changes PATH or HOME, so the build overlaps the tests that
+// run before the first one that needs it.
+func startCoreBuild() {
+	if p, err := exec.LookPath("go"); err == nil {
+		coreGo = p
+	}
+	coreEnv = os.Environ()
+	go coreOnce.Do(doBuildCore)
+}
+
+func doBuildCore() {
+	dir, err := os.MkdirTemp("", "ctx-core-test")
+	if err != nil {
+		coreErr = err
+		return
+	}
+	coreDir = dir
+	coreBin = filepath.Join(dir, "ctx-core")
+	cmd := exec.Command(coreGo, "build", "-o", coreBin, "./cmd/ctx-core")
+	cmd.Dir = repoRoot
+	cmd.Env = coreEnv // nil (the process environment) if TestMain did not start it
+	if out, err := cmd.CombinedOutput(); err != nil {
+		coreErr = fmt.Errorf("%v: %s", err, out)
+	}
+}
+
+// buildCore waits for the ctx-core build and returns the binary.
 func buildCore(t *testing.T) string {
 	t.Helper()
-	coreOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "ctx-core-test")
-		if err != nil {
-			coreErr = err
-			return
-		}
-		coreBin = filepath.Join(dir, "ctx-core")
-		cmd := exec.Command("go", "build", "-o", coreBin, "./cmd/ctx-core")
-		cmd.Dir = repoRoot
-		if out, err := cmd.CombinedOutput(); err != nil {
-			coreErr = fmt.Errorf("%v: %s", err, out)
-		}
-	})
+	coreOnce.Do(doBuildCore)
 	if coreErr != nil {
 		t.Fatalf("build ctx-core: %v", coreErr)
 	}

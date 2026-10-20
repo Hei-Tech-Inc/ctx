@@ -29,9 +29,16 @@ user_cancelled() {
   # Print to stderr so command substitutions never capture this as field input.
   echo -e "${YELLOW}!${RESET} Cancelled by user." >&2
   # If we're inside command substitution, exit only aborts the subshell.
-  # Bubble cancellation to the parent ctx process with INT.
+  # Signal the main ctx shell ($$ is its PID even in a subshell; bin/ctx traps
+  # INT and exits 130). $PPID would be ctx's caller.
+  # Then die by SIGINT instead of exiting 130: when the main shell takes the
+  # signal while it already waits for this subshell, bash runs its INT trap
+  # only if the child was killed by SIGINT (a normal exit means the child
+  # handled it), and ctx would go on with an empty answer. exec keeps this
+  # PID; exit 130 is the fallback where SIGINT is ignored.
   if [[ ${BASH_SUBSHELL:-0} -gt 0 ]]; then
-    kill -INT "$PPID" 2>/dev/null || true
+    kill -INT "$$" 2>/dev/null || true
+    exec /bin/sh -c 'kill -INT $$; exit 130'
   fi
   exit 130
 }
@@ -91,11 +98,7 @@ ask() {
       echo -e "${CYAN}?${RESET} $prompt: \c" >&2
     fi
     local var
-    if [[ -t 0 ]]; then
-      read -r var || user_cancelled
-    else
-      read -r var < /dev/tty 2>/dev/null || user_cancelled
-    fi
+    read -r var || user_cancelled
     echo "${var:-$default}"
   fi
 }
@@ -251,9 +254,9 @@ ctx_setup_cfg_get() {
   val="${val%"${val##*[![:space:]]}"}"
   val="${val%$'\r'}"
   if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
-    val="${val:1:-1}"
+    val="${val:1:${#val}-2}"
   elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
-    val="${val:1:-1}"
+    val="${val:1:${#val}-2}"
   fi
   printf '%s' "${val:-$default}"
 }
@@ -303,7 +306,7 @@ ctx_setup_review_confirm() {
 
   hr
   bold "  Step 8 / 8 — Review"
-  dim "  Nothing is written until you confirm. No = exit without changes."
+  dim "  Profile, git and SSH config are written only after you confirm. No = exit without writing them."
   echo ""
 
   if $HAS_GUM; then
@@ -703,13 +706,13 @@ ctx_secret_provider_available() {
 }
 
 # ─── Backup ────────────────────────────────────────────────────────────────────
+# Returns 1 when the copy could not be made (a missing src is not an error).
 backup_file() {
   local src="$1"
   [[ -f "$src" ]] || return 0
   local stamp; stamp=$(date '+%Y%m%d-%H%M%S')
   local bdir="${CTX_DIR}/backups/$stamp"
-  mkdir -p "$bdir"
-  cp "$src" "$bdir/$(basename "$src")"
+  { mkdir -p "$bdir" && cp -f "$src" "$bdir/$(basename "$src")"; } 2>/dev/null || return 1
   echo "$src" >> "$bdir/manifest.txt"
   log "Backed up $src → $bdir"
 }
@@ -1033,7 +1036,7 @@ ensure_ssh_include() {
   fi
 
   # Back up before touching
-  backup_file "$ssh_main"
+  backup_file "$ssh_main" || warn "Could not back up $ssh_main" >&2
 
   # Include must be FIRST line(s) in ssh/config to take effect
   local tmp; tmp=$(mktemp)
@@ -1048,7 +1051,8 @@ ensure_ssh_include() {
   log "Added Include $CTX_SSH_CONFIG to $ssh_main"
 }
 
-# Write a host block to our ctx_config file, never to ~/.ssh/config
+# Write a host block to our ctx_config file, never to ~/.ssh/config.
+# Returns 0 added, 1 already present, 2 the file could not be written.
 ctx_ssh_add_host() {
   local host="$1" key_path="$2"
 
@@ -1065,7 +1069,7 @@ ctx_ssh_add_host() {
     echo "  User git"
     echo "  IdentityFile $key_path"
     echo "  IdentitiesOnly yes"
-  } >> "$CTX_SSH_CONFIG"
+  } 2>/dev/null >>"$CTX_SSH_CONFIG" || return 2
   chmod 600 "$CTX_SSH_CONFIG"
   log "Added SSH host $host to $CTX_SSH_CONFIG"
   return 0
@@ -1086,18 +1090,19 @@ ctx_ssh_remove_host() {
 }
 
 # ─── Safe .gitconfig (writes includeIf, deduped) ─────────────────────────────
+# Returns 0 added, 1 already present, 2 ~/.gitconfig could not be written.
 gitconfig_add_include() {
   local work_dir="$1" identity_file="$2"
   local gitconfig="$HOME/.gitconfig"
 
   grep -qF "$identity_file" "$gitconfig" 2>/dev/null && return 1  # already present
 
-  backup_file "$gitconfig"
+  backup_file "$gitconfig" || warn "Could not back up $gitconfig" >&2
   {
     echo ""
     echo "[includeIf \"gitdir:${work_dir}/\"]"
     echo "  path = ${identity_file}"
-  } >> "$gitconfig"
+  } 2>/dev/null >>"$gitconfig" || return 2
   log "Added includeIf for $work_dir to ~/.gitconfig"
   return 0
 }
@@ -1126,13 +1131,55 @@ gitconfig_remove_include() {
   ' "$gitconfig" > "$tmp" || rc=$?
   # Rewrite in place (keeps a symlink and the file's mode) only if a line was dropped.
   if [[ $rc -eq 10 ]]; then
-    backup_file "$gitconfig"
+    backup_file "$gitconfig" || warn "Could not back up $gitconfig" >&2
     cat "$tmp" > "$gitconfig"
   fi
   rm -f "$tmp"
 }
 
 # ─── mise.toml generation ─────────────────────────────────────────────────────
+# Body of a TOML basic string: \ → \\, " → \", control chars (0x00-0x1F, 0x7F) → \uXXXX.
+# Byte-wise under LC_ALL=C, so UTF-8 passes through unchanged.
+_ctx_toml_escape() {
+  local LC_ALL=C s="$1" out="" c i
+  if [[ "$s" != *[\\\"[:cntrl:]]* ]]; then
+    printf '%s' "$s"
+    return 0
+  fi
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\) out+='\\' ;;
+      \") out+='\"' ;;
+      [[:cntrl:]]) out+="$(printf '\\u%04X' "'$c")" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# Text for a comment line: control characters (newline, CR, tab, …) become a
+# space, so a value cannot end the comment and start a command. Then TOML-escaped.
+_ctx_toml_comment_text() {
+  local LC_ALL=C s="$1"
+  _ctx_toml_escape "${s//[[:cntrl:]]/ }"
+}
+
+# A value for inside "…" in a hook script, which is itself inside a TOML """ string:
+# \ " $ ` get a shell backslash first, then the result is TOML-escaped.
+_ctx_toml_sh_dq() {
+  local LC_ALL=C s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\|\"|\$|\`) out+="\\$c" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  _ctx_toml_escape "$out"
+}
+
+# Returns 2 when the file could not be written.
 generate_mise_toml() {
   local profile="$1"
   local work_dir="$2"
@@ -1151,24 +1198,24 @@ generate_mise_toml() {
   mkdir -p "$work_dir"
 
   {
-    echo "# mise.toml — ctx managed environment for: $profile"
+    echo "# mise.toml — ctx managed environment for: $(_ctx_toml_comment_text "$profile")"
     echo "# Edit freely. This file is safe to commit (no secrets here)."
     echo "# Secrets load in [hooks.enter]: macOS Keychain, or ~/.ctx/secrets on other OSes."
     echo ""
 
     # Environment variables
     echo "[env]"
-    [[ -n "$aws_profile"  ]] && echo "AWS_PROFILE = \"$aws_profile\""
-    [[ -n "$azure_sub"    ]] && echo "AZURE_SUBSCRIPTION = \"$azure_sub\""
-    [[ -n "$gcp_project"  ]] && echo "GCLOUD_PROJECT = \"$gcp_project\""
-    [[ -n "$kube_ctx"     ]] && echo "CTX_KUBE_CONTEXT = \"$kube_ctx\""
+    [[ -n "$aws_profile"  ]] && echo "AWS_PROFILE = \"$(_ctx_toml_escape "$aws_profile")\""
+    [[ -n "$azure_sub"    ]] && echo "AZURE_SUBSCRIPTION = \"$(_ctx_toml_escape "$azure_sub")\""
+    [[ -n "$gcp_project"  ]] && echo "GCLOUD_PROJECT = \"$(_ctx_toml_escape "$gcp_project")\""
+    [[ -n "$kube_ctx"     ]] && echo "CTX_KUBE_CONTEXT = \"$(_ctx_toml_escape "$kube_ctx")\""
 
     if [[ -n "$extra_envs" ]]; then
       while IFS= read -r pair; do
         [[ -z "$pair" ]] && continue
         local k="${pair%%=*}" v="${pair#*=}"
         is_valid_env_key "$k" || continue
-        echo "$k = \"$v\""
+        echo "$k = \"$(_ctx_toml_escape "$v")\""
       done <<< "$extra_envs"
     fi
 
@@ -1186,18 +1233,18 @@ generate_mise_toml() {
     # Git identity
     echo "  # Set git identity for this directory"
     if is_sensible_git_email "$git_email"; then
-      echo "  git config user.name  \"$git_name\""
-      echo "  git config user.email \"$git_email\""
+      echo "  git config user.name  \"$(_ctx_toml_sh_dq "$git_name")\""
+      echo "  git config user.email \"$(_ctx_toml_sh_dq "$git_email")\""
     else
-      echo "  # Skipped invalid git email (looks like a username, not an address): \"$git_email\""
-      echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/${profile}.conf and re-run setup, or edit mise.toml."
+      echo "  # Skipped invalid git email (looks like a username, not an address): \"$(_ctx_toml_comment_text "$git_email")\""
+      echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/$(_ctx_toml_comment_text "$profile").conf and re-run setup, or edit mise.toml."
     fi
     echo ""
 
     # Cloud context switches
-    [[ -n "$azure_sub"  ]] && echo "  az account set --subscription \"$azure_sub\" 2>/dev/null || true"
-    [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$gcp_project\" --quiet 2>/dev/null || true"
-    [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$kube_ctx\" 2>/dev/null || true"
+    [[ -n "$azure_sub"  ]] && echo "  az account set --subscription \"$(_ctx_toml_sh_dq "$azure_sub")\" 2>/dev/null || true"
+    [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$(_ctx_toml_sh_dq "$gcp_project")\" --quiet 2>/dev/null || true"
+    [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$(_ctx_toml_sh_dq "$kube_ctx")\" 2>/dev/null || true"
 
     # Secret injection (provider-aware: keychain/file/pass)
     if [[ -n "$secret_keys" ]]; then
@@ -1242,7 +1289,7 @@ generate_mise_toml() {
     fi
     echo "\"\"\""
 
-  } > "$toml_file"
+  } 2>/dev/null >"$toml_file" || return 2
 
   # Trust the file so mise doesn't prompt
   if command -v mise &>/dev/null; then
@@ -1263,9 +1310,15 @@ detect_ssh_keys() {
 
 detect_gh_accounts() {
   command -v gh &>/dev/null || return 0
+  # gh prints "Logged in to github.com account USER (…)" (newer) or "… as USER (…)" (older).
+  # "Failed to log in to github.com account USER" (invalid token) is not a login.
   run_with_timeout 8 gh auth status 2>&1 \
-    | grep "Logged in to github.com account" \
-    | awk '{print $NF}' | tr -d '()'
+    | awk '/Logged in to github\.com (account|as) / {
+        for (i = 1; i + 2 <= NF; i++)
+          if ($i == "github.com" && ($(i+1) == "account" || $(i+1) == "as") && $(i-1) == "to") {
+            print $(i+2); break
+          }
+      }'
 }
 
 detect_aws_profiles() {

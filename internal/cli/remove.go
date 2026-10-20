@@ -65,7 +65,7 @@ func Remove(t tui.Term, args []string) int {
 
 	// Git identity file + gitconfig include.
 	identity := os.Getenv("HOME") + "/.config/git/ctx-" + name
-	_ = gitconfigRemoveInclude(identity)
+	_ = gitconfigRemoveInclude(identity, u.warnErr)
 	_ = os.Remove(identity)
 	u.success("Git identity removed")
 

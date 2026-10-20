@@ -132,3 +132,23 @@ func TestSecretProviderLastWins(t *testing.T) {
 		t.Errorf("SecretProvider = %q, want last value after the first =", cfg.SecretProvider)
 	}
 }
+
+func TestWorkRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", "/home/u")
+	t.Setenv("CTX_DIR", dir)
+	t.Setenv("CTX_WORK_ROOT", "")
+	if got := WorkRoot(); got != "/home/u/clients" {
+		t.Errorf("default = %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config"), []byte("work_root=~/w\nwork_root=~/x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := WorkRoot(); got != "/home/u/x" {
+		t.Errorf("config = %q", got)
+	}
+	t.Setenv("CTX_WORK_ROOT", "/env")
+	if got := WorkRoot(); got != "/env" {
+		t.Errorf("env = %q", got)
+	}
+}

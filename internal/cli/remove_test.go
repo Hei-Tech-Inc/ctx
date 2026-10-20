@@ -54,19 +54,22 @@ type removeRun struct {
 // removeEnv holds one fixture HOME plus fakes that are built once per test.
 type removeEnv struct {
 	f       *fixture
+	p       *ptest
 	passLog string
 	cwd     string
 }
 
+// newRemoveEnv marks t parallel (see ptest).
 func newRemoveEnv(t *testing.T) *removeEnv {
 	t.Helper()
-	e := &removeEnv{f: newFixture(t)}
+	p := newPtest(t)
+	e := &removeEnv{f: newPFixture(p), p: p}
 	dir, log := testutil.FakeBin(t, "pass", `case "$1" in rm) : ;; esac`)
 	e.passLog = log
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("CTX_NO_GUM", "1")
-	t.Setenv("CTX_SECRET_PROVIDER", "file")
-	t.Setenv("CTX_ACTIVE_PROFILE", "")
+	p.Setenv("PATH", dir+string(os.PathListSeparator)+p.Getenv("PATH"))
+	p.Setenv("CTX_NO_GUM", "1")
+	p.Setenv("CTX_SECRET_PROVIDER", "file")
+	p.Setenv("CTX_ACTIVE_PROFILE", "")
 	return e
 }
 
@@ -101,7 +104,7 @@ func (e *removeEnv) collect(t *testing.T, out, errb string, code int) removeRun 
 
 func (e *removeEnv) bash(t *testing.T, stdin string, args ...string) removeRun {
 	cmd := exec.Command(bashBin(t), append([]string{"--no-gum", "remove"}, args...)...)
-	cmd.Env = append(os.Environ(), "CTX_CORE=off")
+	cmd.Env = e.p.Environ("CTX_CORE=off")
 	cmd.Stdin = strings.NewReader(stdin)
 	var o, eb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &o, &eb
@@ -118,7 +121,8 @@ func (e *removeEnv) bash(t *testing.T, stdin string, args ...string) removeRun {
 
 func (e *removeEnv) goRun(t *testing.T, stdin string, args ...string) removeRun {
 	var o, eb bytes.Buffer
-	code := Remove(tui.Term{In: strings.NewReader(stdin), Out: &o, Err: &eb}, args)
+	var code int
+	e.p.inProc("", func() { code = Remove(tui.Term{In: strings.NewReader(stdin), Out: &o, Err: &eb}, args) })
 	return e.collect(t, o.String(), eb.String(), code)
 }
 
@@ -161,7 +165,7 @@ func TestRemoveMatchesBash(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			e := newRemoveEnv(t)
 			if c.provider != "" {
-				t.Setenv("CTX_SECRET_PROVIDER", c.provider)
+				e.p.Setenv("CTX_SECRET_PROVIDER", c.provider)
 			}
 			e.seed(t, c.config, c.tweak)
 			want := e.bash(t, c.stdin, c.args...)
@@ -271,7 +275,7 @@ func TestRemoveHelpers(t *testing.T) {
 	if err := sshRemoveHost("github-x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := gitconfigRemoveInclude(f.home + "/.config/git/ctx-x"); err != nil {
+	if err := gitconfigRemoveInclude(f.home+"/.config/git/ctx-x", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(sshConfigPath()); err == nil {
@@ -279,7 +283,7 @@ func TestRemoveHelpers(t *testing.T) {
 	}
 	// An exact path line not under an includeIf header is left alone.
 	f.writeHome(".gitconfig", "[include]\n  path = "+f.home+"/.config/git/ctx-x\n")
-	if err := gitconfigRemoveInclude(f.home + "/.config/git/ctx-x"); err != nil {
+	if err := gitconfigRemoveInclude(f.home+"/.config/git/ctx-x", nil); err != nil {
 		t.Fatal(err)
 	}
 	gc, _ := os.ReadFile(f.home + "/.gitconfig")

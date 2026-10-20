@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +74,7 @@ func TestEchoE(t *testing.T) {
 // against identical fixtures: file store plus a fake `pass`.
 type secretHarness struct {
 	t               *testing.T
+	p               *ptest
 	f               *fixture
 	state, store    string
 	passLog         string
@@ -141,9 +143,11 @@ func (h *secretHarness) snapshot() string {
 	return b.String()
 }
 
+// newSecretHarness marks t parallel (see ptest).
 func newSecretHarness(t *testing.T) *secretHarness {
 	t.Helper()
-	h := &secretHarness{t: t, f: newFixture(t), provider: "file"}
+	p := newPtest(t)
+	h := &secretHarness{t: t, p: p, f: newPFixture(p), provider: "file"}
 	h.state, h.store = t.TempDir(), t.TempDir()
 	return h
 }
@@ -152,7 +156,7 @@ func newSecretHarness(t *testing.T) *secretHarness {
 func (h *secretHarness) install() {
 	t := h.t
 	if h.withoutFakePass {
-		if _, err := exec.LookPath("pass"); err == nil {
+		if _, err := lookPath("pass"); err == nil {
 			t.Skip("a real pass is installed")
 		}
 	} else {
@@ -165,25 +169,25 @@ show) f="$FAKE_STATE/pass/$2"; [ -f "$f" ] || exit 1; cat "$f" ;;
 rm) rm -f "$FAKE_STATE/pass/$3" "$PASSWORD_STORE_DIR/$3.gpg" ;;
 esac`)
 		h.passLog = log
-		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		h.p.Setenv("PATH", dir+string(os.PathListSeparator)+h.p.Getenv("PATH"))
 	}
-	t.Setenv("FAKE_STATE", h.state)
-	t.Setenv("PASSWORD_STORE_DIR", h.store)
-	t.Setenv("USER", "tester")
-	t.Setenv("CTX_SECRET_PROVIDER", h.provider)
-	t.Setenv("CTX_NO_GUM", "1")
-	t.Setenv("FAKE_PASS_FAIL_KEY", h.failKey)
+	h.p.Setenv("FAKE_STATE", h.state)
+	h.p.Setenv("PASSWORD_STORE_DIR", h.store)
+	h.p.Setenv("USER", "tester")
+	h.p.Setenv("CTX_SECRET_PROVIDER", h.provider)
+	h.p.Setenv("CTX_NO_GUM", "1")
+	h.p.Setenv("FAKE_PASS_FAIL_KEY", h.failKey)
 	if h.passFail {
-		t.Setenv("FAKE_PASS_FAIL", "1")
+		h.p.Setenv("FAKE_PASS_FAIL", "1")
 	} else {
-		t.Setenv("FAKE_PASS_FAIL", "")
+		h.p.Setenv("FAKE_PASS_FAIL", "")
 	}
 }
 
 func (h *secretHarness) bash(stdin string, args []string) secretResult {
 	h.setup()
 	cmd := exec.Command(bashBin(h.t), append([]string{"--no-gum"}, args...)...)
-	cmd.Env = append(os.Environ(), "CTX_CORE=off")
+	cmd.Env = h.p.Environ("CTX_CORE=off")
 	cmd.Stdin = strings.NewReader(stdin)
 	var o, e bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &o, &e
@@ -202,7 +206,8 @@ func (h *secretHarness) goRun(stdin string, args []string) secretResult {
 	h.setup()
 	var o, e bytes.Buffer
 	term := tui.Term{In: strings.NewReader(stdin), Out: &o, Err: &e}
-	code := SecretIn(term, args[1:]) // args[0] is "secret"
+	var code int
+	h.p.inProc("", func() { code = SecretIn(term, args[1:]) }) // args[0] is "secret"
 	return secretResult{o.String(), e.String(), code, h.snapshot()}
 }
 
@@ -257,7 +262,10 @@ func TestSecretSetCancelled(t *testing.T) {
 	h.install()
 	h.setup()
 	var o, e bytes.Buffer
-	code := SecretIn(tui.Term{In: strings.NewReader(""), Out: &o, Err: &e}, []string{"set", "p", "K"})
+	var code int
+	h.p.inProc("", func() {
+		code = SecretIn(tui.Term{In: strings.NewReader(""), Out: &o, Err: &e}, []string{"set", "p", "K"})
+	})
 	if code != 130 {
 		t.Errorf("code = %d, want 130", code)
 	}
@@ -279,8 +287,15 @@ func TestSecretSetRich(t *testing.T) {
 	h.install()
 	h.setup()
 	var o, e bytes.Buffer
-	term := tui.Term{In: strings.NewReader("s3cret\r"), Out: &o, Err: &e, Rich: true}
-	if code := SecretIn(term, []string{"set", "p", "K"}); code != 0 {
+	// Keys through an open pipe: a reader at EOF right after them can let
+	// huh's EOF grace cancel the form first on a loaded machine.
+	in, keys := io.Pipe()
+	go func() { _, _ = io.WriteString(keys, "s3cret\r") }()
+	t.Cleanup(func() { _ = keys.Close() })
+	term := tui.Term{In: in, Out: &o, Err: &e, Rich: true}
+	var code int
+	h.p.inProc("", func() { code = SecretIn(term, []string{"set", "p", "K"}) })
+	if code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, e.String())
 	}
 	got, err := os.ReadFile(filepath.Join(h.f.dir, "secrets/p/K"))
@@ -368,7 +383,10 @@ func TestSecretMigrateCancelledKeepsCopies(t *testing.T) {
 	h.install()
 	h.setup()
 	var o, e bytes.Buffer
-	code := SecretIn(tui.Term{In: strings.NewReader(""), Out: &o, Err: &e}, []string{"migrate", "p", "pass"})
+	var code int
+	h.p.inProc("", func() {
+		code = SecretIn(tui.Term{In: strings.NewReader(""), Out: &o, Err: &e}, []string{"migrate", "p", "pass"})
+	})
 	if code != 130 || !strings.HasSuffix(e.String(), "! Cancelled by user.\n") {
 		t.Errorf("code %d stderr %q", code, e.String())
 	}

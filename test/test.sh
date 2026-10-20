@@ -770,7 +770,29 @@ EOS
     rm -f "$td/calls"
     out="$(CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" deactivate --eval bash 2>"$td/err")"
     [[ -z "$out" && "$(cat "$td/err")" == "No active profile." ]] || { echo "deactivate fallback: $out / $(cat "$td/err")"; exit 1; }
-    [[ "$(cat "$td/calls")" == "implements deactivate --eval" ]] || { echo "deactivate calls: $(cat "$td/calls")"; exit 1; }
+    [[ "$(cat "$td/calls")" == "implements deactivate --eval bash" ]] || { echo "deactivate calls: $(cat "$td/calls")"; exit 1; }
+    # setup and its aliases forward as setup, with every argument
+    rm -f "$td/calls"
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" --dry-run import --config "$td/s conf" -y 2>/dev/null)"
+    [[ "$out" == "GO setup --config $td/s conf -y" ]] || { echo "go setup: $out"; exit 1; }
+    CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --no-gum add --config "$td/missing" --yes >/dev/null 2>&1 || true
+    [[ "$(head -1 "$td/calls")" == "implements setup --config $td/missing --yes" ]] || { echo "setup calls: $(cat "$td/calls")"; exit 1; }
+    # The wizard and help forward too (bare setup, --scope, --help)
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" setup </dev/null 2>/dev/null)"
+    [[ "$out" == "GO setup" ]] || { echo "go wizard: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" add --scope full --help 2>/dev/null)"
+    [[ "$out" == "GO setup --scope full --help" ]] || { echo "go help: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" setup --extend acme -y </dev/null 2>/dev/null)"
+    [[ "$out" == "GO setup --extend acme -y" ]] || { echo "go extend: $out"; exit 1; }
+    # The real ctx-core takes every setup shape, --extend NAME included
+    if [[ -x "$ROOT_DIR/bin/ctx-core" ]]; then
+      local shape
+      for shape in "" "--scope full" "--scope clone" "--help" "-y" "--config $td/missing" "--bogus" "--extend" \
+        "--extend acme" "-y --extend acme"; do
+        # shellcheck disable=SC2086 # shape is a list of words
+        "$ROOT_DIR/bin/ctx-core" implements setup $shape || { echo "implements setup $shape: no"; exit 1; }
+      done
+    fi
     # implements 0 but the command exits 127: that is the answer, Bash must not run
     cat >"$td/fake127" <<'EOS'
 #!/usr/bin/env bash
@@ -1191,6 +1213,430 @@ test_remove_only_own_include() {
   pass "remove keeps other profiles' includes and user sections"
 }
 
+# ── Interactive setup wizard (plain mode, answers on stdin) ─────────────────
+# _wizard_sandbox TD: fake HOME under TD, file secrets, CTX_CORE=off, and fake
+# ssh-keygen/gh/mise/kubectl/az/gcloud on PATH that append argv to TD/argv.log.
+# gh auth status prints TD/gh_status. The caller cds into the work dir.
+_wizard_sandbox() {
+  local td="$1" t
+  # CTX_CORE follows the suite: with ctx-core built, these wizard runs are
+  # served by Go; under CTX_CORE=off by Bash.
+  export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+  export CTX_SECRET_PROVIDER=file
+  unset XDG_CONFIG_HOME CTX_WORK_ROOT CTX_NO_GUM
+  mkdir -p "$HOME/.ssh" "$td/fake" "$td/w/acme"
+  : >"$td/argv.log"
+  : >"$td/gh_status"
+  cat >"$td/fake/ssh-keygen" <<EOS
+#!/bin/sh
+{ printf 'ssh-keygen'; printf ' [%s]' "\$@"; echo; } >>"$td/argv.log"
+f=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -lf) echo "256 SHA256:fake x (ED25519)"; exit 0 ;;
+    -f) f="\$2"; shift ;;
+  esac
+  shift
+done
+[ -n "\$f" ] && { echo key >"\$f"; echo "ssh-ed25519 AAAAfake ctx" >"\$f.pub"; }
+exit 0
+EOS
+  cat >"$td/fake/gh" <<EOS
+#!/bin/sh
+{ printf 'gh'; printf ' [%s]' "\$@"; echo; } >>"$td/argv.log"
+[ "\$1 \$2" = "auth status" ] && cat "$td/gh_status"
+exit 0
+EOS
+  for t in mise kubectl az gcloud; do
+    printf '#!/bin/sh\n{ printf %s; printf " [%%s]" "$@"; echo; } >>"%s"\nexit 0\n' "$t" "$td/argv.log" >"$td/fake/$t"
+  done
+  chmod +x "$td/fake/"*
+  export PATH="$td/fake:$ROOT_DIR/bin:$PATH"
+}
+
+# Paths and file hashes under a directory (for "nothing changed" checks).
+_tree_digest() {
+  (cd "$1" && find . -print | LC_ALL=C sort && find . -type f -exec shasum {} + | LC_ALL=C sort)
+}
+
+test_setup_extend_reaches_flow() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    mkdir -p "$CTX_DIR/profiles"
+    echo key >"$HOME/.ssh/id_acme"
+    printf '# keep\n' >"$td/w/acme/mise.toml"
+    {
+      printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=dev@acme.com\nWORK_DIR=%s\n' "$td/w/acme"
+      printf 'SSH_KEY_PATH=%s\nGITHUB_USER=octo\nAWS_PROFILE_NAME=dev\n' "$HOME/.ssh/id_acme"
+    } >"$CTX_DIR/profiles/acme.conf"
+    cd "$td/w/acme"
+    # identity? n, secrets? n, env vars? n, write? y
+    out="$(printf '%s\n' n n n y | ctx --no-gum setup --extend acme 2>&1)" || { echo "extend failed: $out"; exit 1; }
+    grep -q 'Extend profile: acme' <<<"$out" || { echo "extend flow not reached: $out"; exit 1; }
+    grep -q "Profile 'acme' updated." <<<"$out" || { echo "no update summary: $out"; exit 1; }
+    # R7: an existing mise.toml is kept and says so.
+    grep -qF "mise.toml kept (already exists): $td/w/acme/mise.toml" <<<"$out" || { echo "kept line missing: $out"; exit 1; }
+    ! grep -q 'mise.toml generated' <<<"$out" || { echo "claims generated: $out"; exit 1; }
+    [[ "$(cat "$td/w/acme/mise.toml")" == '# keep' ]] || { echo "mise.toml overwritten"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup --extend reaches the extend flow"
+  pass "setup --extend works on an existing profile (and keeps mise.toml)"
+}
+
+# R26: extend never duplicates SECRET_KEYS: a key already listed (or entered
+# twice) is kept once; new keys are appended.
+test_setup_extend_secret_keys_once() {
+  (
+    set -euo pipefail
+    local td out conf
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    mkdir -p "$CTX_DIR/profiles"
+    echo key >"$HOME/.ssh/id_acme"
+    {
+      printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=dev@acme.com\nWORK_DIR=%s\n' "$td/w/acme"
+      printf 'SSH_KEY_PATH=%s\nGITHUB_USER=octo\nAWS_PROFILE_NAME=dev\nSECRET_KEYS=GH_TOKEN\n' "$HOME/.ssh/id_acme"
+    } >"$CTX_DIR/profiles/acme.conf"
+    cd "$td/w/acme"
+    # identity? n, secrets? y, GH_TOKEN? y + value, another? y NEW_KEY + value,
+    # another? y GH_TOKEN + value, another? n, env vars? n, write? y
+    out="$(printf '%s\n' n y y tok1 y NEW_KEY v2 y GH_TOKEN tok3 n n y | ctx --no-gum setup --extend acme 2>&1)" \
+      || { echo "extend failed: $out"; exit 1; }
+    conf="$(cat "$CTX_DIR/profiles/acme.conf")"
+    grep -qxF 'SECRET_KEYS=GH_TOKEN\ NEW_KEY' <<<"$conf" || { echo "SECRET_KEYS wrong: $conf"; exit 1; }
+    [[ "$(cat "$CTX_DIR/secrets/acme/GH_TOKEN")" == tok3 ]] || { echo "GH_TOKEN not updated"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup --extend keeps each SECRET_KEYS entry once (R26)"
+  pass "setup --extend keeps each SECRET_KEYS entry once (R26)"
+}
+
+test_setup_dry_run_changes_nothing() {
+  (
+    set -euo pipefail
+    local td out before
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cd "$td/w/acme"
+    before="$(_tree_digest "$td/home"; _tree_digest "$td/w")"
+    # Full, acme, name, email, no signing, existing path (missing → create? y), auto import,
+    # generate key? y, gh login? y, user octo, upload? y, aws/azure/gcp/kube blank,
+    # secrets: add, GH_TOKEN y + value, NPM n, DOCKER n, another n, env vars n.
+    out="$(printf '%s\n' 2 acme Dev dev@acme.com 1 2 "$td/w/newdir" y 1 y y octo y '' '' '' '' 2 y s3cr3tval n n n n \
+      | ctx --no-gum --dry-run setup 2>&1)" || { echo "dry-run failed: $out"; exit 1; }
+    [[ "$(_tree_digest "$td/home"; _tree_digest "$td/w")" == "$before" ]] || { echo "dry-run changed files"; find "$td/home" "$td/w"; exit 1; }
+    [[ ! -e "$CTX_DIR" ]] || { echo "dry-run created CTX_DIR"; exit 1; }
+    ! grep -q '^ssh-keygen' "$td/argv.log" || { echo "ssh-keygen ran: $(cat "$td/argv.log")"; exit 1; }
+    ! grep -v '^gh \[auth\] \[status\]$' "$td/argv.log" | grep -q '^gh' || { echo "gh changed state: $(cat "$td/argv.log")"; exit 1; }
+    local want
+    for want in \
+      "[dry-run] would create $CTX_DIR" \
+      "[dry-run] would create directory $td/w/newdir" \
+      "[dry-run] would generate SSH key $HOME/.ssh/ctx_acme" \
+      "[dry-run] would run gh auth login" \
+      "[dry-run] would upload SSH key to GitHub (octo)" \
+      "[dry-run] would store secret GH_TOKEN" \
+      "$td/w/newdir/mise.toml" \
+      "(host block: github-acme)" \
+      "(includeIf block)"; do
+      grep -qF -- "$want" <<<"$out" || { echo "missing '$want' in: $out"; exit 1; }
+    done
+    ! grep -q s3cr3tval <<<"$out" || { echo "secret value echoed"; exit 1; }
+
+    # Clone scope, existing key, no folder: only files that would be written are listed.
+    echo key >"$HOME/.ssh/id_c"
+    before="$(_tree_digest "$td/home")"
+    out="$(printf '%s\n' c1 1 "$HOME/.ssh/id_c" '' 1 | ctx --no-gum --dry-run setup --scope clone 2>&1)" \
+      || { echo "clone dry-run failed: $out"; exit 1; }
+    [[ "$(_tree_digest "$td/home")" == "$before" ]] || { echo "clone dry-run changed files"; exit 1; }
+    grep -qF '(host block: github-c1)' <<<"$out" || { echo "no host line: $out"; exit 1; }
+    ! grep -qF 'mise.toml' <<<"$out" || { echo "mise.toml listed without WORK_DIR: $out"; exit 1; }
+    ! grep -qF 'includeIf' <<<"$out" || { echo "includeIf listed without WORK_DIR: $out"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup --dry-run changes nothing"
+  pass "setup --dry-run leaves HOME untouched and lists what it would do"
+}
+
+test_setup_gh_accounts_both_formats() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    printf 'github.com\n  X Failed to log in to github.com account carol (keyring)\n  ✓ Logged in to github.com account alice (keyring)\n  - Active account: true\n  ✓ Logged in to github.com as bob (/x/hosts.yml)\n' >"$td/gh_status"
+    cd "$td/w/acme"
+    # ... generate key? n, gh login? n, pick account 3 (bob), aws/azure/gcp/kube, skip secrets, env n, write y
+    out="$(printf '%s\n' 2 acme Dev dev@acme.com 1 1 1 n n 3 '' '' '' '' 1 n y | ctx --no-gum setup 2>&1)" \
+      || { echo "setup failed: $out"; exit 1; }
+    grep -q '^  2  alice$' <<<"$out" && grep -q '^  3  bob$' <<<"$out" || { echo "picker items: $out"; exit 1; }
+    ! grep -q carol <<<"$out" || { echo "failed login listed: $out"; exit 1; }
+    grep -q '^GITHUB_USER=bob$' "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "detect_gh_accounts parses both gh formats"
+  pass "setup GitHub picker lists 'account USER' and 'as USER' logins"
+}
+
+test_setup_secrets_wait_for_confirm() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cd "$td/w/acme"
+    # ... secrets: add, GH_TOKEN y + value, NPM n, DOCKER n, another n, env n, write? <last>
+    local -a ans=(2 acme Dev dev@acme.com 1 1 1 n n '' '' '' '' '' 2 y s3cr3tval n n n n)
+    out="$(printf '%s\n' "${ans[@]}" n | ctx --no-gum setup 2>&1)" && { echo "abort exited 0: $out"; exit 1; }
+    [[ ! -e "$CTX_DIR/secrets/acme/GH_TOKEN" ]] || { echo "secret stored before confirm"; exit 1; }
+    [[ ! -e "$CTX_DIR/profiles/acme.conf" ]] || { echo "profile written on abort"; exit 1; }
+
+    out="$(printf '%s\n' "${ans[@]}" y | ctx --no-gum setup 2>&1)" || { echo "confirm failed: $out"; exit 1; }
+    [[ "$(cat "$CTX_DIR/secrets/acme/GH_TOKEN")" == s3cr3tval ]] || { echo "secret not stored"; exit 1; }
+    grep -q '^SECRET_KEYS=GH_TOKEN$' "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
+    grep -q 'GH_TOKEN → file store' <<<"$out" || { echo "no stored line: $out"; exit 1; }
+    ! grep -q s3cr3tval <<<"$out" || { echo "secret value echoed"; exit 1; }
+
+    # A store that fails warns and leaves the key out of SECRET_KEYS.
+    mkdir -p "$td/w/acme2" && cd "$td/w/acme2"
+    printf 'x' >"$CTX_DIR/secrets/acme2"
+    ans[1]=acme2
+    out="$(printf '%s\n' "${ans[@]}" y | ctx --no-gum setup 2>&1)" || { echo "failing-store run failed: $out"; exit 1; }
+    grep -q 'Could not store GH_TOKEN' <<<"$out" || { echo "no warning: $out"; exit 1; }
+    grep -q "^SECRET_KEYS=''$" "$CTX_DIR/profiles/acme2.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme2.conf")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup stores secrets only after the review"
+  pass "setup stores secrets only after confirm, and only lists stored keys"
+}
+
+test_setup_key_comment_never_empty() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cd "$td/w/acme"
+    # empty email; generate key? y, passphrase? n, Enter after adding; gh login n; user blank; ...
+    out="$(printf '%s\n' 2 acme Dev '' 1 1 1 y n '' n '' '' '' '' '' 1 n y | ctx --no-gum setup 2>&1)" \
+      || { echo "setup failed: $out"; exit 1; }
+    grep -qF 'ssh-keygen [-t] [ed25519] [-C] [ctx-acme@local]' "$td/argv.log" || { echo "argv: $(cat "$td/argv.log")"; exit 1; }
+    ! grep -qF '[-C] []' "$td/argv.log" || { echo "empty comment: $(cat "$td/argv.log")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "generated key comment falls back to ctx-<profile>@local"
+  pass "setup never runs ssh-keygen -C \"\""
+}
+
+# A generated key on a HOME with no ~/.ssh: the wizard creates ~/.ssh (0700).
+test_setup_generate_creates_ssh_dir() {
+  (
+    set -euo pipefail
+    local td out mode
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    rm -rf "$HOME/.ssh"
+    cd "$td/w/acme"
+    # import mode; "No SSH keys found. Generate one?" y, passphrase? n, Enter; gh login n; ...
+    out="$(printf '%s\n' 2 acme Dev dev@acme.com 1 1 1 y n '' n '' '' '' '' '' 1 n y | ctx --no-gum setup 2>&1)" \
+      || { echo "setup failed: $out"; exit 1; }
+    mode="$(ls -ld "$HOME/.ssh" | cut -c1-10)"
+    [[ "$mode" == drwx------ ]] || { echo "$HOME/.ssh mode: $mode"; exit 1; }
+    [[ -f "$HOME/.ssh/ctx_acme" ]] || { echo "no key: $out"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup creates ~/.ssh before generating a key"
+  pass "setup creates ~/.ssh (0700) before generating a key"
+}
+
+test_setup_pick_existing_key_index() {
+  (
+    set -euo pipefail
+    local td out k
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    for k in id_a id_b; do echo key >"$HOME/.ssh/$k"; echo pub >"$HOME/.ssh/$k.pub"; done
+    cd "$td/w/acme"
+    # key picker: 1 Generate, 2 [1] id_a, 3 [2] id_b
+    out="$(printf '%s\n' 2 acme Dev dev@acme.com 1 1 1 3 n '' '' '' '' '' 1 n y | ctx --no-gum setup 2>&1)" \
+      || { echo "setup failed: $out"; exit 1; }
+    grep -qx "SSH_KEY_PATH=$HOME/.ssh/id_b" "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
+    [[ ! -e "$HOME/.ssh/ctx_acme" ]] || { echo "generated a key instead"; exit 1; }
+    rm -rf "$td"
+  ) || fail "SSH key choice [2] uses key 2"
+  pass "setup existing-key choice is parsed portably"
+}
+
+test_setup_mise_toml_escaping() {
+  (
+    set -euo pipefail
+    local td out name
+    if ! python3 -c 'import tomllib' 2>/dev/null; then
+      pass "setup mise.toml escaping (skipped: python3 has no tomllib)"
+      exit 0
+    fi
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cd "$td/w/acme"
+    name='Dev "Q" \ $HOME `x`'
+    # ... env vars? y, FOO=a"b\c, stop, write y
+    out="$(printf '%s\n' 2 acme "$name" dev@acme.com 1 1 1 n n '' '' '' '' '' 1 y FOO 'a"b\c' '' y | ctx --no-gum setup 2>&1)" \
+      || { echo "setup failed: $out"; exit 1; }
+    out="$(python3 -c 'import sys,tomllib; d=tomllib.load(open(sys.argv[1],"rb")); print(d["env"]["FOO"])' "$td/w/acme/mise.toml")" \
+      || { echo "mise.toml does not parse: $(cat "$td/w/acme/mise.toml")"; exit 1; }
+    [[ "$out" == 'a"b\c' ]] || { echo "FOO parsed as: $out"; exit 1; }
+    # The enter hook passes the git name to git unchanged.
+    mkdir -p "$td/gitlog"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$3" >>"%s"\n' "$td/gitlog/out" >"$td/gitlog/git"
+    chmod +x "$td/gitlog/git"
+    python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["hooks"]["enter"]["script"])' "$td/w/acme/mise.toml" \
+      | PATH="$td/gitlog:/usr/bin:/bin" bash
+    [[ "$(head -1 "$td/gitlog/out")" == "$name" ]] || { echo "hook git name: $(cat "$td/gitlog/out")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "mise.toml values are escaped"
+  pass "setup mise.toml escapes TOML strings and the hook's git name"
+}
+
+test_setup_no_secrets_bash32() {
+  (
+    set -euo pipefail
+    local td out
+    [[ -x /bin/bash ]] || { pass "setup under /bin/bash (skipped: no /bin/bash)"; exit 0; }
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    echo key >"$HOME/.ssh/id_c"
+    cd "$td/w/acme"
+    out="$(printf '%s\n' c1 1 "$HOME/.ssh/id_c" '' 1 y | /bin/bash "$ROOT_DIR/bin/ctx" --no-gum setup --scope clone 2>&1)" \
+      || { echo "setup failed: $out"; exit 1; }
+    ! grep -q 'unbound variable' <<<"$out" || { echo "unbound: $out"; exit 1; }
+    [[ -f "$CTX_DIR/profiles/c1.conf" ]] || { echo "no profile: $out"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup with no secrets under /bin/bash"
+  pass "setup with no secrets works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
+}
+
+test_setup_cancel_exits_130() {
+  (
+    set -euo pipefail
+    local td before rc n input
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cd "$td/w/acme"
+    before="$(_tree_digest "$td/home"; _tree_digest "$td/w")"
+    # EOF at: the first prompt (scope picker), the profile name (ask in $(…)),
+    # and a later ask_yn ("No SSH keys found. Generate one…?", main shell).
+    for input in '' $'2\n' $'2\nacme\nDev\ndev@acme.com\n1\n1\n1\n'; do
+      rc=0
+      printf '%s' "$input" | ctx --no-gum setup >"$td/out" 2>"$td/err" || rc=$?
+      [[ "$rc" == 130 ]] || { echo "rc=$rc for input $(printf %q "$input"): $(cat "$td/err")"; exit 1; }
+      n="$(grep -c 'Cancelled by user\.' "$td/err" || true)"
+      [[ "$n" == 1 ]] || { echo "message printed $n times: $(cat "$td/err")"; exit 1; }
+      [[ "$(_tree_digest "$td/home"; _tree_digest "$td/w")" == "$before" ]] || { echo "files changed"; find "$td/home" "$td/w"; exit 1; }
+    done
+    rm -rf "$td"
+  ) || fail "EOF at a setup prompt exits 130"
+  pass "setup EOF at a prompt prints one cancel line, exits 130, writes nothing"
+}
+
+# user_cancelled in $(…) when the main shell is already waiting for the
+# subshell (its stdout closed first): bash drops a SIGINT that arrives then if
+# the child exits normally, so the child must die by SIGINT for the trap to run.
+test_user_cancelled_while_main_waits() {
+  local rc out sh
+  for sh in bash /bin/bash; do
+    [[ "$sh" == bash || -x "$sh" ]] || continue
+    rc=0
+    out="$("$sh" -c 'source "$1/lib/core.sh"; trap "exit 130" INT
+      x="$(exec >&-; sleep 0.3; user_cancelled 2>/dev/null)"
+      echo "continued with x=[$x]"' _ "$ROOT_DIR" 2>&1)" || rc=$?
+    [[ "$rc" == 130 && -z "$out" ]] || fail "user_cancelled in \$(…) while main waits ($sh): rc=$rc out=$out"
+  done
+  pass "user_cancelled in \$(…) stops the main shell even when it is already waiting"
+}
+
+# R25: a failing ssh-keygen in the wizard stops setup (doctor hint, exit 1).
+test_setup_keygen_failure_dies() {
+  (
+    set -euo pipefail
+    local td out rc=0
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    printf '#!/bin/sh\necho "ssh-keygen: boom" >&2\nexit 1\n' >"$td/fake/ssh-keygen"
+    cd "$td/w/acme"
+    # clone scope: name, generate, passphrase? n
+    out="$(printf '%s\n' acme 2 n '' '' 1 y | ctx --no-gum setup --scope clone 2>&1)" || rc=$?
+    [[ "$rc" == 1 ]] || { echo "rc=$rc: $out"; exit 1; }
+    grep -qF "ssh-keygen failed for $HOME/.ssh/ctx_acme" <<<"$out" || { echo "no die line: $out"; exit 1; }
+    grep -qF 'ctx doctor' <<<"$out" || { echo "no doctor hint: $out"; exit 1; }
+    ! grep -q 'SSH key generated' <<<"$out" || { echo "claims generated: $out"; exit 1; }
+    [[ ! -e "$CTX_DIR" ]] || { echo "wrote ~/.ctx"; exit 1; }
+    rm -rf "$td"
+  ) || fail "ssh-keygen failure in the wizard dies"
+  pass "setup wizard stops with a doctor hint when ssh-keygen fails"
+}
+
+# R17: a rejected --config leaves no WORK_DIR and no generated key behind.
+test_setup_batch_checks_before_side_effects() {
+  (
+    set -euo pipefail
+    local td cfg core="${CTX_CORE:-}" rc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    export CTX_CORE="$core"
+    cfg="$td/s.conf"
+    printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nWORK_DIR=%s\nSSH_MODE=generate\nSIGNING_FORMAT=zzz\n' "$td/w/new" >"$cfg"
+    set +e
+    ctx --no-gum setup --config "$cfg" --yes >/dev/null 2>"$td/err"
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "rc=$rc"; exit 1; }
+    grep -q 'SIGNING_FORMAT must be ssh|gpg|none' "$td/err" || { echo "err: $(cat "$td/err")"; exit 1; }
+    [[ ! -e "$td/w/new" ]] || { echo "WORK_DIR created"; exit 1; }
+    [[ ! -e "$HOME/.ssh/ctx_acme" ]] || { echo "key generated"; exit 1; }
+    ! grep -q ssh-keygen "$td/argv.log" || { echo "ssh-keygen ran"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup --config checks before side effects"
+  pass "setup --config validates the whole file before creating WORK_DIR or a key"
+}
+
+# R18: quoted --config values work on bash 3.2 (no negative substring length).
+test_setup_cfg_quoted_bash32() {
+  (
+    set -euo pipefail
+    local td cfg out
+    [[ -x /bin/bash ]] || { pass "quoted --config values (skipped: no /bin/bash)"; exit 0; }
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cfg="$td/s.conf"
+    printf 'PROFILE_NAME='"'"'acme'"'"'\nGIT_NAME="Jane Doe"\nGIT_EMAIL="jane@acme.com"\nWORK_DIR="%s"\nSSH_MODE=skip\n' "$td/w/acme" >"$cfg"
+    out="$(/bin/bash "$ROOT_DIR/bin/ctx" --no-gum setup --config "$cfg" --yes 2>&1)" || { echo "setup failed: $out"; exit 1; }
+    grep -qx 'GIT_NAME=Jane\\ Doe' "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
+    grep -qx "WORK_DIR=$td/w/acme" "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "quoted --config values on /bin/bash"
+  pass "quoted --config values work on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
+}
+
+test_mise_hook_comment_no_injection() {
+  (
+    set -euo pipefail
+    local td
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    mkdir -p "$td/w" "$td/run"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT_DIR/lib/core.sh"
+    generate_mise_toml "acme" "$td/w" "Dev" $'bad\ntouch PWNED\r\ttouch PWNED2' "" "" "" "" "" ""
+    if python3 -c 'import tomllib' 2>/dev/null; then
+      python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["hooks"]["enter"]["script"])' "$td/w/mise.toml" >"$td/hook.sh" \
+        || { echo "mise.toml does not parse: $(cat "$td/w/mise.toml")"; exit 1; }
+    else
+      awk '/^script = """/{f=1; next} f && /^"""/{exit} f' "$td/w/mise.toml" | sed 's/\\u000A/\n/g' >"$td/hook.sh"
+    fi
+    (cd "$td/run" && PATH="/usr/bin:/bin" bash "$td/hook.sh" >/dev/null 2>&1) || true
+    [[ ! -e "$td/run/PWNED" && ! -e "$td/run/PWNED2" ]] || { echo "comment injection ran: $(cat "$td/hook.sh")"; exit 1; }
+    grep -q 'address): "bad touch PWNED  touch PWNED2"' "$td/hook.sh" || { echo "comment text: $(cat "$td/hook.sh")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "mise hook comment lines cannot inject commands"
+  pass "mise.toml hook comments flatten control characters"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1231,4 +1677,20 @@ test_plain_prompts_use_stderr
 
 test_remove_only_own_include
 test_remove_gitconfig_symlink_and_nomatch
+test_setup_extend_reaches_flow
+test_setup_extend_secret_keys_once
+test_setup_dry_run_changes_nothing
+test_setup_gh_accounts_both_formats
+test_setup_secrets_wait_for_confirm
+test_setup_key_comment_never_empty
+test_setup_generate_creates_ssh_dir
+test_setup_pick_existing_key_index
+test_setup_mise_toml_escaping
+test_setup_no_secrets_bash32
+test_setup_cancel_exits_130
+test_user_cancelled_while_main_waits
+test_setup_keygen_failure_dies
+test_mise_hook_comment_no_injection
+test_setup_batch_checks_before_side_effects
+test_setup_cfg_quoted_bash32
 echo "All tests passed."

@@ -27,24 +27,38 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|guard> [args]\n"
+const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|remove|setup|guard> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
-// Each entry reports whether it handles the given first argument (the
+// Each entry gets the arguments after the command and reports whether
+// ctx-core handles that shape. Most look only at the first argument (the
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
 // list and status take no subcommand besides --json; guard for every subcommand.
-var implemented = map[string]func(sub string) bool{
-	"list":           func(sub string) bool { return sub == "" || sub == "--json" },
-	"status":         func(sub string) bool { return sub == "" || sub == "--json" },
-	"workdir-prompt": func(string) bool { return true },
-	"env":            func(string) bool { return true },
-	"run":            func(string) bool { return true },
-	"guard":          func(sub string) bool { return guardSubs[sub] },
-	"secret":         func(sub string) bool { return secretSubs[sub] },
-	"config":         func(sub string) bool { return configSubs[sub] },
-	"deactivate":     func(string) bool { return true },
-	"use":            func(string) bool { return true },
-	"remove":         func(string) bool { return true },
+var implemented = map[string]func(args []string) bool{
+	"list":           func(a []string) bool { return first(a) == "" || first(a) == "--json" },
+	"status":         func(a []string) bool { return first(a) == "" || first(a) == "--json" },
+	"workdir-prompt": func([]string) bool { return true },
+	"env":            func([]string) bool { return true },
+	"run":            func([]string) bool { return true },
+	"guard":          func(a []string) bool { return guardSubs[first(a)] },
+	"secret":         func(a []string) bool { return secretSubs[first(a)] },
+	"config":         func(a []string) bool { return configSubs[first(a)] },
+	"deactivate":     func([]string) bool { return true },
+	"use":            func([]string) bool { return true },
+	"remove":         func([]string) bool { return true },
+	// setup and its aliases: every shape (the wizard, --extend, help,
+	// --config and the argument errors).
+	"setup":  func([]string) bool { return true },
+	"import": func([]string) bool { return true },
+	"add":    func([]string) bool { return true },
+}
+
+// first is args[0], or "" when there are no arguments.
+func first(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // secretSubs are the `secret` subcommands ctx-core runs.
@@ -64,11 +78,7 @@ func implements(cmd string, rest []string) bool {
 	if !ok {
 		return false
 	}
-	sub := ""
-	if len(rest) > 0 {
-		sub = rest[0]
-	}
-	return f(sub)
+	return f(rest)
 }
 
 // ctxVersion is the ctx version bin/ctx passes in CTX_VERSION, else the build version.
@@ -122,6 +132,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "remove":
 		term := osTerm(stdout, stderr)
 		return cli.Remove(term, args[1:])
+	case "setup", "import", "add":
+		term := osTerm(stdout, stderr)
+		return cli.SetupIn(term, args[1:])
 	case "guard":
 		sub := ""
 		if len(args) > 1 {

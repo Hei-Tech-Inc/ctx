@@ -18,6 +18,7 @@ import (
 type fixture struct {
 	t         *testing.T
 	home, dir string
+	p         *ptest // set for a parallel subtest (newPFixture)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -56,7 +57,7 @@ func (f *fixture) profile(name string, kv ...string) {
 
 func bashBin(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("bash"); err != nil {
+	if _, err := lookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
 	return filepath.Join(repoRoot, "bin", "ctx")
@@ -76,7 +77,7 @@ func (f *fixture) bash(dir string, args ...string) (string, int) {
 	f.t.Helper()
 	cmd := exec.Command(bashBin(f.t), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "CTX_CORE=off", "HOME="+f.home, "CTX_DIR="+f.dir)
+	cmd.Env = append(f.environ(), "CTX_CORE=off", "HOME="+f.home, "CTX_DIR="+f.dir)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -89,9 +90,17 @@ func (f *fixture) bash(dir string, args ...string) (string, int) {
 	return out.String(), code
 }
 
+// environ is the environment for a child process of this fixture's test.
+func (f *fixture) environ() []string {
+	if f.p != nil {
+		return f.p.Environ()
+	}
+	return os.Environ()
+}
+
 func ctxVersion(t *testing.T) string {
 	t.Helper()
-	src, err := os.ReadFile("../../lib/core.sh")
+	src, err := os.ReadFile(filepath.Join(repoRoot, "lib", "core.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
