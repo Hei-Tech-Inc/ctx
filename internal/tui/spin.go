@@ -15,6 +15,8 @@ const spinColor = 212
 // Bash's info line ("→ msg") to t.Out and then runs fn. Rich draws gum spin's
 // dot spinner with msg on t.Err until fn returns, then clears the line, so
 // nothing of it is left behind. fn must not write to the terminal itself.
+// The cursor stays visible (R24): a SIGINT mid-spin skips the deferred
+// cleanup and would otherwise leave the user's cursor hidden.
 func Spin(t Term, msg string, fn func()) {
 	if !t.Rich {
 		_, _ = io.WriteString(t.Out, EchoE(t.c(cyan)+"→"+t.c(reset)+" "+msg))
@@ -23,7 +25,6 @@ func Spin(t Term, msg string, fn func()) {
 	}
 	frames := spinner.Dot.Frames
 	done, stopped := make(chan struct{}), make(chan struct{})
-	_, _ = io.WriteString(t.Err, "\x1b[?25l") // hide the cursor
 	go func() {
 		defer close(stopped)
 		tick := time.NewTicker(spinner.Dot.FPS)
@@ -42,7 +43,7 @@ func Spin(t Term, msg string, fn func()) {
 	defer func() {
 		close(done)
 		<-stopped
-		_, _ = io.WriteString(t.Err, "\r\x1b[K\x1b[?25h") // clear the line, show the cursor
+		_, _ = io.WriteString(t.Err, "\r\x1b[K") // clear the line
 	}()
 	fn()
 }

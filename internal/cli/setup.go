@@ -77,10 +77,17 @@ func parseSetup(args []string) (f setupFlags, dieMsg string) {
 	return f, ""
 }
 
-// SetupImplemented reports whether ctx-core runs `ctx setup args...`: only
-// --config FILE together with --yes/-y or a truthy AUTO_CONFIRM in FILE (the
-// interactive review is not ported yet). Help, argument errors and an
-// unreadable FILE are left to Bash, which reports them.
+// wizardPorted reports whether the interactive wizard for f is ported: the
+// clone-only wizard (--scope clone). The full wizard and --extend are Task 7.
+func wizardPorted(f setupFlags) bool {
+	return !f.batch && f.scope == "clone" && f.extend == ""
+}
+
+// SetupImplemented reports whether ctx-core runs `ctx setup args...`: the
+// clone-only wizard (--scope clone without --config or --extend), and
+// --config FILE together with --yes/-y or a truthy AUTO_CONFIRM in FILE.
+// Help, argument errors and an unreadable FILE are left to Bash, which
+// reports them.
 func SetupImplemented(args []string) bool {
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
@@ -88,8 +95,11 @@ func SetupImplemented(args []string) bool {
 		}
 	}
 	f, msg := parseSetup(args)
-	if msg != "" || f.help || !f.batch {
+	if msg != "" || f.help {
 		return false
+	}
+	if !f.batch {
+		return wizardPorted(f)
 	}
 	c, err := setup.ReadConfig(f.config)
 	if err != nil {
@@ -122,16 +132,18 @@ func (u ui) setupDie(err error) int {
 }
 
 func notPorted(t tui.Term) int {
-	fmt.Fprintln(t.Err, "ctx-core: setup supports only --config FILE with --yes or AUTO_CONFIRM")
+	fmt.Fprintln(t.Err, "ctx-core: setup supports only --scope clone, and --config FILE with --yes or AUTO_CONFIRM")
 	return 127
 }
 
-// SetupIn runs `ctx setup|import|add` for --config FILE, mirroring cmd_import
-// in lib/cmd_import.sh with the R17 order (every check before any side
-// effect): header, preconditions, the account scan, resolution, mkdir of
-// WORK_DIR and ssh-keygen, the auto-confirmed review, ~/.ctx, then either the
-// dry-run report or the backups, the writes and the summary. Help and the
-// interactive wizard are not ported (exit 127; `implements` keeps them in Bash).
+// SetupIn runs `ctx setup|import|add`, mirroring cmd_import in
+// lib/cmd_import.sh. Without --config it runs the interactive wizard
+// (setupWizard). With --config it follows the R17 order (every check before
+// any side effect): header, preconditions, the account scan, resolution,
+// mkdir of WORK_DIR and ssh-keygen, the auto-confirmed review, ~/.ctx, then
+// either the dry-run report or the backups, the writes and the summary. Help,
+// --extend and the full wizard are not ported yet (exit 127; `implements`
+// keeps them in Bash).
 func SetupIn(t tui.Term, args []string) int {
 	u := termUI(t)
 	f, msg := parseSetup(args)
@@ -141,10 +153,13 @@ func SetupIn(t tui.Term, args []string) int {
 	if msg != "" {
 		return u.die(msg)
 	}
-	if !f.batch {
+	if !f.batch && !wizardPorted(f) {
 		return notPorted(t)
 	}
 	_, _ = io.WriteString(u.out, tui.Header(t, "ctx v"+os.Getenv("CTX_VERSION")+" — Add a client profile"))
+	if !f.batch {
+		return setupWizard(t, u, f)
+	}
 
 	c, err := setup.ReadConfig(f.config)
 	if err != nil {
@@ -216,5 +231,92 @@ func SetupIn(t tui.Term, args []string) int {
 		return 1 // Write printed the failing step's error line
 	}
 	setup.Summary(in, so, t.Rich)
+	return 0
+}
+
+// toolRunner runs a tool the way a Bash command does: with the terminal's
+// stdin, stdout and stderr, or with stderr discarded (2>/dev/null) when quiet.
+func toolRunner(t tui.Term, quiet bool) setup.Runner {
+	return func(name string, args ...string) error {
+		cmd := exec.Command(name, args...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = t.In, t.Out, t.Err
+		if quiet {
+			cmd.Stderr = nil // the null device
+		}
+		return cmd.Run()
+	}
+}
+
+// wizardExit prints a wizard error and returns the exit code: 130 after
+// Bash's "Cancelled by user." line for a cancelled prompt, else 1 with the die
+// text (and the doctor hint for _dsetup_die errors).
+func wizardExit(t tui.Term, u ui, err error) int {
+	if errors.Is(err, tui.ErrCancelled) {
+		return t.Cancelled()
+	}
+	return u.setupDie(err)
+}
+
+// setupWizard is the interactive part of cmd_import after the header: the
+// welcome block, the account scan, the wizard steps, the review, then the
+// dry-run report or the writes and the summary. Only the clone-only wizard
+// (--scope clone) is ported; Task 7 adds the mode picker ("Clone helper only"
+// calls w.Clone as here), the full wizard and --extend in front of
+// finishWizard.
+func setupWizard(t tui.Term, u ui, f setupFlags) int {
+	home := os.Getenv("HOME")
+	so := u.setupOut()
+	w := &setup.Wizard{
+		T: t, P: t.Prompter(), U: so,
+		DryRun: os.Getenv("CTX_DRY_RUN") == "1",
+		PWD:    currentPWD(), Home: home,
+		Run: toolRunner(t, false), RunQuiet: toolRunner(t, true),
+	}
+	w.Welcome()
+
+	// The scan. Rich mode spins while detecting (Bash: gum spin before it).
+	scanned := false
+	var spin func()
+	if t.Rich {
+		spin = func() {
+			tui.Spin(t, "Scanning your machine for existing credentials...", func() {
+				w.Det, scanned = setup.Detect(home, 8*time.Second), true
+			})
+		}
+	}
+	setup.ScanIntro(so, spin)
+	if !scanned {
+		w.Det = setup.Detect(home, 8*time.Second)
+	}
+	u.say("")
+	w.Det.Report(so)
+	u.say("")
+
+	in := setup.Inputs{AutoYes: f.autoYes}
+	if err := w.Clone(&in); err != nil {
+		return wizardExit(t, u, err)
+	}
+	return finishWizard(t, u, w, &in)
+}
+
+// finishWizard is cmd_import after the wizard steps: the review (skipped
+// under --dry-run), ~/.ctx (only after the review, R16), then the dry-run
+// report, or the backups, the writes and the summary.
+func finishWizard(t tui.Term, u ui, w *setup.Wizard, in *setup.Inputs) int {
+	if w.DryRun {
+		setup.DryRunReport(*in, w.U)
+		return 0
+	}
+	if err := w.Review(in); err != nil {
+		return wizardExit(t, u, err)
+	}
+	_ = ctxconfig.InitDirs()
+	if err := setup.Backups(*in); err != nil {
+		return u.die(err.Error())
+	}
+	if err := setup.Write(*in, w.U); err != nil {
+		return 1 // Write printed the failing step's error line
+	}
+	setup.Summary(*in, w.U, t.Rich)
 	return 0
 }

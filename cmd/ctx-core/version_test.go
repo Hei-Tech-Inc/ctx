@@ -105,7 +105,8 @@ func TestImplementsSetup(t *testing.T) {
 		{[]string{"setup", "--config", plain, "--yes", "--help"}, 1},
 		{[]string{"setup", "--config", filepath.Join(td, "missing"), "--yes"}, 1},
 		{[]string{"setup"}, 1},
-		{[]string{"setup", "--scope", "clone"}, 1},
+		{[]string{"setup", "--scope", "clone"}, 0},
+		{[]string{"add", "--scope", "full"}, 1},
 	} {
 		var out, errb bytes.Buffer
 		if rc := run(append([]string{"implements"}, c.args...), &out, &errb); rc != c.want {

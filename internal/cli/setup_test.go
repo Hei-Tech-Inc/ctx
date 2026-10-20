@@ -436,7 +436,12 @@ func TestBatchNeedsYes(t *testing.T) {
 		{[]string{"--config"}, false},
 		{[]string{"--yes"}, false},
 		{nil, false},
-		{[]string{"--scope", "clone"}, false},
+		{[]string{"--scope", "clone"}, true},
+		{[]string{"--scope", "clone", "-y"}, true},
+		{[]string{"--scope", "full"}, false},
+		{[]string{"--scope", "clone", "--help"}, false},
+		{[]string{"--scope", "clone", "--extend", "acme"}, false},
+		{[]string{"--scope", "clone", "--bogus"}, false},
 		{[]string{"--extend", "acme", "--config", yes}, false},
 		{[]string{"--bogus", "--config", yes}, false},
 	} {

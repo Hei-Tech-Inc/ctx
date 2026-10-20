@@ -264,7 +264,11 @@ func TestSpin(t *testing.T) {
 	if !strings.Contains(s, "Fetching keys") || !strings.Contains(s, "⣾") {
 		t.Errorf("rich spinner did not draw: %q", s)
 	}
-	if !strings.HasSuffix(s, "\r\x1b[K\x1b[?25h") {
+	if !strings.HasSuffix(s, "\r\x1b[K") {
 		t.Errorf("rich spinner did not clear its line: %q", s)
+	}
+	// R24: the cursor is never hidden, so a SIGINT mid-spin cannot leave it hidden.
+	if strings.Contains(s, "\x1b[?25l") || strings.Contains(s, "\x1b[?25h") {
+		t.Errorf("rich spinner toggles the cursor: %q", s)
 	}
 }
