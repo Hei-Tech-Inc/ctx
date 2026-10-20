@@ -1577,6 +1577,8 @@ test_clone_no_extra_args_bash32() {
     out="$(PATH="$td/fake:$PATH" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum clone -p acme -- git@gitlab.com:o/r.git 2>&1)" \
       || { echo "clone -- failed: $out"; exit 1; }
     grep -qx 'git \[clone\] \[git@gitlab.com:o/r.git\]' "$td/argv.log" || { echo "argv --: $(cat "$td/argv.log")"; exit 1; }
+    out="$(PATH="$td/fake:$PATH" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum clone -p acme -- 2>&1)" && { echo "clone -- without url succeeded: $out"; exit 1; }
+    [[ "$out" == *"Could not find a repo URL in: ctx clone ... -- "* && "$out" != *unbound* ]] || { echo "clone --: $out"; exit 1; }
     rm -rf "$td"
   ) || fail "clone with no extra git args under /bin/bash"
   pass "clone with no extra args works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"

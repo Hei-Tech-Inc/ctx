@@ -924,7 +924,11 @@ cmd_clone() {
         break
       fi
     done
-    [[ -n "$idx" ]] || die "Could not find a repo URL in: ctx clone ... -- ${rest[*]}"
+    if [[ -z "$idx" ]]; then
+      local joined=""
+      [[ ${#rest[@]} -eq 0 ]] || joined="${rest[*]}" # no empty-array expansion: unbound on bash 3.2
+      die "Could not find a repo URL in: ctx clone ... -- $joined"
+    fi
     url="${rest[$idx]}"
   else
     [[ ${#rest[@]} -ge 1 ]] || die "Usage: ctx clone [-p|--profile <name>] <repo-url> [git-clone-args...]"
