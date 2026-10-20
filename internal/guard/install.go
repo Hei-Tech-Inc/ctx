@@ -67,8 +67,8 @@ func isExecutable(path string) bool {
 	return err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o111 != 0
 }
 
-// installed mirrors _ctx_guard_installed.
-func installed() bool {
+// Installed mirrors _ctx_guard_installed.
+func Installed() bool {
 	dir := hooksDir()
 	return expandTilde(globalHooksPath()) == dir && isExecutable(filepath.Join(dir, "pre-commit"))
 }
@@ -143,7 +143,7 @@ func Uninstall(stdout, stderr io.Writer) int {
 	u := newUI(stdout, stderr)
 	dir := hooksDir()
 	st, err := os.Stat(dir)
-	if !installed() && (err != nil || !st.IsDir()) {
+	if !Installed() && (err != nil || !st.IsDir()) {
 		u.info("ctx guard is not installed")
 		return 0
 	}
@@ -151,7 +151,7 @@ func Uninstall(stdout, stderr io.Writer) int {
 		u.info("[dry-run] Would unset core.hooksPath and remove " + dir)
 		return 0
 	}
-	if installed() {
+	if Installed() {
 		gitRun("config", "--global", "--unset", "core.hooksPath")
 	}
 	for _, name := range hookNames {
@@ -166,7 +166,7 @@ func Uninstall(stdout, stderr io.Writer) int {
 // Status mirrors _ctx_guard_status and returns the exit code.
 func Status(stdout, stderr io.Writer) int {
 	u := newUI(stdout, stderr)
-	if installed() {
+	if Installed() {
 		u.success("ctx guard: on (" + hooksDir() + ")")
 	} else {
 		u.warn("ctx guard: off  →  ctx guard install")
