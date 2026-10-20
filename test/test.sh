@@ -2209,6 +2209,27 @@ test_installer_runs_install_hook() {
   pass "install.sh installs the hook with the installed ctx install-hook"
 }
 
+test_temp_guard_restores_traps() {
+  (
+    set -euo pipefail
+    local before after f
+    trap 'echo outer-exit' EXIT
+    trap 'echo outer-term' TERM
+    before="$(trap -p EXIT; trap -p TERM)"
+    f="$(mktemp)"
+    _ctx_temp_guard "$f"
+    [[ "$(trap -p EXIT)" == *'_ctx_guarded_tmp'* ]] || { echo "guard trap not set"; exit 1; }
+    _ctx_temp_done
+    after="$(trap -p EXIT; trap -p TERM)"
+    [[ "$after" == "$before" && ! -e "$f" ]] || { echo "traps not restored: $after"; exit 1; }
+    trap - EXIT TERM
+    # no trap before: none after
+    _ctx_temp_guard "$(mktemp)"; _ctx_temp_done
+    [[ -z "$(trap -p EXIT; trap -p TERM)" ]] || { echo "left a trap: $(trap -p EXIT)"; exit 1; }
+  ) >/dev/null || fail "_ctx_temp_done puts the EXIT and TERM traps back"
+  pass "_ctx_temp_done puts the EXIT and TERM traps back"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -2276,4 +2297,5 @@ test_uninstall_refuses_unsafe_paths
 test_install_hook_keeps_rc
 test_rc_writes_checked
 test_installer_runs_install_hook
+test_temp_guard_restores_traps
 echo "All tests passed."

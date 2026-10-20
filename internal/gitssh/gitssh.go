@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/atomicfile"
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
 )
 
@@ -27,6 +29,11 @@ func backup(path string, warn Warn) {
 
 // EnsureInclude mirrors ensure_ssh_include: make sure ~/.ssh/config starts
 // with an Include of the ctx-managed file, backing it up before the first edit.
+// The file is rewritten atomically through symlinks (R20): a link stays a
+// link, a private mode (no group/other write) is kept, a group- or
+// world-writable one becomes 600 with a warning (ssh refuses such a file), and
+// a new file is 600. A file that cannot be read or written is left alone with
+// a warning.
 func EnsureInclude(warn Warn) {
 	home := os.Getenv("HOME")
 	sshMain := filepath.Join(home, ".ssh", "config")
@@ -38,25 +45,43 @@ func EnsureInclude(warn Warn) {
 	}
 	_ = os.Chmod(ctxSSH, 0o600)
 
-	existing, _ := os.ReadFile(sshMain)
+	existing, rerr := os.ReadFile(sshMain)
 	if strings.Contains(string(existing), "Include "+ctxSSH) {
 		return
 	}
+	say := func(msg string) {
+		if warn != nil {
+			warn(msg)
+		}
+	}
+	failed := "Could not add Include " + ctxSSH + " to " + sshMain
+	target := atomicfile.FollowLinks(sshMain)
+	if _, err := os.Stat(target); err == nil {
+		if rerr != nil || syscall.Access(target, 2) != nil { // W_OK
+			say(failed)
+			return
+		}
+	}
 	backup(sshMain, warn)
 	body := "# ctx managed hosts — added by ctx installer\nInclude " + ctxSSH + "\n\n" + string(existing)
-	tmp, err := os.CreateTemp(filepath.Dir(sshMain), "config.")
+	tightened := false
+	err := atomicfile.WriteThrough(target, []byte(body), func(old os.FileMode, existed bool) os.FileMode {
+		if !existed {
+			return 0o600
+		}
+		if old&0o022 != 0 {
+			tightened = true
+			return 0o600
+		}
+		return old
+	}, nil)
 	if err != nil {
+		say(failed)
 		return
 	}
-	_, werr := tmp.WriteString(body)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
+	if tightened {
+		say(sshMain + " was writable by group or others; it is now 600 (ssh refuses such a file)")
 	}
-	if werr != nil || os.Rename(tmp.Name(), sshMain) != nil {
-		os.Remove(tmp.Name())
-		return
-	}
-	_ = os.Chmod(sshMain, 0o600)
 	ctxconfig.Log("Added Include " + ctxSSH + " to " + sshMain)
 }
 

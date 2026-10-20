@@ -1464,9 +1464,6 @@ _ctx_backup_into() {
   log "Backed up $src → $bdir"
 }
 
-# Mode bits of a file, octal (GNU stat, else BSD stat).
-_ctx_file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
-
 # Put SRC's content and mode at DST: written through a symlink, via a temp file
 # in the target's directory renamed over it, so a failure leaves DST as it was.
 _ctx_restore_file() {
@@ -1480,59 +1477,6 @@ _ctx_restore_file() {
   fi
   rm -f "$tmp"
   return 1
-}
-
-# The file FILE names after following its symlinks (also a dangling last
-# one: the file is then created where it points); at most 40 links.
-_ctx_link_target() {
-  local target="$1" dest n=0
-  while [[ -L "$target" && $n -lt 40 ]]; do
-    dest="$(readlink "$target")" || break
-    case "$dest" in /*) target="$dest" ;; *) target="$(dirname -- "$target")/$dest" ;; esac
-    n=$((n + 1))
-  done
-  printf '%s\n' "$target"
-}
-
-# Atomic write-through: put SRC's content at FILE. Symlinks are followed; the
-# result is built in a temp file next to the target (same filesystem, mode kept
-# via cp -p, or the umask default for a new file) and moved over it. A
-# read-only target is not replaced behind the user's back. Returns 1 on any
-# failure, and FILE is then as it was.
-_ctx_write_through() {
-  local src="$1" target d new
-  target="$(_ctx_link_target "$2")"
-  [[ ! -e "$target" || -w "$target" ]] || return 1
-  d="$(cd -P -- "$(dirname -- "$target")" 2>/dev/null && pwd)" || return 1
-  new="$(mktemp "$d/.ctx-write.XXXXXX" 2>/dev/null)" || return 1
-  if {
-    if [[ -e "$target" ]]; then
-      cp -p -- "$target" "$new"
-    else
-      chmod "$(printf '%03o' $((0666 & ~$(umask))))" "$new"
-    fi &&
-      cat "$src" >"$new" &&
-      mv -f -- "$new" "$d/$(basename -- "$target")"
-  } 2>/dev/null; then
-    return 0
-  fi
-  rm -f "$new"
-  return 1
-}
-
-# Remove temp file FILE if ctx exits (die, Ctrl+C, TERM) before
-# _ctx_temp_done; one at a time.
-_ctx_temp_guard() {
-  _ctx_guarded_tmp="$1"
-  trap 'rm -f "$_ctx_guarded_tmp"' EXIT
-  trap 'exit 143' TERM
-}
-
-# Remove the guarded temp file and drop the traps.
-_ctx_temp_done() {
-  rm -f "${_ctx_guarded_tmp:-}"
-  _ctx_guarded_tmp=""
-  trap - EXIT TERM
 }
 
 # ctx undo: restore the files of the latest backup. The backup keeps one copy

@@ -524,3 +524,62 @@ func TestInstallHookRemovesHistoricPastes(t *testing.T) {
 	)
 	runIhCases(t, cases)
 }
+
+// TestInstallHookSSHConfig (R20): the Include goes into ~/.ssh/config through
+// a symlink, a private mode is kept, a group/world-writable one becomes 600
+// with a warning, a new file is 600, an unwritable one is left alone. Go == Bash.
+func TestInstallHookSSHConfig(t *testing.T) {
+	rc := map[string]string{".zshrc": "x\n"}
+	with := func(kv ...string) map[string]string {
+		m := map[string]string{".zshrc": "x\n"}
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	mode := func(rel string, want os.FileMode) func(t *testing.T, home string, r cvRun) {
+		return func(t *testing.T, home string, r cvRun) {
+			st, err := os.Stat(filepath.Join(home, rel))
+			if err != nil || st.Mode().Perm() != want {
+				t.Errorf("%s mode %v (%v), want %v", rel, st.Mode().Perm(), err, want)
+			}
+			if s := readHomeFile(t, home, rel); !strings.HasPrefix(s, "# ctx managed hosts — added by ctx installer\nInclude "+home+"/.ssh/ctx_config\n\n") {
+				t.Errorf("%s:\n%s", rel, s)
+			}
+		}
+	}
+	runIhCases(t, []ihCase{
+		{name: "symlinked ssh config", shell: "/bin/zsh", files: with("dots/ssh_config", "Host mine\n"),
+			tweak: func(home string) {
+				_ = os.MkdirAll(filepath.Join(home, ".ssh"), 0o700)
+				_ = os.Symlink("../dots/ssh_config", filepath.Join(home, ".ssh", "config"))
+			}, vacuous: "SSH config isolated",
+			check: func(t *testing.T, home string, r cvRun) {
+				if dest, err := os.Readlink(filepath.Join(home, ".ssh", "config")); err != nil || dest != "../dots/ssh_config" {
+					t.Errorf("link replaced: %q %v", dest, err)
+				}
+				mode("dots/ssh_config", 0o644)(t, home, r)
+				if s := readHomeFile(t, home, "dots/ssh_config"); !strings.HasSuffix(s, "\n\nHost mine\n") {
+					t.Errorf("target:\n%s", s)
+				}
+			}},
+		{name: "ssh config 644 kept", shell: "/bin/zsh", files: with(".ssh/config", "Host a\n"), vacuous: "SSH config isolated", check: mode(".ssh/config", 0o644)},
+		{name: "ssh config 600 kept", shell: "/bin/zsh", files: with(".ssh/config", "Host a\n"),
+			tweak: func(home string) { _ = os.Chmod(filepath.Join(home, ".ssh/config"), 0o600) }, vacuous: "SSH config isolated", check: mode(".ssh/config", 0o600)},
+		{name: "ssh config 666 tightened", shell: "/bin/zsh", files: with(".ssh/config", "Host a\n"),
+			tweak:   func(home string) { _ = os.Chmod(filepath.Join(home, ".ssh/config"), 0o666) },
+			vacuous: "/.ssh/config was writable by group or others; it is now 600 (ssh refuses such a file)", check: mode(".ssh/config", 0o600)},
+		{name: "ssh config 664 tightened", shell: "/bin/zsh", files: with(".ssh/config", "Host a\n"),
+			tweak:   func(home string) { _ = os.Chmod(filepath.Join(home, ".ssh/config"), 0o664) },
+			vacuous: "it is now 600", check: mode(".ssh/config", 0o600)},
+		{name: "new ssh config is 600", shell: "/bin/zsh", files: rc, vacuous: "SSH config isolated", check: mode(".ssh/config", 0o600)},
+		{name: "read-only ssh config left alone", shell: "/bin/zsh", files: with(".ssh/config", "Host a\n"),
+			tweak:   func(home string) { _ = os.Chmod(filepath.Join(home, ".ssh/config"), 0o400) },
+			vacuous: "Could not add Include $HOME/.ssh/ctx_config to $HOME/.ssh/config",
+			check: func(t *testing.T, home string, r cvRun) {
+				if s := readHomeFile(t, home, ".ssh/config"); s != "Host a\n" {
+					t.Errorf(".ssh/config = %q", s)
+				}
+			}},
+	})
+}

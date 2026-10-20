@@ -5,10 +5,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/atomicfile"
 	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
@@ -124,25 +124,8 @@ func stripAgentRules(data []byte) (out []byte, ok bool) {
 	return b.Bytes(), !skip
 }
 
-// followLinks resolves a chain of symlinks, also when the last one dangles
-// (the file is then created where it points), like the readlink loop in Bash.
-func followLinks(path string) string {
-	for i := 0; i < 40; i++ {
-		st, err := os.Lstat(path)
-		if err != nil || st.Mode()&os.ModeSymlink == 0 {
-			break
-		}
-		dest, err := os.Readlink(path)
-		if err != nil {
-			break
-		}
-		if !filepath.IsAbs(dest) {
-			dest = filepath.Join(filepath.Dir(path), dest)
-		}
-		path = dest
-	}
-	return path
-}
+// followLinks is atomicfile.FollowLinks.
+func followLinks(path string) string { return atomicfile.FollowLinks(path) }
 
 // currentUmask reads the process umask.
 func currentUmask() os.FileMode {
