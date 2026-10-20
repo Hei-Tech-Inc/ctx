@@ -26,7 +26,8 @@ const (
 //
 // Every check comes before any change, in Bash's order: the autoswitch lib in
 // CTX_LIB (unset: refused, no guessing), RC not a directory, readable,
-// writable (or new, in an existing dir), and every BEGIN line with an END.
+// writable (or new, in an existing dir), and every BEGIN line with an END
+// (none nested). Historic full pastes are removed by their exact header (R19).
 // RC is backed up, then rewritten once through writeThroughMode (symlinks and
 // mode kept; a new file gets the umask default). Kept lines keep their line
 // endings, CRLF too; the appended lines end in LF. --dry-run (CTX_DRY_RUN=1)
@@ -160,23 +161,55 @@ func rcShell(rc string) string {
 	return "bash"
 }
 
-// stripAutoswitch is _ctx_rc_strip_autoswitch: data's lines without the
-// BEGIN..END blocks (a lone END line is dropped too) and without legacy pastes
-// ("# ctx profile autoswitch…" or "# ── ctx auto-switch…" up to their closing
-// "# ─…" rule of 25 or more, or up to, not including, the next blank line).
+// The headers of the full hook pastes ctx made from 970aa1a to a65d9a9 (the
+// whole ctx_autoswitch.bash or .fish appended to the rc), and the line each
+// paste ends with.
+const (
+	pasteHeaderBash = "# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook"
+	pasteHeaderFish = "# ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)"
+	pasteEndBash    = "fi"
+	pasteEndFish    = "_ctx_profile_autoswitch"
+)
+
+// stripAutoswitch is _ctx_rc_strip_autoswitch: data's lines without
+//   - the BEGIN..END blocks (a lone END line is dropped too);
+//   - a full hook paste (exact header above) through its end line, when that
+//     line comes later in the file;
+//   - other legacy pastes ("# ctx profile autoswitch…" or
+//     "# ── ctx auto-switch…") up to their closing "# ─…" rule of 25 or more,
+//     or up to, not including, the next blank line, whichever comes first
+//     (with neither, to the end of the file).
+//
 // Lines are matched without a trailing CR and kept as they were; every kept
-// line ends in a newline. ok is false when a BEGIN has no END.
+// line ends in a newline. ok is false when a BEGIN has no END or a BEGIN
+// comes inside an open BEGIN block.
 func stripAutoswitch(data []byte) (out []byte, ok bool) {
+	s := strings.TrimSuffix(string(data), "\n")
+	var lines []string
+	if len(data) > 0 {
+		lines = strings.Split(s, "\n")
+	}
+	lastEnd := map[string]int{pasteEndBash: -1, pasteEndFish: -1}
+	for i, line := range lines {
+		if l := strings.TrimSuffix(line, "\r"); l == pasteEndBash || l == pasteEndFish {
+			lastEnd[l] = i
+		}
+	}
 	var b bytes.Buffer
-	state := ""
-	s := string(data)
-	for len(s) > 0 {
-		line, rest, _ := strings.Cut(s, "\n")
-		s = rest
+	state, pend := "", ""
+	for i, line := range lines {
 		l := strings.TrimSuffix(line, "\r")
 		switch state {
 		case "begin":
+			if strings.HasPrefix(l, autoswitchBegin) {
+				return nil, false
+			}
 			if strings.HasPrefix(l, autoswitchEnd) {
+				state = ""
+			}
+			continue
+		case "paste":
+			if l == pend {
 				state = ""
 			}
 			continue
@@ -195,6 +228,10 @@ func stripAutoswitch(data []byte) (out []byte, ok bool) {
 			continue
 		}
 		switch {
+		case l == pasteHeaderBash && lastEnd[pasteEndBash] > i:
+			state, pend = "paste", pasteEndBash
+		case l == pasteHeaderFish && lastEnd[pasteEndFish] > i:
+			state, pend = "paste", pasteEndFish
 		case strings.HasPrefix(l, autoswitchBegin):
 			state = "begin"
 		case strings.HasPrefix(l, autoswitchEnd):

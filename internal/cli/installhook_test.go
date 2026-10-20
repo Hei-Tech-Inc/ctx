@@ -469,3 +469,58 @@ func TestInstallHookWriteFailure(t *testing.T) {
 		}
 	}
 }
+
+// pasteRevs are the commits whose lib/ctx_autoswitch.bash and .fish install-hook
+// appended whole to the rc (970aa1a..a65d9a9; b15588c switched to sourcing).
+// testdata/autoswitch-paste holds them as `git show <rev>:lib/ctx_autoswitch.*`
+// printed them (CI checkouts are shallow).
+var pasteRevs = []string{"970aa1a", "295f87f", "3b6c98b", "a4de152", "2ae9b68", "a65d9a9"}
+
+// TestInstallHookRemovesHistoricPastes (R19): each historic full paste, with
+// user lines before and after it, goes completely; the user lines stay; Go
+// matches Bash.
+func TestInstallHookRemovesHistoricPastes(t *testing.T) {
+	var cases []ihCase
+	for _, rev := range pasteRevs {
+		for _, kind := range []string{"bash", "fish"} {
+			paste, err := os.ReadFile(filepath.Join("testdata", "autoswitch-paste", rev+"."+kind))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rc, shell := ".zshrc", "/bin/zsh"
+			if kind == "fish" {
+				rc, shell = ".config/fish/config.fish", "/bin/fish"
+			}
+			kept := "user before\n\n\nuser after\nalias x=y\n"
+			body := "user before\n\n" + string(paste) + "\nuser after\nalias x=y\n"
+			rcRel := rc
+			cases = append(cases, ihCase{name: rev + " " + kind, shell: shell, files: map[string]string{rc: body}, vacuous: "refreshed",
+				check: func(t *testing.T, home string, r cvRun) {
+					s := readHomeFile(t, home, rcRel)
+					if !strings.HasPrefix(s, kept+"\n# BEGIN ctx profile autoswitch\n") {
+						t.Errorf("paste not removed cleanly:\n%s", s)
+					}
+				}})
+		}
+	}
+	cases = append(cases,
+		ihCase{name: "paste header without its end line keeps R17's rule", shell: "/bin/zsh",
+			files:   map[string]string{".zshrc": pasteHeaderBash + "\n# Longest\n\nkeep() { :; }\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "\nkeep() { :; }\n\n# BEGIN") {
+					t.Errorf(".zshrc:\n%s", s)
+				}
+			}},
+		ihCase{name: "CRLF paste", shell: "/bin/zsh",
+			files:   map[string]string{".zshrc": "u\r\n" + pasteHeaderBash + "\r\nbody\r\n\r\nfi\r\nv\r\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "u\r\nv\r\n\n# BEGIN") {
+					t.Errorf(".zshrc %q", s)
+				}
+			}},
+		ihCase{name: "BEGIN inside an open BEGIN block is refused", shell: "/bin/zsh",
+			files: map[string]string{".zshrc": "a\n" + autoswitchBegin + "\nx\n" + autoswitchBegin + "\ny\n" + autoswitchEnd + "\nz\n"}, code: 1,
+			vacuous: "Unterminated ctx block in $HOME/.zshrc"},
+	)
+	runIhCases(t, cases)
+}

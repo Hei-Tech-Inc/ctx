@@ -1520,6 +1520,21 @@ _ctx_write_through() {
   return 1
 }
 
+# Remove temp file FILE if ctx exits (die, Ctrl+C, TERM) before
+# _ctx_temp_done; one at a time.
+_ctx_temp_guard() {
+  _ctx_guarded_tmp="$1"
+  trap 'rm -f "$_ctx_guarded_tmp"' EXIT
+  trap 'exit 143' TERM
+}
+
+# Remove the guarded temp file and drop the traps.
+_ctx_temp_done() {
+  rm -f "${_ctx_guarded_tmp:-}"
+  _ctx_guarded_tmp=""
+  trap - EXIT TERM
+}
+
 # ctx undo: restore the files of the latest backup. The backup keeps one copy
 # per basename, so when two manifest paths share a basename neither is
 # restored ("Ambiguous backup"); a path that is not absolute, has a . or ..
@@ -1935,40 +1950,74 @@ _ctx_rc_shell() {
   esac
 }
 
+# The headers of the full hook pastes ctx made from 970aa1a to a65d9a9 (the
+# whole ctx_autoswitch.bash or .fish appended to the rc). Each paste ends with
+# a line that is exactly "fi" (bash) or "_ctx_profile_autoswitch" (fish).
+CTX_PASTE_HEADER_BASH="# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook"
+CTX_PASTE_HEADER_FISH="# ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)"
+
 # Print rc file RC without its ctx autoswitch blocks:
 #   - "# BEGIN ctx profile autoswitch" .. "# END ctx profile autoswitch";
-#   - legacy pastes starting "# ctx profile autoswitch" or "# ── ctx auto-switch",
-#     which end at their closing "# ─────…" line (25 or more ─), or else just
-#     before the next blank line (kept); never at the end of the file.
-# A line ending in CR is matched without it and printed as it was. Returns 1
-# (output incomplete) when a BEGIN has no END.
+#   - a full hook paste (exact header above) through its end line ("fi" or
+#     "_ctx_profile_autoswitch"), when that line comes later in the file;
+#   - other legacy pastes starting "# ctx profile autoswitch" or
+#     "# ── ctx auto-switch", which end at their closing "# ─────…" line (25 or
+#     more ─) or just before the next blank line (kept), whichever comes first;
+#     one with neither runs to the end of the file.
+# A line ending in CR is matched without it and printed as it was.
+# Returns 3 (output incomplete) when a BEGIN has no END or a BEGIN comes
+# inside an open BEGIN block, and 2 when writing the output failed.
 _ctx_rc_strip_autoswitch() {
-  local line l state=none
+  local line l n=0 state=none last_fi=0 last_fish=0 pend=""
+  # Lookahead: where the last possible end lines of a full paste are.
   while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    l="${line%$'\r'}"
+    [[ "$l" == "fi" ]] && last_fi=$n
+    [[ "$l" == _ctx_profile_autoswitch ]] && last_fish=$n
+  done <"$1"
+  n=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
     l="${line%$'\r'}"
     case "$state" in
       begin)
-        [[ "$l" == "# END ctx profile autoswitch"* ]] && state=none
+        case "$l" in
+          "# BEGIN ctx profile autoswitch"*) return 3 ;;
+          "# END ctx profile autoswitch"*) state=none ;;
+        esac
+        continue
+        ;;
+      paste)
+        [[ "$l" == "$pend" ]] && state=none
         continue
         ;;
       legacy)
         case "$l" in
           "# BEGIN ctx profile autoswitch"*) state=begin ;;
           "# END ctx profile autoswitch"*) state=none ;;
-          "") state=none; printf '%s\n' "$line" ;;
+          "") state=none; printf '%s\n' "$line" || return 2 ;;
           *) _ctx_rc_is_rule "$l" && state=none ;;
         esac
         continue
         ;;
     esac
+    if [[ "$l" == "$CTX_PASTE_HEADER_BASH" && $last_fi -gt $n ]]; then
+      state=paste pend="fi"
+      continue
+    fi
+    if [[ "$l" == "$CTX_PASTE_HEADER_FISH" && $last_fish -gt $n ]]; then
+      state=paste pend=_ctx_profile_autoswitch
+      continue
+    fi
     case "$l" in
       "# BEGIN ctx profile autoswitch"*) state=begin ;;
       "# END ctx profile autoswitch"*) ;;
       "# ctx profile autoswitch"*|"# ── ctx auto-switch"*) state=legacy ;;
-      *) printf '%s\n' "$line" ;;
+      *) printf '%s\n' "$line" || return 2 ;;
     esac
   done <"$1"
-  [[ "$state" != begin ]]
+  [[ "$state" != begin ]] || return 3
 }
 
 # Whether line L is "# " and 25 or more ─ (a legacy block's closing rule).
@@ -2051,9 +2100,15 @@ cmd_install_hook() {
   fi
 
   tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-rc.XXXXXX")" || die "Cannot create a temporary file"
-  if [[ -f "$shell_rc" ]] && ! _ctx_rc_strip_autoswitch "$shell_rc" >"$tmp"; then
-    rm -f "$tmp"
-    die "Unterminated ctx block in $shell_rc; add the line '# END ctx profile autoswitch' or remove the '# BEGIN ctx profile autoswitch' line"
+  _ctx_temp_guard "$tmp" # a die below or Ctrl+C removes it
+  if [[ -f "$shell_rc" ]]; then
+    local st=0
+    _ctx_rc_strip_autoswitch "$shell_rc" >"$tmp" || st=$?
+    case $st in
+      0) ;;
+      3) die "Unterminated ctx block in $shell_rc; add the line '# END ctx profile autoswitch' or remove the '# BEGIN ctx profile autoswitch' line" ;;
+      *) die "Cannot write $shell_rc" ;;
+    esac
   fi
 
   if ! grep -q "mise activate" "$shell_rc" 2>/dev/null && has mise; then
@@ -2066,7 +2121,7 @@ cmd_install_hook() {
   fi
 
   if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
-    rm -f "$tmp"
+    _ctx_temp_done
     [[ -f "$shell_rc" ]] && dim "  [dry-run] would back up $shell_rc"
     [[ $mise_add -eq 1 ]] && dim "  [dry-run] would add mise activation to $shell_rc"
     dim "  [dry-run] would refresh the ctx profile autoswitch hook in $shell_rc"
@@ -2080,12 +2135,15 @@ cmd_install_hook() {
 
   # 1. mise activate; 2. ctx profile autoswitch — sources the lib, so upgrades
   # refresh behavior without re-pasting. One write: all or nothing.
+  # Every write to the temp file is checked: a short one must not replace the rc.
   if [[ $mise_add -eq 1 ]]; then
-    { echo ""; echo "# mise-en-place — added by ctx"; echo "$activate_line"; } >>"$tmp"
+    printf '\n# mise-en-place — added by ctx\n%s\n' "$activate_line" >>"$tmp" || die "Cannot write $shell_rc"
   fi
-  _ctx_autoswitch_block "$kind" "$_as_lib" >>"$tmp"
-  _ctx_write_through "$tmp" "$shell_rc" || { rm -f "$tmp"; die "Cannot write $shell_rc"; }
-  rm -f "$tmp"
+  local block
+  block="$(_ctx_autoswitch_block "$kind" "$_as_lib")" || die "Cannot write $shell_rc"
+  printf '%s\n' "$block" >>"$tmp" || die "Cannot write $shell_rc"
+  _ctx_write_through "$tmp" "$shell_rc" || die "Cannot write $shell_rc"
+  _ctx_temp_done
   [[ $mise_add -eq 1 ]] && success "mise activation added to $shell_rc"
   success "ctx profile autoswitch hook refreshed in $shell_rc (sources lib)"
 
@@ -2239,25 +2297,26 @@ cmd_agent_rules() {
   [[ "$file" == -* ]] && file="./$file"
   [[ -d "$file" ]] && die "$file is a directory"
   tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-agent-rules.XXXXXX")" || die "Cannot create a temporary file"
+  _ctx_temp_guard "$tmp" # a die below or Ctrl+C removes it
+  # Every write to the temp file is checked: a short one must not replace FILE.
+  local wfail=0
   if [[ -e "$file" ]]; then
-    [[ -f "$file" && -r "$file" ]] || { rm -f "$tmp"; die "Cannot read $file"; }
+    [[ -f "$file" && -r "$file" ]] || die "Cannot read $file"
     while IFS= read -r line || [[ -n "$line" ]]; do
       [[ "$line" == "$CTX_AGENT_RULES_BEGIN" ]] && { skip=1; continue; }
       if [[ $skip -eq 1 ]]; then
         [[ "$line" == "$CTX_AGENT_RULES_END" ]] && skip=0
         continue
       fi
-      printf '%s\n' "$line"
-    done <"$file" >"$tmp"
-    if [[ $skip -eq 1 ]]; then
-      rm -f "$tmp"
-      die "Unterminated ctx block in $file; add the END marker or remove the BEGIN line"
-    fi
-    if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp"; fi
+      printf '%s\n' "$line" || { wfail=1; break; }
+    done <"$file" >"$tmp" || wfail=1
+    [[ $wfail -eq 0 ]] || die "Cannot write $file"
+    [[ $skip -eq 1 ]] && die "Unterminated ctx block in $file; add the END marker or remove the BEGIN line"
+    if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp" || die "Cannot write $file"; fi
   fi
-  _ctx_agent_rules_text >>"$tmp"
-  _ctx_write_through "$tmp" "$file" || { rm -f "$tmp"; die "Cannot write $file"; }
-  rm -f "$tmp"
+  _ctx_agent_rules_text >>"$tmp" || die "Cannot write $file"
+  _ctx_write_through "$tmp" "$file" || die "Cannot write $file"
+  _ctx_temp_done
   success "ctx agent rules written to $file"
 }
 

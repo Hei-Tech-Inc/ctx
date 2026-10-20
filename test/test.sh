@@ -2139,6 +2139,76 @@ test_install_hook_keeps_rc() {
   pass "install-hook keeps the rest of the rc file, its link and mode"
 }
 
+test_rc_writes_checked() {
+  (
+    set -euo pipefail
+    local td out rc i sum
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/zsh TMPDIR="$td/tmp"
+    mkdir -p "$HOME/.ssh" "$TMPDIR"
+    for i in $(seq 1 300); do printf 'export LINE_%03d=xxxxxxxxxxxxxxxxx\n' "$i"; done >"$HOME/.zshrc"
+    cp "$HOME/.zshrc" "$HOME/AGENTS.md"
+    sum="$(cksum <"$HOME/.zshrc")"
+    # A short write into the temp file (TMPDIR full) must not replace the ~9 KB
+    # file: exit 1, file as it was, no temp left. Modelled by a 4 KiB soft file
+    # size limit (SIGXFSZ ignored) for the shell, while cp and cat lift it again,
+    # as writes to the target's own file system would still succeed.
+    local tool
+    mkdir -p "$td/lift"
+    for tool in cp cat; do
+      printf '#!/bin/bash\nulimit -S -f unlimited\nexec %s "$@"\n' "$(command -v "$tool")" >"$td/lift/$tool"
+      chmod +x "$td/lift/$tool"
+    done
+    export PATH="$td/lift:$PATH"
+    rc=0; out="$(trap '' XFSZ; ulimit -S -f 4; "$ROOT_DIR/bin/ctx" --no-gum install-hook "$HOME/.zshrc" </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Cannot write $HOME/.zshrc"* ]] || { echo "install-hook short write: exit $rc: $out"; exit 1; }
+    [[ "$(cksum <"$HOME/.zshrc")" == "$sum" ]] || { echo "rc changed after a failed write"; exit 1; }
+    rc=0; out="$(cd "$HOME" && trap '' XFSZ; ulimit -S -f 4; "$ROOT_DIR/bin/ctx" --no-gum agent-rules --write AGENTS.md </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Cannot write AGENTS.md"* ]] || { echo "agent-rules short write: exit $rc: $out"; exit 1; }
+    [[ "$(cksum <"$HOME/AGENTS.md")" == "$sum" ]] || { echo "AGENTS.md changed after a failed write"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp files left: $(ls -A "$TMPDIR")"; exit 1; }
+    local left
+    left="$(cd "$HOME" && find . -mindepth 1 -maxdepth 1 ! -name .zshrc ! -name AGENTS.md ! -name .ssh ! -name .ctx)"
+    [[ -z "$left" ]] || { echo "temp next to target: $left"; exit 1; }
+    # a refusal (die) also removes the temp file
+    printf '# BEGIN ctx profile autoswitch\n' >"$HOME/.zshrc"
+    "$ROOT_DIR/bin/ctx" --no-gum install-hook "$HOME/.zshrc" </dev/null >/dev/null 2>&1 && { echo "unterminated accepted"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp left after die: $(ls -A "$TMPDIR")"; exit 1; }
+  ) || fail "install-hook and agent-rules never replace a file after a short write"
+  pass "install-hook and agent-rules never replace a file after a short write"
+}
+
+test_installer_runs_install_hook() {
+  (
+    set -euo pipefail
+    local td out p
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/zsh
+    mkdir -p "$HOME/dots" "$HOME/.ssh"
+    p="$td/prefix"
+    _t_fake_install "$p"
+    printf 'user=1\n# ── ctx auto-switch ────\nold() { :; }\n# ──────────────────────────────\nafter=2\n' >"$HOME/dots/zshrc"
+    chmod 640 "$HOME/dots/zshrc"
+    ln -s dots/zshrc "$HOME/.zshrc"
+    # install.sh's hook step runs the installed ctx install-hook (R18)
+    out="$(CTX_INSTALL_SOURCE_ONLY=1 CTX_INSTALLED_BIN="$p/bin/ctx" bash -c 'source "$1"; install_ctx_hook' _ "$ROOT_DIR/install.sh" 2>&1)" \
+      || { echo "hook step: $out"; exit 1; }
+    [[ -L "$HOME/.zshrc" && "$(readlink "$HOME/.zshrc")" == dots/zshrc && "$(_t_mode "$HOME/dots/zshrc")" == 640 ]] || { echo "link or mode lost"; exit 1; }
+    grep -qx 'user=1' "$HOME/dots/zshrc" && grep -qx 'after=2' "$HOME/dots/zshrc" && ! grep -q 'old()' "$HOME/dots/zshrc" \
+      || { echo "rc: $(cat "$HOME/dots/zshrc")"; exit 1; }
+    grep -qF "\"$p/lib/ctx\"" "$HOME/dots/zshrc" || { echo "block does not source the installed lib: $(cat "$HOME/dots/zshrc")"; exit 1; }
+    # ctx cannot run: the manual command, exit 0, rc untouched
+    cp "$HOME/dots/zshrc" "$td/before"
+    out="$(CTX_INSTALL_SOURCE_ONLY=1 CTX_INSTALLED_BIN="$td/nope/ctx" bash -c 'source "$1"; install_ctx_hook' _ "$ROOT_DIR/install.sh" 2>&1)" \
+      || { echo "missing ctx must not fail the installer: $out"; exit 1; }
+    [[ "$out" == *"Run: ctx install-hook $HOME/.zshrc"* ]] || { echo "no manual command: $out"; exit 1; }
+    cmp -s "$td/before" "$HOME/dots/zshrc" || { echo "rc changed"; exit 1; }
+  ) || fail "install.sh installs the hook with the installed ctx install-hook"
+  pass "install.sh installs the hook with the installed ctx install-hook"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -2204,4 +2274,6 @@ test_undo_ambiguous_and_same_second
 test_uninstall_removes_install_and_purges
 test_uninstall_refuses_unsafe_paths
 test_install_hook_keeps_rc
+test_rc_writes_checked
+test_installer_runs_install_hook
 echo "All tests passed."
