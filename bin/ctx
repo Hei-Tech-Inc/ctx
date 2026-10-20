@@ -34,7 +34,7 @@ for arg in "$@"; do
     --)           _ctx_passthrough=1; POSITIONAL+=("$arg") ;;
     --dry-run)    CTX_DRY_RUN=1 ;;
     --quiet|-q)   CTX_QUIET=1 ;;
-    --no-gum)     HAS_GUM=false ;;
+    --no-gum)     HAS_GUM=false; export CTX_NO_GUM=1 ;;
     --json)       CTX_JSON=1 ;;
     *)            POSITIONAL+=("$arg") ;;
   esac

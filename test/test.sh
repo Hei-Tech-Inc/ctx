@@ -1096,6 +1096,37 @@ test_use_deactivate_served_by_go() {
   pass "quiet ctx use and ctx deactivate run in ctx-core"
 }
 
+test_plain_prompts_use_stderr() {
+  (
+    set -euo pipefail
+    local td out err
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$ROOT_DIR/bin:$PATH"
+    mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/p"
+    printf 'PROFILE_NAME=p\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' >"$CTX_DIR/profiles/p.conf"
+    printf 'secret_provider=file\n' >"$CTX_DIR/config"
+
+    out="$(printf 'hunter2\n' | ctx --no-gum secret set p API_KEY 2>/dev/null)"
+    [[ "$(cat "$CTX_DIR/secrets/p/API_KEY")" == hunter2 ]] || { echo "secret value: $(cat "$CTX_DIR/secrets/p/API_KEY")"; exit 1; }
+    ! grep -q '?' <<<"$out" || { echo "prompt leaked to stdout: $out"; exit 1; }
+
+    # shellcheck disable=SC2034 # read by pick_one/pick_many from core.sh
+    HAS_GUM=false
+    out="$(printf '2\n' | pick_one "Pick" a b c 2>/dev/null)"
+    [[ "$out" == b ]] || { echo "pick_one captured: '$out'"; exit 1; }
+    out="$(printf '1,3\n' | pick_many "Pick" a b c 2>/dev/null)"
+    [[ "$out" == $'a\nc' ]] || { echo "pick_many captured: '$out'"; exit 1; }
+
+    printf 'secret_provider=pass\n' >"$CTX_DIR/config"
+    [[ -z "$(PATH="/usr/bin:/bin" type -P pass)" ]] || { echo "pass unexpectedly on PATH"; exit 1; }
+    err="$(printf 'x\n' | PATH="$ROOT_DIR/bin:/usr/bin:/bin" ctx --no-gum secret set p API_KEY 2>&1 >/dev/null || true)"
+    grep -q "provider 'pass password store'" <<<"$err" || { echo "error label: $err"; exit 1; }
+    ! grep -q 'command not found' <<<"$err" || { echo "command not found in: $err"; exit 1; }
+    rm -rf "$td"
+  ) || fail "plain prompts write to stderr"
+  pass "plain prompts keep stdout clean"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1132,5 +1163,6 @@ test_autoswitch_keeps_manual_lock
 test_quiet_use_cloud_tools_succeed
 test_inherited_quiet_use
 test_use_deactivate_served_by_go
+test_plain_prompts_use_stderr
 
 echo "All tests passed."

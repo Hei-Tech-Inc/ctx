@@ -634,7 +634,7 @@ cmd_secret() {
       local val; val=$(ask_secret "Value for $key")
       local _lbl; _lbl="$(ctx_secret_store_label)"
       if ! keychain_set "$profile" "$key" "$val"; then
-        die "Failed to store secret using provider '$(_lbl)'. Check provider config and required CLI tools."
+        die "Failed to store secret using provider '$_lbl'. Check provider config and required CLI tools."
       fi
       success "$key stored ($_lbl) for $profile"
       ;;
@@ -662,7 +662,7 @@ cmd_secret() {
       [[ -z "$profile" || -z "$key" ]] && die "Usage: ctx secret delete <profile> <KEY>"
       local _lbl; _lbl="$(ctx_secret_store_label)"
       if ! keychain_delete "$profile" "$key"; then
-        die "Failed to delete secret using provider '$(_lbl)'. Check provider config and required CLI tools."
+        die "Failed to delete secret using provider '$_lbl'. Check provider config and required CLI tools."
       fi
       success "Deleted $key from $_lbl"
       ;;
