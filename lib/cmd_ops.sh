@@ -1054,6 +1054,58 @@ cmd_verify() {
 }
 
 # ─── uninstall ──────────────────────────────────────────────────────────────────
+# Physical path of an existing directory (cd + pwd -P); fails when it cannot cd.
+_ctx_phys_dir() { (cd "$1" 2>/dev/null && pwd -P); }
+
+# Physical path of a file: symlinks of the last component followed (even to a
+# missing target), the directory resolved. Fails on a link loop or a missing dir.
+_ctx_phys_file() {
+  local p="$1" l i=0 d
+  while [[ -L "$p" ]]; do
+    [[ $i -ge 40 ]] && return 1
+    i=$((i + 1))
+    l="$(readlink "$p")" || return 1
+    case "$l" in /*) p="$l" ;; *) p="$(dirname "$p")/$l" ;; esac
+  done
+  d="$(_ctx_phys_dir "$(dirname "$p")")" || return 1
+  printf '%s/%s\n' "${d%/}" "$(basename "$p")"
+}
+
+# Whether `rm -rf DIR` is safe; KIND is lib (the install's lib dir) or data
+# (CTX_DIR for --purge). Prints why not and returns 1 when it is not:
+# not absolute, a symlink, not a directory, /, $HOME or a directory holding it,
+# CTX_DIR's parent; a lib dir must be named ctx, hold core.sh, not hold
+# CTX_DIR and not be a git checkout; a data dir must be named .ctx or hold a
+# config file or profiles dir (an explicit CTX_DIR may have any name; the
+# default always ends in .ctx).
+_ctx_rm_rf_ok() {
+  local dir="$1" kind="$2" p home data
+  case "$dir" in /*) ;; *) echo "it is not an absolute path"; return 1 ;; esac
+  [[ "$dir" != / && -L "${dir%/}" ]] && { echo "it is a symlink"; return 1; }
+  [[ -d "$dir" ]] || { echo "it is not a directory"; return 1; }
+  p="$(_ctx_phys_dir "$dir")" || { echo "it cannot be resolved"; return 1; }
+  [[ "$p" == / ]] && { echo "it is /"; return 1; }
+  home="$(_ctx_phys_dir "$HOME")" || home="$HOME"
+  case "${home%/}/" in "$p"/*) echo "it is your home directory or holds it"; return 1 ;; esac
+  data="$(_ctx_phys_dir "$CTX_DIR")" || data="$CTX_DIR"
+  [[ "$p" == "$(dirname "$data")" ]] && { echo "it is the parent of CTX_DIR"; return 1; }
+  if [[ "$kind" == lib ]]; then
+    [[ "$(basename "$p")" == ctx ]] || { echo "its name is not 'ctx'"; return 1; }
+    case "${data%/}/" in "$p"/*) echo "it holds CTX_DIR"; return 1 ;; esac
+    [[ -f "$p/core.sh" ]] || { echo "it has no core.sh"; return 1; }
+    [[ -e "$p/.git" ]] && { echo "it is a git checkout"; return 1; }
+  else
+    [[ "$(basename "${dir%/}")" == .ctx || -f "$p/config" || -d "$p/profiles" ]] \
+      || { echo "it does not look like a ctx data directory (no config or profiles)"; return 1; }
+  fi
+  return 0
+}
+
+# ctx uninstall [--purge]. The ctx on PATH must be the running one, a regular
+# file with the installer's CTX_LIB="..." line, whose lib dir is this ctx's;
+# every path is checked (_ctx_rm_rf_ok) before the prompt, and any doubt is a
+# refusal with nothing removed. Removes the guard (when on), ctx, ctx-core next
+# to it, the lib dir and, with --purge, each profile's secrets and CTX_DIR.
 cmd_uninstall() {
   local purge_data=false
   while [[ $# -gt 0 ]]; do
@@ -1063,35 +1115,94 @@ cmd_uninstall() {
     esac
   done
 
-  bold "\n  ctx uninstall\n"
-  warn "This removes the ctx binary and library scripts from your install location."
-  $purge_data && warn "Also deletes ~/.ctx (profiles, secrets, backups)."
-  echo ""
-  ask_yn "Continue?" "n" || die "Aborted."
-
-  local ctx_bin lib_line install_lib
+  local ctx_bin lib_line install_lib="" core_bin why me failed=0
   ctx_bin="$(command -v ctx 2>/dev/null || true)"
   [[ -z "$ctx_bin" ]] && die "ctx not found in PATH"
-
-  if [[ -f "$ctx_bin" ]]; then
-    lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
-    if [[ "$lib_line" =~ CTX_LIB=\"([^\"]+)\" ]]; then
-      install_lib="${BASH_REMATCH[1]}"
-    fi
+  if [[ -L "$ctx_bin" ]]; then
+    die "Refusing to uninstall: $ctx_bin is a symlink (to $(readlink "$ctx_bin")). Remove the link yourself, or put the installed ctx first on PATH."
   fi
-
-  rm -f "$ctx_bin" && success "Removed $ctx_bin"
-  if [[ -n "${install_lib:-}" && -d "$install_lib" ]]; then
-    rm -rf "$install_lib" && success "Removed $install_lib"
+  [[ -f "$ctx_bin" ]] || die "Refusing to uninstall: $ctx_bin is not a regular file."
+  me="$(_ctx_phys_file "$CTX_BIN/ctx" || true)"
+  [[ -n "$me" && "$(_ctx_phys_file "$ctx_bin" || true)" == "$me" ]] \
+    || die "Refusing to uninstall: the ctx on PATH ($ctx_bin) is not the one running ($CTX_BIN/ctx)."
+  lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
+  if [[ "$lib_line" =~ ^CTX_LIB=\"(/[^\"]*)\"$ ]]; then
+    install_lib="${BASH_REMATCH[1]}"
+  else
+    die "Refusing to uninstall: $ctx_bin has no installer CTX_LIB line (a source checkout?). Remove it by hand."
   fi
+  [[ "$(_ctx_phys_dir "$install_lib" || true)" == "$(_ctx_phys_dir "$CTX_LIB" || echo "?")" ]] \
+    || die "Refusing to uninstall: $ctx_bin names $install_lib, but this ctx runs from $CTX_LIB."
+  why="$(_ctx_rm_rf_ok "$install_lib" lib)" || die "Refusing to remove $install_lib: $why."
+  if $purge_data && [[ -e "$CTX_DIR" || -L "$CTX_DIR" ]]; then
+    why="$(_ctx_rm_rf_ok "$CTX_DIR" data)" || die "Refusing to remove $CTX_DIR: $why."
+  fi
+  core_bin="$(dirname "$ctx_bin")/ctx-core"
+  [[ -e "$core_bin" || -L "$core_bin" ]] || core_bin=""
 
+  local provider label profiles=() p keys k n
   if $purge_data; then
-    rm -rf "$CTX_DIR" && success "Removed $CTX_DIR"
+    provider="$(ctx_effective_secret_provider)"
+    label="$(ctx_secret_store_label)"
+    while IFS= read -r p; do [[ -n "$p" ]] && profiles+=("$p"); done < <(profile_list)
+  fi
+
+  bold "\n  ctx uninstall\n"
+  warn "This removes the ctx binary and library scripts from your install location."
+  $purge_data && warn "Also deletes $CTX_DIR (profiles, backups) and every profile's secrets in the $label."
+  dim "  $ctx_bin"
+  [[ -n "$core_bin" ]] && dim "  $core_bin"
+  dim "  $install_lib"
+  $purge_data && [[ -e "$CTX_DIR" ]] && dim "  $CTX_DIR"
+  echo ""
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    for p in "${profiles[@]+"${profiles[@]}"}"; do
+      n="$(secret_list_with_provider "$provider" "$p" | grep -c . || true)"
+      [[ "$n" -gt 0 ]] && dim "  [dry-run] would delete $n secret(s) of $p from the $label"
+    done
+    _ctx_guard_installed && dim "  [dry-run] would run ctx guard uninstall"
+    dim "  [dry-run] would remove $ctx_bin"
+    [[ -n "$core_bin" ]] && dim "  [dry-run] would remove $core_bin"
+    dim "  [dry-run] would remove $install_lib"
+    $purge_data && [[ -e "$CTX_DIR" ]] && dim "  [dry-run] would remove $CTX_DIR"
+    echo ""
+    return 0
+  fi
+
+  ask_yn "Continue?" "n" || die "Aborted."
+
+  # Secrets first: if one cannot be deleted, nothing else is removed.
+  for p in "${profiles[@]+"${profiles[@]}"}"; do
+    keys="$(secret_list_with_provider "$provider" "$p")"
+    n=0
+    while IFS= read -r k; do
+      [[ -z "$k" ]] && continue
+      if secret_delete_with_provider "$provider" "$p" "$k"; then
+        n=$((n + 1))
+      else
+        error "Could not delete secret $k of $p from the $label"
+        failed=1
+      fi
+    done <<<"$keys"
+    [[ $n -gt 0 ]] && success "Deleted $n secret(s) of $p from the $label"
+  done
+  [[ $failed -eq 0 ]] || die "Some secrets could not be deleted; nothing else was removed."
+
+  _ctx_guard_installed && _ctx_guard_uninstall
+  if rm -f "$ctx_bin" 2>/dev/null; then success "Removed $ctx_bin"; else error "Could not remove $ctx_bin"; failed=1; fi
+  if [[ -n "$core_bin" ]]; then
+    if rm -f "$core_bin" 2>/dev/null; then success "Removed $core_bin"; else error "Could not remove $core_bin"; failed=1; fi
+  fi
+  if rm -rf "$install_lib" 2>/dev/null; then success "Removed $install_lib"; else error "Could not remove $install_lib"; failed=1; fi
+  if $purge_data && [[ -e "$CTX_DIR" ]]; then
+    if rm -rf "$CTX_DIR" 2>/dev/null; then success "Removed $CTX_DIR"; else error "Could not remove $CTX_DIR"; failed=1; fi
   fi
 
   echo ""
-  info "Remove ctx hook blocks from your shell rc if desired (search for 'ctx auto-switch')."
+  info "Remove the ctx blocks from your shell rc if desired (search for '# BEGIN ctx profile autoswitch')."
   echo ""
+  [[ $failed -eq 0 ]] || exit 1
 }
 
 # ─── upgrade ──────────────────────────────────────────────────────────────────
@@ -1186,6 +1297,55 @@ cmd_upgrade() {
 }
 
 # ─── undo ─────────────────────────────────────────────────────────────────────
+# Make a fresh backup stamp dir and print it: $CTX_DIR/backups/<stamp>, or
+# <stamp>-2, -3… when that one exists (an undo in the same second as the
+# backup it restores must not write into it).
+_ctx_backup_new_dir() {
+  local base="${CTX_DIR}/backups" stamp d n=1
+  stamp="$(date '+%Y%m%d-%H%M%S')"
+  mkdir -p "$base" 2>/dev/null || return 1
+  d="$base/$stamp"
+  while ! mkdir "$d" 2>/dev/null; do
+    n=$((n + 1))
+    [[ $n -gt 99 ]] && return 1
+    d="$base/$stamp-$n"
+  done
+  printf '%s\n' "$d"
+}
+
+# Back SRC up into backup dir BDIR, like backup_file does into its stamp dir.
+_ctx_backup_into() {
+  local bdir="$1" src="$2"
+  cp -f "$src" "$bdir/$(basename "$src")" 2>/dev/null || return 1
+  echo "$src" >> "$bdir/manifest.txt"
+  log "Backed up $src → $bdir"
+}
+
+# Mode bits of a file, octal (GNU stat, else BSD stat).
+_ctx_file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+
+# Put SRC's content and mode at DST: written through a symlink, via a temp file
+# in the target's directory renamed over it, so a failure leaves DST as it was.
+_ctx_restore_file() {
+  local src="$1" dst="$2" real mode tmp
+  real="$(_ctx_phys_file "$dst")" || return 1
+  [[ -d "$real" ]] && return 1
+  mode="$(_ctx_file_mode "$src")" || return 1
+  tmp="$(mktemp "$(dirname "$real")/.ctx-undo.XXXXXX" 2>/dev/null)" || return 1
+  if cp "$src" "$tmp" 2>/dev/null && chmod "$mode" "$tmp" 2>/dev/null && mv -f "$tmp" "$real" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# ctx undo: restore the files of the latest backup. The backup keeps one copy
+# per basename, so when two manifest paths share a basename neither is
+# restored ("Ambiguous backup"); a path that is not absolute, not in the
+# backup, or whose directory is gone is skipped too. The files are listed
+# before the prompt; the current versions go to a new backup first (so the
+# undo can be undone); a restored file gets the backup's mode. Exit 1 when any
+# file was skipped or failed.
 cmd_undo() {
   local latest; latest=$(latest_backup)
   [[ -z "$latest" ]] && die "No backups found in ${CTX_DIR}/backups"
@@ -1194,21 +1354,83 @@ cmd_undo() {
   bold "\n  Restoring from backup: $latest\n"
 
   [[ ! -f "$bdir/manifest.txt" ]] && die "Manifest not found at $bdir/manifest.txt"
+  [[ -r "$bdir/manifest.txt" ]] || die "Cannot read $bdir/manifest.txt"
+
+  local origs=() todo=() seen=$'\n' orig other fname same failed=0
+  while IFS= read -r orig || [[ -n "$orig" ]]; do
+    [[ -z "$orig" ]] && continue
+    case "$seen" in *$'\n'"$orig"$'\n'*) continue ;; esac
+    seen="$seen$orig"$'\n'
+    origs+=("$orig")
+  done < "$bdir/manifest.txt"
+
+  for orig in "${origs[@]+"${origs[@]}"}"; do
+    fname="$(basename "$orig")"
+    same=0
+    [[ "$fname" == manifest.txt ]] && same=1
+    for other in "${origs[@]}"; do
+      [[ "$other" != "$orig" && "$(basename "$other")" == "$fname" ]] && same=1
+    done
+    if [[ $same -eq 1 ]]; then
+      warn "Ambiguous backup for $orig: another file in it has the same name; skipped"
+      failed=1
+    elif [[ "$orig" != /* ]]; then
+      warn "Cannot restore $orig: not an absolute path; skipped"
+      failed=1
+    elif [[ ! -f "$bdir/$fname" ]]; then
+      warn "Not in backup: $orig"
+      failed=1
+    elif [[ ! -d "$(dirname "$orig")" ]]; then
+      warn "Cannot restore $orig: $(dirname "$orig") no longer exists; skipped"
+      failed=1
+    else
+      dim "  $orig"
+      todo+=("$orig")
+    fi
+  done
+  [[ ${#todo[@]} -eq 0 ]] && die "Nothing to restore from $latest."
+  echo ""
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    for orig in "${todo[@]}"; do
+      [[ -f "$orig" ]] && dim "  [dry-run] would back up the current $orig"
+      dim "  [dry-run] would restore $orig"
+    done
+    echo ""
+    return 0
+  fi
 
   ask_yn "Restore these files?" "y" || die "Aborted."
 
-  while IFS= read -r orig; do
-    [[ -z "$orig" ]] && continue
-    local fname; fname=$(basename "$orig")
-    if [[ -f "$bdir/$fname" ]]; then
-      cp "$bdir/$fname" "$orig" && success "Restored: $orig"
-    else
-      warn "Not in backup: $orig"
+  local nb=""
+  for orig in "${todo[@]}"; do
+    if [[ -f "$orig" ]]; then
+      if [[ -z "$nb" ]]; then
+        nb="$(_ctx_backup_new_dir)" || { nb=""; error "Could not create a backup directory; nothing restored."; exit 1; }
+      fi
+      if ! _ctx_backup_into "$nb" "$orig"; then
+        error "Could not back up the current $orig; not restored"
+        failed=1
+        continue
+      fi
     fi
-  done < "$bdir/manifest.txt"
+    if _ctx_restore_file "$bdir/$(basename "$orig")" "$orig"; then
+      success "Restored: $orig"
+    else
+      error "Could not restore $orig"
+      failed=1
+    fi
+  done
 
-  success "Undo complete."
-  echo ""
+  [[ -n "$nb" ]] && dim "  The replaced versions are in $nb (run ctx undo again to put them back)."
+  if [[ $failed -eq 0 ]]; then
+    success "Undo complete."
+    echo ""
+  else
+    warn "Undo finished, but some files were not restored."
+    echo ""
+    exit 1
+  fi
 }
 
 # ─── doctor ───────────────────────────────────────────────────────────────────

@@ -1707,6 +1707,181 @@ test_mise_hook_comment_no_injection() {
   pass "mise.toml hook comments flatten control characters"
 }
 
+
+# Octal mode of a file (GNU stat, else BSD stat).
+_t_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+
+test_undo_lists_backs_up_and_keeps_mode() {
+  (
+    set -euo pipefail
+    local td out rc b1 nb
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    unset CTX_NO_GUM
+    mkdir -p "$HOME/.ssh" "$CTX_DIR/backups"
+    b1="$CTX_DIR/backups/20200101-000000"
+    mkdir -p "$b1"
+    printf 'new git\n' >"$HOME/.gitconfig"
+    printf 'new secret\n' >"$HOME/.secret"; chmod 644 "$HOME/.secret"
+    printf 'old git\n' >"$b1/.gitconfig"
+    printf 'old secret\n' >"$b1/.secret"; chmod 600 "$b1/.secret"
+    printf 'gone\n' >"$b1/file.txt"
+    printf '%s\n' "$HOME/.gitconfig" "$HOME/.secret" "$HOME/gone/file.txt" "$HOME/.missing" >"$b1/manifest.txt"
+
+    # dry-run: lists, changes nothing, exits 0
+    out="$("$ROOT_DIR/bin/ctx" --no-gum --dry-run undo </dev/null 2>&1)" || { echo "dry-run exit: $out"; exit 1; }
+    [[ "$out" == *"  $HOME/.gitconfig"* && "$out" == *"[dry-run] would restore $HOME/.secret"* ]] || { echo "dry-run: $out"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "new git" && "$(ls "$CTX_DIR/backups")" == 20200101-000000 ]] || { echo "dry-run changed files"; exit 1; }
+
+    rc=0; out="$(printf 'y\n' | "$ROOT_DIR/bin/ctx" --no-gum undo 2>&1)" || rc=$?
+    [[ $rc -eq 1 ]] || { echo "exit $rc, want 1 (skipped files): $out"; exit 1; }
+    [[ "$out" == *"Cannot restore $HOME/gone/file.txt: $HOME/gone no longer exists; skipped"* ]] || { echo "gone dir: $out"; exit 1; }
+    [[ "$out" == *"Not in backup: $HOME/.missing"* ]] || { echo "missing: $out"; exit 1; }
+    # the list comes before the prompt
+    [[ "$out" == *"  $HOME/.secret"*"Restore these files?"* ]] || { echo "list before prompt: $out"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "old git" && "$(cat "$HOME/.secret")" == "old secret" ]] || { echo "not restored"; exit 1; }
+    [[ "$(_t_mode "$HOME/.secret")" == 600 ]] || { echo "mode $(_t_mode "$HOME/.secret"), want 600"; exit 1; }
+    [[ ! -e "$HOME/gone" ]] || { echo "created gone/"; exit 1; }
+    nb="$(ls -1t "$CTX_DIR/backups" | head -1)"
+    [[ "$nb" != 20200101-000000 && "$(cat "$CTX_DIR/backups/$nb/.gitconfig")" == "new git" ]] || { echo "no pre-restore backup: $nb"; exit 1; }
+    [[ "$out" == *"The replaced versions are in $CTX_DIR/backups/$nb"* ]] || { echo "backup hint: $out"; exit 1; }
+
+    # the undo can be undone
+    printf 'y\n' | "$ROOT_DIR/bin/ctx" --no-gum undo >/dev/null 2>&1 || { echo "second undo failed"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "new git" && "$(_t_mode "$HOME/.secret")" == 644 ]] || { echo "undo of undo"; exit 1; }
+  ) || fail "undo lists files, backs up the current versions and keeps the backup's mode"
+  pass "undo lists files, backs up the current versions and keeps the backup's mode"
+}
+
+test_undo_ambiguous_and_same_second() {
+  (
+    set -euo pipefail
+    local td out rc b1 fake
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$HOME/.ssh" "$CTX_DIR" "$td/fake"
+    b1="$CTX_DIR/backups/20261020-101010"
+    mkdir -p "$b1"
+    printf 'ssh now\n' >"$HOME/.ssh/config"
+    printf 'ctx now\n' >"$CTX_DIR/config"
+    printf 'git now\n' >"$HOME/.gitconfig"
+    printf 'one of them\n' >"$b1/config"
+    printf 'git old\n' >"$b1/.gitconfig"
+    printf '%s\n' "$HOME/.ssh/config" "$CTX_DIR/config" "$HOME/.gitconfig" "$HOME/.gitconfig" >"$b1/manifest.txt"
+    # a date frozen at the backup's own stamp: the new backup must not land in it
+    printf '#!/bin/sh\nif [ "$1" = "+%%Y%%m%%d-%%H%%M%%S" ]; then echo 20261020-101010; exit 0; fi\nexec /bin/date "$@"\n' >"$td/fake/date"
+    chmod +x "$td/fake/date"
+    rc=0; out="$(printf 'y\n' | PATH="$td/fake:$PATH" "$ROOT_DIR/bin/ctx" --no-gum undo 2>&1)" || rc=$?
+    [[ $rc -eq 1 ]] || { echo "exit $rc: $out"; exit 1; }
+    [[ "$out" == *"Ambiguous backup for $HOME/.ssh/config"* && "$out" == *"Ambiguous backup for $CTX_DIR/config"* ]] || { echo "ambiguous: $out"; exit 1; }
+    [[ "$(cat "$HOME/.ssh/config")" == "ssh now" && "$(cat "$CTX_DIR/config")" == "ctx now" ]] || { echo "ambiguous file overwritten"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "git old" ]] || { echo "gitconfig not restored"; exit 1; }
+    [[ "$(grep -c . "$b1/manifest.txt")" -eq 4 ]] || { echo "restored backup was written into"; exit 1; }
+    # Bash's date is frozen (-2 suffix); Go's clock is not, so accept any new dir.
+    fake="$(ls -1t "$CTX_DIR/backups" | head -1)"
+    [[ "$fake" != 20261020-101010 ]] || { echo "pre-restore backup went into the restored dir"; exit 1; }
+    [[ "${CTX_CORE:-}" != off ]] || [[ "$fake" == 20261020-101010-2 ]] || { echo "same-second dir: $fake"; exit 1; }
+    fake="$CTX_DIR/backups/$fake"
+    [[ "$(cat "$fake/.gitconfig")" == "git now" && "$(cat "$fake/manifest.txt")" == "$HOME/.gitconfig" ]] || { echo "same-second backup dir: $(ls "$CTX_DIR/backups")"; exit 1; }
+    [[ "$(echo "$out" | grep -c "Restored: $HOME/.gitconfig")" -eq 1 ]] || { echo "duplicate manifest line restored twice: $out"; exit 1; }
+  ) || fail "undo skips same-name files and never writes into the backup it restores"
+  pass "undo skips same-name files and never writes into the backup it restores"
+}
+
+# _t_fake_install DIR: a ctx install like install.sh makes (bin/ctx with the
+# CTX_LIB line rewritten, lib/ctx with the scripts). ctx-core goes next to the
+# binary: the real build when there is one and CTX_CORE is not off (so the Go
+# command runs), else a stub that implements nothing.
+_t_fake_install() {
+  local d="$1"
+  mkdir -p "$d/bin" "$d/lib/ctx"
+  sed "9s|^CTX_LIB=.*|CTX_LIB=\"$d/lib/ctx\"|" "$ROOT_DIR/bin/ctx" >"$d/bin/ctx"
+  chmod 755 "$d/bin/ctx"
+  cp "$ROOT_DIR"/lib/*.sh "$ROOT_DIR"/lib/*.bash "$ROOT_DIR"/lib/*.fish "$d/lib/ctx/"
+  if [[ "${CTX_CORE:-}" != off && -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    cp "$ROOT_DIR/bin/ctx-core" "$d/bin/ctx-core"
+  else
+    printf '#!/bin/sh\nexit 1\n' >"$d/bin/ctx-core"
+    chmod 755 "$d/bin/ctx-core"
+  fi
+}
+
+test_uninstall_removes_install_and_purges() {
+  (
+    set -euo pipefail
+    local td out p
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_GLOBAL="$td/home/.gitconfig" GIT_CONFIG_NOSYSTEM=1
+    export CTX_SECRET_PROVIDER=file PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+    unset CTX_NO_GUM CTX_CORE_BIN
+    p="$td/prefix"
+    _t_fake_install "$p"
+    mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/acme"
+    printf 'PROFILE_NAME=acme\n' >"$CTX_DIR/profiles/acme.conf"
+    printf 's3cret' >"$CTX_DIR/secrets/acme/API_KEY"
+    export PATH="$p/bin:$PATH"
+    [[ "$(command -v ctx)" == "$p/bin/ctx" ]] || { echo "ctx on PATH: $(command -v ctx)"; exit 1; }
+
+    out="$(ctx --no-gum --dry-run uninstall --purge </dev/null 2>&1)" || { echo "dry-run: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would remove $p/lib/ctx"* && "$out" == *"[dry-run] would delete 1 secret(s) of acme from the file store"* ]] || { echo "dry-run: $out"; exit 1; }
+    [[ -f "$p/bin/ctx" && -d "$p/lib/ctx" && -d "$CTX_DIR" ]] || { echo "dry-run removed files"; exit 1; }
+
+    out="$(printf 'n\n' | ctx --no-gum uninstall 2>&1)" && { echo "No should fail: $out"; exit 1; }
+    [[ -f "$p/bin/ctx" ]] || { echo "No removed files"; exit 1; }
+
+    out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" || { echo "uninstall: $out"; exit 1; }
+    [[ ! -e "$p/bin/ctx" && ! -e "$p/bin/ctx-core" && ! -e "$p/lib/ctx" && ! -e "$CTX_DIR" ]] || { echo "left behind: $(find "$td" | head -20)"; exit 1; }
+    [[ -d "$p/lib" && -d "$HOME" ]] || { echo "removed too much"; exit 1; }
+    [[ "$out" == *"Deleted 1 secret(s) of acme from the file store"* ]] || { echo "secrets: $out"; exit 1; }
+    [[ "$out" == *"# BEGIN ctx profile autoswitch"* ]] || { echo "hint: $out"; exit 1; }
+  ) || fail "uninstall removes ctx, ctx-core and the lib dir; --purge the data and secrets"
+  pass "uninstall removes ctx, ctx-core and the lib dir; --purge the data and secrets"
+}
+
+test_uninstall_refuses_unsafe_paths() {
+  (
+    set -euo pipefail
+    local td out rc p before
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_GLOBAL="$td/home/.gitconfig" GIT_CONFIG_NOSYSTEM=1
+    export PATH="/usr/bin:/bin:/usr/sbin:/sbin" # never the real install
+    unset CTX_NO_GUM CTX_CORE_BIN
+    p="$td/prefix"
+    _t_fake_install "$p"
+    mkdir -p "$CTX_DIR/profiles" "$td/links" "$td/checkout/bin" "$td/checkout/.git"
+    ln -s "$p/bin/ctx" "$td/links/ctx"
+    cp "$ROOT_DIR/bin/ctx" "$td/checkout/bin/ctx"; cp -R "$ROOT_DIR/lib" "$td/checkout/lib"
+    before="$(cd "$td" && find . | LC_ALL=C sort)"
+    # _refuse WANT CTX PATH-DIR [VAR=value...]: a refusal before any prompt and no
+    # change. It answers No, so a missing guard aborts at the prompt instead of
+    # deleting (CTX_DIR=/ below).
+    _refuse() {
+      local want="$1" bin="$2" pre="$3"; shift 3
+      rc=0; out="$(printf 'n\n' | env PATH="$pre:$PATH" "$@" "$bin" --no-gum uninstall --purge 2>&1)" || rc=$?
+      [[ $rc -eq 1 && "$out" == *"$want"* ]] || { echo "want refusal '$want', exit $rc: $out"; exit 1; }
+      [[ "$out" != *"Continue?"* ]] || { echo "asked before refusing: $out"; exit 1; }
+      [[ "$(cd "$td" && find . | LC_ALL=C sort)" == "$before" ]] || { echo "files changed after: $want"; exit 1; }
+    }
+    _refuse "is a symlink" "$td/links/ctx" "$td/links"
+    _refuse "no installer CTX_LIB line" "$td/checkout/bin/ctx" "$td/checkout/bin"
+    _refuse "is not the one running" "$td/checkout/bin/ctx" "$p/bin"
+    _refuse "Refusing to remove /: it is /" "$p/bin/ctx" "$p/bin" CTX_DIR=/
+    _refuse "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME"
+    _refuse "does not look like a ctx data directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/checkout"
+    # a hand-edited CTX_LIB pointing at HOME (with the scripts in it, so ctx runs)
+    cp "$ROOT_DIR"/lib/*.sh "$HOME/"
+    sed -i.bak "9s|^CTX_LIB=.*|CTX_LIB=\"$HOME\"|" "$p/bin/ctx" && rm -f "$p/bin/ctx.bak"
+    before="$(cd "$td" && find . | LC_ALL=C sort)"
+    _refuse "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin"
+  ) || fail "uninstall refuses symlinks, checkouts, /, HOME and odd data dirs"
+  pass "uninstall refuses symlinks, checkouts, /, HOME and odd data dirs"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1765,4 +1940,8 @@ test_setup_batch_checks_before_side_effects
 test_setup_cfg_quoted_bash32
 test_edit_editor_with_args
 test_clone_no_extra_args_bash32
+test_undo_lists_backs_up_and_keeps_mode
+test_undo_ambiguous_and_same_second
+test_uninstall_removes_install_and_purges
+test_uninstall_refuses_unsafe_paths
 echo "All tests passed."
