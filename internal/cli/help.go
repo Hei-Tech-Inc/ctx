@@ -30,8 +30,7 @@ func Version(w io.Writer) int {
 
 // Help ports cmd_help. `help setup|import|add|wizard` prints the setup
 // reference; any other topic (or none) prints the overview. Plain mode is
-// byte-identical to Bash's non-gum heredoc, including the bold markers, which
-// Bash writes as the literal text of its escape variables on a terminal.
+// byte-identical to Bash's non-gum heredoc, bold escapes included on a terminal.
 // Rich mode is a lipgloss card carrying the gum rendering's content.
 func Help(t tui.Term, args []string) int {
 	if len(args) > 0 {
@@ -48,18 +47,11 @@ func Help(t tui.Term, args []string) int {
 	}
 	b, r := "", ""
 	if t.Colors {
-		b, r = ansiBoldText, ansiResetText
+		b, r = ansiBold, ansiReset
 	}
 	_, _ = io.WriteString(t.Out, strings.NewReplacer("{{VERSION}}", ver, "{{BOLD}}", b, "{{RESET}}", r).Replace(helpPlain))
 	return 0
 }
-
-// The text of core.sh's BOLD and RESET (single-quoted there, so a heredoc
-// prints them as backslash sequences, not as escape bytes).
-const (
-	ansiBoldText  = `\033[1m`
-	ansiResetText = `\033[0m`
-)
 
 // helpCard is the gum help card: rounded border color 99, padding "1 3",
 // margin "1 0".
@@ -76,15 +68,16 @@ func helpCard(ver string) string {
 		title("DAILY USE"),
 		"  use  <name>      Activate a profile (--eval bash|fish: print exports for eval)",
 		"  deactivate       Clear active profile (prints eval for your shell)",
-		"  list             List all profiles",
-		"  status           Active profile + live checks",
+		"  list (ls)        List all profiles",
+		"  status (st)      Active profile + live checks",
 		"  clone            git clone with GitHub host rewrite for this profile",
 		"  workdir-prompt   Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)",
-		"  run -- <cmd>     Run one command (e.g. an AI agent) with this folder's profile identity",
-		"  env              Print the profile's identity as exports (eval; --secrets to include secrets)",
-		"  agent-rules      Print or --write AI agent instructions (AGENTS.md)",
-		"  mcp              Run the ctx MCP server (stdio) for AI agents",
-		"  knowledge        Manage per-client knowledge notes",
+		"  run [-p name] -- <cmd>  Run one command (e.g. an AI agent) with this folder's profile identity",
+		"  env [-p name]    Print the profile's identity as exports (eval; --secrets, --fish)",
+		"  agent-rules      Print or --write [file] AI agent instructions (AGENTS.md)",
+		"  mcp              Run the ctx MCP server (stdio) for AI agents; --profile NAME",
+		"  mcp install <claude|cursor>  Register the MCP server with Claude Code or Cursor",
+		"  knowledge init [name]  Create per-client knowledge notes",
 		"",
 		title("SECRETS  (Keychain or ~/.ctx/secrets)"),
 		"  secret set   <profile> <KEY>",
@@ -100,19 +93,20 @@ func helpCard(ver string) string {
 		"  config import    Import portable config bundle",
 		"  verify [name]    One profile: live ssh -T, gh match, paths, email",
 		"  edit   <name>    Open profile in $EDITOR",
-		"  remove <name>    Delete profile + secrets",
+		"  remove <name>    Delete profile + secrets (rm, del)",
 		"  undo             Restore last backup",
 		"  install-hook     Install mise + ctx hooks into shell rc",
 		"  upgrade [--check] Re-run installer, or check for newer version",
 		"  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe",
 		"  doctor           Machine-wide: tools, hooks, SSH layout, profiles",
-		"  guard [install|uninstall]  Block commits/pushes with the wrong profile identity",
-		"  version          Print version",
+		"  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity",
+		"  completion <zsh|bash|fish>  Print shell completion script",
+		"  version          Print version (-v, --version)",
 		"  help setup       Full setup wizard + --config reference",
 		"",
 		title("FLAGS"),
 		"  --dry-run        Preview changes without writing files",
-		"  --quiet          Suppress output (used by auto-switch)",
+		"  --quiet, -q      Suppress output (used by auto-switch)",
 		"  --no-gum         Force plain text prompts",
 		"  --json           Machine-readable JSON (list, status)",
 		"",

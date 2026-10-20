@@ -9,7 +9,9 @@ _ctx() {
     'use:Activate a profile'
     'deactivate:Clear active profile (shell eval)'
     'list:List all profiles'
+    'ls:Alias for list'
     'status:Show active profile and live checks'
+    'st:Alias for status'
     'clone:git clone with GitHub host rewrite'
     'workdir-prompt:Print WORK_DIR line when cwd is in prompt scope'
     'config:Configure ctx defaults'
@@ -17,12 +19,14 @@ _ctx() {
     'verify:Verify profile wiring'
     'edit:Open profile config in $EDITOR'
     'remove:Delete a profile'
+    'rm:Alias for remove'
+    'del:Alias for remove'
     'undo:Restore last backup'
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
     'doctor:Health check'
-    'guard:Git identity guard (status, install, uninstall)'
+    'guard:Git identity guard (status, install, uninstall, check)'
     'run:Run a command with the profile identity'
     'env:Print profile identity as exports'
     'agent-rules:Print or write AI agent instructions'
@@ -31,6 +35,10 @@ _ctx() {
     'completion:Print shell completion'
     'version:Print version'
     'help:Show help'
+    '-v:Print version'
+    '--version:Print version'
+    '-h:Show help'
+    '--help:Show help'
   )
   profiles=("${(@f)$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}')}")
   local setup_flags=(
@@ -46,6 +54,7 @@ _ctx() {
   local global_flags=(
     '--dry-run:Preview without writing files'
     '--quiet:Suppress output'
+    '-q:Suppress output'
     '--no-gum:Plain prompts'
     '--json:JSON output (list, status)'
   )
@@ -53,13 +62,18 @@ _ctx() {
     2) _describe 'ctx flags' global_flags && _describe 'ctx commands' cmds ;;
     3)
       case ${words[2]} in
-        --dry-run|--quiet|--no-gum|--json) _describe 'ctx commands' cmds ;;
-        use|edit|remove|verify) _describe 'profiles' profiles ;;
+        --dry-run|--quiet|-q|--no-gum|--json) _describe 'ctx commands' cmds ;;
+        use|edit|remove|rm|del|verify) _describe 'profiles' profiles ;;
+        env) local fl=('-p:Profile' '--profile:Profile' '--secrets:Include secrets' '--fish:Fish syntax'); _describe 'env flags' fl ;;
+        run) local fl=('-p:Profile' '--profile:Profile'); _describe 'run flags' fl ;;
+        mcp) local sub=('install:Register with Claude Code or Cursor' '--profile:Serve one profile'); _describe 'mcp options' sub ;;
+        knowledge) local sub=('init'); _describe 'subcommands' sub ;;
+        agent-rules) local sub=('--write:Write to a file'); _describe 'agent-rules flags' sub ;;
         setup|import|add) _describe 'setup options' setup_flags ;;
         help) _describe 'help topics' help_topics ;;
         secret) local sub=('set' 'get' 'list' 'delete' 'migrate'); _describe 'subcommands' sub ;;
         config) local sub=('show' 'work-root' 'secret-provider' 'prompt-workdir-depth' 'prompt-extra-paths' 'autoswitch-notify' 'export' 'import'); _describe 'subcommands' sub ;;
-        guard) local sub=('status' 'install' 'uninstall'); _describe 'subcommands' sub ;;
+        guard) local sub=('status' 'install' 'uninstall' 'remove' 'check'); _describe 'subcommands' sub ;;
         upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
         uninstall) local sub=('--purge'); _describe 'uninstall flags' sub ;;
         completion) local sh=('zsh' 'bash' 'fish'); _describe 'shells' sh ;;
@@ -84,6 +98,15 @@ _ctx() {
           esac
           ;;
         use) local ev=('--eval:Print shell exports for eval'); _describe 'use flags' ev ;;
+        env|run) case ${words[3]} in -p|--profile) _describe 'profiles' profiles ;; esac ;;
+        mcp)
+          case ${words[3]} in
+            install) local tg=('claude' 'cursor'); _describe 'targets' tg ;;
+            --profile) _describe 'profiles' profiles ;;
+          esac
+          ;;
+        knowledge) [[ ${words[3]} == init ]] && _describe 'profiles' profiles ;;
+        agent-rules) [[ ${words[3]} == --write ]] && _files ;;
       esac
       ;;
     5)

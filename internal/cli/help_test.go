@@ -77,7 +77,7 @@ func TestVersionHelpCompletionMatchBash(t *testing.T) {
 	}
 }
 
-// With a terminal (and --no-gum) Bash prints its bold markers; so must Go.
+// With a terminal (and --no-gum) Bash prints bold escapes; so must Go.
 func TestHelpPlainOnTTYMatchesBash(t *testing.T) {
 	core := buildCore(t)
 	for _, args := range [][]string{{"--no-gum", "help"}, {"--no-gum", "help", "setup"}} {
@@ -157,11 +157,65 @@ func TestHelpRichCard(t *testing.T) {
 			t.Errorf("rich help lacks %q", want)
 		}
 	}
-	// The gum rendering has no completion line or config-file section.
-	if strings.Contains(plain, "completion <zsh") || strings.Contains(plain, "INSTALL REQUIREMENTS") {
+	// The gum rendering has no config-file or install-requirements section.
+	if strings.Contains(plain, "SETUP CONFIG FILE") || strings.Contains(plain, "INSTALL REQUIREMENTS") {
 		t.Error("rich help carries plain-only content")
 	}
 	if !strings.Contains(out.String(), "\x1b[") {
 		t.Error("rich help has no styling")
+	}
+}
+
+// bin/ctx's gum help lines (one quoted argument each) are the rich card's
+// content: R9 edits must land in both.
+func TestHelpCardMatchesBashGumLines(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(repoRoot, "bin", "ctx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	start := strings.Index(text, "if $HAS_GUM; then\n    gum style")
+	end := strings.Index(text, "\n  else\n    # BOLD/RESET")
+	if start < 0 || end < start {
+		t.Fatal("cannot find the gum help branch")
+	}
+	t.Setenv("CTX_VERSION", "3.2.0")
+	var out bytes.Buffer
+	Help(tui.Term{Out: &out, Err: &out, Rich: true}, nil)
+	card := ansiRE.ReplaceAllString(out.String(), "")
+	lineRE := regexp.MustCompile(`(?m)^      "(  [^"]*(?:\\.[^"]*)*)"`)
+	n := 0
+	for _, m := range lineRE.FindAllStringSubmatch(text[start:end], -1) {
+		want := strings.NewReplacer(`\$`, "$").Replace(m[1])
+		n++
+		if !strings.Contains(card, want) {
+			t.Errorf("rich card lacks Bash gum line %q", want)
+		}
+	}
+	if n < 40 {
+		t.Errorf("only %d gum lines found", n)
+	}
+}
+
+// Every command the completions offer is a case label in bin/ctx's dispatch.
+func TestCompletionCommandsAreDispatched(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(repoRoot, "bin", "ctx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := string(src)[strings.Index(string(src), "\nmain() {"):]
+	m := regexp.MustCompile(`local cmds="([^"]*)"`).FindStringSubmatch(completionBash)
+	if m == nil {
+		t.Fatal("no cmds list in the bash completion")
+	}
+	for _, c := range strings.Fields(m[1]) {
+		if !regexp.MustCompile(`(?m)^    (?:[a-z|-]*\|)?` + regexp.QuoteMeta(c) + `(?:\||\))`).MatchString(main) {
+			t.Errorf("%q is completed but not dispatched", c)
+		}
+	}
+	for _, c := range []string{"-v", "--version", "-h", "--help"} {
+		if !strings.Contains(main, c) {
+			t.Errorf("%q missing from dispatch", c)
+		}
 	}
 }

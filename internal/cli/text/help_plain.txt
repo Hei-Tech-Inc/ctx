@@ -10,15 +10,16 @@
   use  <name>           Activate a profile (gh, SSH, AWS, Azure, GCP, kubectl)
                         --eval bash|fish prints exports; the ctx shell function evals it
   deactivate            Clear active profile from ~/.ctx/config; run eval \"$(ctx deactivate)\"
-  list                  List all profiles
-  status                Active profile + live checks
+  list (ls)             List all profiles
+  status (st)           Active profile + live checks
   clone                 git clone with GitHub host rewrite (see README)
   workdir-prompt        Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)
   run [-p name] -- <cmd>  Run one command (e.g. an AI agent) with this folder's profile identity
   env [-p name]         Print the profile's identity as exports (eval; --secrets, --fish)
   agent-rules [--write [file]]  Print or write AI agent instructions (default: AGENTS.md)
-  mcp                   Run the ctx MCP server (stdio) for AI agents
-  knowledge             Manage per-client knowledge notes
+  mcp [--profile name]  Run the ctx MCP server (stdio) for AI agents
+  mcp install <claude|cursor>  Register the MCP server with Claude Code or Cursor
+  knowledge init [name] Create per-client knowledge notes
 
 {{BOLD}}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk){{RESET}}
   secret set   <profile> <KEY>
@@ -35,19 +36,20 @@
   config import <dir>   Import config bundle on a new machine
   verify [name]         One profile: live ssh -T, gh match, paths, email
   edit   <name>         Open profile config in $EDITOR
-  remove <name>         Delete profile + stored secrets
+  remove <name>         Delete profile + stored secrets (rm, del)
   undo                  Restore last backup
   install-hook [rc]     Install mise + ctx hooks into shell rc
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles
-  guard [install|uninstall]  Block commits/pushes with the wrong profile identity
+  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity
   completion <zsh|bash|fish> Print shell completion script
-  version               Print version
+  version               Print version (-v, --version)
+  help [setup]          This screen (-h, --help)
 
 {{BOLD}}FLAGS{{RESET}}
   --dry-run             Preview changes, write nothing
-  --quiet               Suppress output (auto-switch hook uses this)
+  --quiet, -q           Suppress output (auto-switch hook uses this)
   --no-gum              Force plain text prompts
   --json                Machine-readable JSON for supported commands (list, status)
   setup --scope clone   Profile + SSH host for ctx clone only
