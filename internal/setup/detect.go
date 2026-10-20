@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -170,8 +171,38 @@ func runTool(timeout time.Duration, merge bool, name string, args ...string) str
 	}
 	prepareKill(cmd)
 	cmd.WaitDelay = 500 * time.Millisecond
-	_ = cmd.Run()
+	scans.Lock()
+	if scans.stopped || cmd.Start() != nil {
+		scans.Unlock()
+		return buf.String()
+	}
+	scans.running[cmd] = true
+	scans.Unlock()
+	_ = cmd.Wait()
+	scans.Lock()
+	delete(scans.running, cmd)
+	scans.Unlock()
 	return buf.String()
+}
+
+// scans holds the detector processes in flight, for KillScans.
+var scans = struct {
+	sync.Mutex
+	running map[*exec.Cmd]bool
+	stopped bool
+}{running: map[*exec.Cmd]bool{}}
+
+// KillScans kills every running detector (with its process group on Unix)
+// and makes later ones return no output without starting: for a SIGINT
+// handler about to exit, since a detector in its own process group does not
+// get the terminal's interrupt.
+func KillScans() {
+	scans.Lock()
+	defer scans.Unlock()
+	scans.stopped = true
+	for cmd := range scans.running {
+		_ = killScan(cmd)
+	}
 }
 
 // lines splits output into non-empty lines.

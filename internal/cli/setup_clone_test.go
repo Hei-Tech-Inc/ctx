@@ -20,9 +20,9 @@ import (
 // fake appends its argv to $FAKE_LOGDIR/<name>.argv, so cases running in
 // parallel keep separate logs:
 //   - ssh-keygen writes a deterministic key pair for -f;
-//   - gh: `auth status` reports alice logged in; `auth switch` and
-//     `ssh-key add` print to stdout and stderr (Bash drops stderr), and
-//     `ssh-key add` exits $FAKE_GH_ADD_RC;
+//   - gh: `auth status` reports alice logged in (with FAKE_GH_SLOW it hangs);
+//     `auth switch` and `ssh-key add` print to stdout and stderr (Bash drops
+//     stderr), and `ssh-key add` exits $FAKE_GH_ADD_RC;
 //   - git records and runs the real git; mise prints; timeout runs its command;
 //   - hostname (not logged) prints this machine's name, as os.Hostname does;
 //   - date prints a fixed backup stamp.
@@ -63,6 +63,8 @@ echo "PRIVATE $f" >"$f"
 echo "ssh-ed25519 AAAAfake $f" >"$f.pub"`)
 	logged("gh", `case "$1 $2" in
 "auth status")
+  # FAKE_GH_SLOW: a scan that hangs; the pid is the sleep's (exec).
+  [ -n "$FAKE_GH_SLOW" ] && { echo $$ >"$FAKE_LOGDIR/gh.pid"; exec sleep 30; }
   [ -n "$FAKE_GH_NOACCT" ] && exit 1
   printf 'github.com\n  ✓ Logged in to github.com account alice (keyring)\n'
   [ -f "$FAKE_LOGDIR/gh_login" ] && printf '  ✓ Logged in to github.com account bob (keyring)\n'

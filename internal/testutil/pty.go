@@ -21,6 +21,10 @@ import (
 // read sees end of file.
 const EOF = "EOF"
 
+// CtrlC, as an answer to RunPTY, types Ctrl+C (the terminal's interrupt key)
+// with no Enter after it.
+const CtrlC = "CTRL-C"
+
 // RunPTY timing. An answer is written once the output has been quiet for
 // quietGap and the output since the previous answer looks like a prompt (see
 // promptLike). When there is no output since then, or it does not look like
@@ -42,7 +46,7 @@ const (
 // RunPTY runs cmd with a new pseudo-terminal as its stdin, stdout, stderr and
 // controlling terminal (replacing any streams set on cmd): echo off, a 120×40
 // window. Each answer is typed followed by Enter (\r) when the program waits
-// for input (see quietGap); EOF sends Ctrl+D. Answers left over when cmd exits
+// for input (see quietGap); EOF sends Ctrl+D and CtrlC sends Ctrl+C. Answers left over when cmd exits
 // are not sent. It returns everything cmd wrote, with \r\n turned into \n, and
 // its exit code (128+signal when a signal killed it, as a shell reports). If
 // cmd has not exited within timeout, it is killed and the test fails with the
@@ -147,8 +151,11 @@ func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration
 			continue
 		}
 		data := []byte(answers[i] + "\r")
-		if answers[i] == EOF {
+		switch answers[i] {
+		case EOF:
 			data = []byte{0x04}
+		case CtrlC:
+			data = []byte{0x03}
 		}
 		if _, err := ptmx.Write(data); err != nil {
 			fail("write answer %d: %v", i+1, err)

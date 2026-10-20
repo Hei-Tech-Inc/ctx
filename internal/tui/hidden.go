@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"unicode/utf8"
 )
@@ -25,6 +26,26 @@ func readSecretTTY(fd int, in io.Reader) (string, error) {
 	}
 	defer func() { _ = ttySet(fd, old) }()
 	return readHidden(in)
+}
+
+// SaveTTY reads the terminal state of in, when in is a terminal, and returns
+// a function that puts it back (a no-op otherwise). A SIGINT handler that
+// exits calls it: os.Exit skips the deferred restore of a hidden read (echo
+// off) or a rich prompt (raw mode).
+func SaveTTY(in io.Reader) func() {
+	f, ok := in.(*os.File)
+	if !ok || !isTerminal(f.Fd()) {
+		return func() {}
+	}
+	return saveTTYFd(int(f.Fd()))
+}
+
+func saveTTYFd(fd int) func() {
+	old, err := ttyGet(fd)
+	if err != nil {
+		return func() {}
+	}
+	return func() { _ = ttySet(fd, old) }
 }
 
 // readHidden is the line editor for readSecretTTY. Enter (CR or LF) ends the
