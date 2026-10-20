@@ -31,7 +31,8 @@ var (
 // /bin, /usr/sbin and /sbin (the first one, as PATH would find it) except
 // ExternalTools. Use it in place of those dirs on a test's PATH so the result
 // does not depend on which extra tools the machine has installed. The dir is
-// built once per test binary and shared; do not write to it.
+// built once per test binary and shared; do not write to it. A package that
+// uses it calls CleanupSystemPath from its TestMain after m.Run.
 func SystemPath(t *testing.T) string {
 	t.Helper()
 	sysOnce.Do(func() { sysDir, sysErr = buildSystemPath() })
@@ -67,4 +68,13 @@ func buildSystemPath() (string, error) {
 		}
 	}
 	return dir, nil
+}
+
+// CleanupSystemPath removes the dir SystemPath built, if any. Call it from
+// TestMain once every test has finished.
+func CleanupSystemPath() {
+	sysOnce.Do(func() {}) // nothing built yet: build nothing later either
+	if sysDir != "" {
+		_ = os.RemoveAll(sysDir)
+	}
 }

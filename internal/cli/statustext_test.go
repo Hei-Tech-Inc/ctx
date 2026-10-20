@@ -40,6 +40,7 @@ func TestMain(m *testing.M) {
 	startCoreBuild()
 	code := m.Run()
 	coreOnce.Do(func() {}) // wait for a build still running before removing it
+	testutil.CleanupSystemPath()
 	for _, d := range []string{sharedRoot, coreDir} {
 		if d != "" {
 			_ = os.RemoveAll(d)
