@@ -42,6 +42,9 @@ When adding scripting fields, extend **`ctx --json`** handlers in `lib/cmd_ops.s
 | MCP server and tools | `internal/mcpserver/` |
 | Knowledge store, kubectl/login runner, ops | `internal/knowledge/`, `internal/kube/`, `internal/ops/` |
 | Profiles, folder resolution, secrets | `internal/profile/`, `internal/resolve/`, `internal/secret/` |
+| Setup wizard, `--config`, `--extend` (`setup`, `import`, `add`) | `internal/setup/` |
+| SSH keys, hosts, gitconfig includes for setup | `internal/gitssh/` |
+| Shell quoting (bash `printf %q`, mise.toml escaping) | `internal/shquote/` |
 | Config, git guard, shared command code (`use`, `deactivate`, `secret`, `config`, `guard`) | `internal/ctxconfig/`, `internal/guard/`, `internal/cli/` |
 
 Commands implemented in Go are listed in the `implemented` table in `cmd/ctx-core/main.go`; `bin/ctx` forwards to them. A behavior change to one of them must be made in both the Bash and Go implementations (`CTX_CORE=off` runs Bash).
