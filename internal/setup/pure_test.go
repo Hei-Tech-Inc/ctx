@@ -18,13 +18,16 @@ func repoRoot(t *testing.T) string {
 }
 
 // bashEval sources the Bash libraries and runs script with args as $1...
-// The locale is pinned so tr/sed treat multibyte input the way the Go port mirrors.
+// The locale is pinned so tr/sed treat multibyte input the way the Go port
+// mirrors. C.UTF-8, not en_US.UTF-8: glibc's en_US.UTF-8 collates ranges, so
+// [a-z] and [A-Za-z] match é, À and ß there (Bash would keep "Café" in a slug);
+// C.UTF-8 compares code points on glibc and macOS alike.
 func bashEval(t *testing.T, script string, args ...string) (string, int) {
 	t.Helper()
 	root := repoRoot(t)
 	full := "set -uo pipefail; source " + root + "/lib/core.sh; source " + root + "/lib/cmd_import.sh; " + script
 	cmd := exec.Command("bash", append([]string{"-c", full, "bash"}, args...)...)
-	cmd.Env = append(os.Environ(), "LC_ALL=en_US.UTF-8", "HOME="+t.TempDir(), "CTX_DIR="+t.TempDir())
+	cmd.Env = append(os.Environ(), "LC_ALL=C.UTF-8", "HOME="+t.TempDir(), "CTX_DIR="+t.TempDir())
 	out, err := cmd.Output()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -39,7 +42,7 @@ var pureInputs = []string{
 	"", "acme", "Acme Corp", "ACME_corp-1", "Café", "日本語", "a/b/c", "..", "../x", "a..b",
 	"a@b", "x@y.z", "x@y.", "@y.z", "a b@c.d", "me@co.uk", "A.B@C.D", "-n", "-e", "-neE", "-x",
 	"a\\nb", "tab\there", "x@y..z", "ÀB", "ssh", "SSH", "Gpg", "OpenPGP", "pgp", "None", "OFF", "no", "yes", "a@b.c d",
-	"a@b\u00a0.c", "_ok", "1abc", "A_1", "A-1", "k=v",
+	"a@b\u00a0.c", "a@b\u2007.c", "a@b\u202f.c", "a@b\u2003.c", "a@b\u0085.c", "a@b\u3000.c", "_ok", "1abc", "A_1", "A-1", "k=v",
 }
 
 // bashEach runs body once per input inside a single bash process and returns

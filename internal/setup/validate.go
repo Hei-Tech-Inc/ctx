@@ -61,7 +61,9 @@ func FolderSlug(s string) string {
 	})
 }
 
-var emailRE = regexp.MustCompile(`^[^\t-\r \x{85}\p{Z}]+@[^\t-\r \x{85}\p{Z}]+\.[^\t-\r \x{85}\p{Z}]+`)
+// emailRE is Bash's ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+ with
+// [:space:] as the platform's C library has it in a UTF-8 locale (localeSpace).
+var emailRE = regexp.MustCompile(`^[^` + localeSpace + `]+@[^` + localeSpace + `]+\.[^` + localeSpace + `]+`)
 
 // SensibleEmail is is_sensible_git_email: has '@', no "..", and looks like
 // user@host.tld (no whitespace, Unicode spaces included as in a UTF-8 locale).
