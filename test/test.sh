@@ -1314,12 +1314,13 @@ test_setup_gh_accounts_both_formats() {
     local td out
     td="$(cd "$(mktemp -d)" && pwd -P)"
     _wizard_sandbox "$td"
-    printf 'github.com\n  ✓ Logged in to github.com account alice (keyring)\n  - Active account: true\n  ✓ Logged in to github.com as bob (/x/hosts.yml)\n' >"$td/gh_status"
+    printf 'github.com\n  X Failed to log in to github.com account carol (keyring)\n  ✓ Logged in to github.com account alice (keyring)\n  - Active account: true\n  ✓ Logged in to github.com as bob (/x/hosts.yml)\n' >"$td/gh_status"
     cd "$td/w/acme"
     # ... generate key? n, gh login? n, pick account 3 (bob), aws/azure/gcp/kube, skip secrets, env n, write y
     out="$(printf '%s\n' 2 acme Dev dev@acme.com 1 1 1 n n 3 '' '' '' '' 1 n y | ctx --no-gum setup 2>&1)" \
       || { echo "setup failed: $out"; exit 1; }
     grep -q '^  2  alice$' <<<"$out" && grep -q '^  3  bob$' <<<"$out" || { echo "picker items: $out"; exit 1; }
+    ! grep -q carol <<<"$out" || { echo "failed login listed: $out"; exit 1; }
     grep -q '^GITHUB_USER=bob$' "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
     rm -rf "$td"
   ) || fail "detect_gh_accounts parses both gh formats"
@@ -1440,6 +1441,52 @@ test_setup_no_secrets_bash32() {
   pass "setup with no secrets works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
 }
 
+test_setup_cancel_exits_130() {
+  (
+    set -euo pipefail
+    local td before rc n input
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cd "$td/w/acme"
+    before="$(_tree_digest "$td/home"; _tree_digest "$td/w")"
+    # EOF at: the first prompt (scope picker), the profile name (ask in $(…)),
+    # and a later ask_yn ("No SSH keys found. Generate one…?", main shell).
+    for input in '' $'2\n' $'2\nacme\nDev\ndev@acme.com\n1\n1\n1\n'; do
+      rc=0
+      printf '%s' "$input" | ctx --no-gum setup >"$td/out" 2>"$td/err" || rc=$?
+      [[ "$rc" == 130 ]] || { echo "rc=$rc for input $(printf %q "$input"): $(cat "$td/err")"; exit 1; }
+      n="$(grep -c 'Cancelled by user\.' "$td/err" || true)"
+      [[ "$n" == 1 ]] || { echo "message printed $n times: $(cat "$td/err")"; exit 1; }
+      [[ "$(_tree_digest "$td/home"; _tree_digest "$td/w")" == "$before" ]] || { echo "files changed"; find "$td/home" "$td/w"; exit 1; }
+    done
+    rm -rf "$td"
+  ) || fail "EOF at a setup prompt exits 130"
+  pass "setup EOF at a prompt prints one cancel line, exits 130, writes nothing"
+}
+
+test_mise_hook_comment_no_injection() {
+  (
+    set -euo pipefail
+    local td
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    mkdir -p "$td/w" "$td/run"
+    # shellcheck source=../lib/core.sh
+    source "$ROOT_DIR/lib/core.sh"
+    generate_mise_toml "acme" "$td/w" "Dev" $'bad\ntouch PWNED\r\ttouch PWNED2' "" "" "" "" "" ""
+    if python3 -c 'import tomllib' 2>/dev/null; then
+      python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["hooks"]["enter"]["script"])' "$td/w/mise.toml" >"$td/hook.sh" \
+        || { echo "mise.toml does not parse: $(cat "$td/w/mise.toml")"; exit 1; }
+    else
+      awk '/^script = """/{f=1; next} f && /^"""/{exit} f' "$td/w/mise.toml" | sed 's/\\u000A/\n/g' >"$td/hook.sh"
+    fi
+    (cd "$td/run" && PATH="/usr/bin:/bin" bash "$td/hook.sh" >/dev/null 2>&1) || true
+    [[ ! -e "$td/run/PWNED" && ! -e "$td/run/PWNED2" ]] || { echo "comment injection ran: $(cat "$td/hook.sh")"; exit 1; }
+    grep -q 'address): "bad touch PWNED  touch PWNED2"' "$td/hook.sh" || { echo "comment text: $(cat "$td/hook.sh")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "mise hook comment lines cannot inject commands"
+  pass "mise.toml hook comments flatten control characters"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1488,4 +1535,6 @@ test_setup_key_comment_never_empty
 test_setup_pick_existing_key_index
 test_setup_mise_toml_escaping
 test_setup_no_secrets_bash32
+test_setup_cancel_exits_130
+test_mise_hook_comment_no_injection
 echo "All tests passed."

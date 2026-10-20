@@ -29,9 +29,10 @@ user_cancelled() {
   # Print to stderr so command substitutions never capture this as field input.
   echo -e "${YELLOW}!${RESET} Cancelled by user." >&2
   # If we're inside command substitution, exit only aborts the subshell.
-  # Bubble cancellation to the parent ctx process with INT.
+  # Signal the main ctx shell ($$ is its PID even in a subshell; bin/ctx traps
+  # INT and exits 130). $PPID would be ctx's caller.
   if [[ ${BASH_SUBSHELL:-0} -gt 0 ]]; then
-    kill -INT "$PPID" 2>/dev/null || true
+    kill -INT "$$" 2>/dev/null || true
   fi
   exit 130
 }
@@ -1149,6 +1150,13 @@ _ctx_toml_escape() {
   printf '%s' "$out"
 }
 
+# Text for a comment line: control characters (newline, CR, tab, …) become a
+# space, so a value cannot end the comment and start a command. Then TOML-escaped.
+_ctx_toml_comment_text() {
+  local LC_ALL=C s="$1"
+  _ctx_toml_escape "${s//[[:cntrl:]]/ }"
+}
+
 # A value for inside "…" in a hook script, which is itself inside a TOML """ string:
 # \ " $ ` get a shell backslash first, then the result is TOML-escaped.
 _ctx_toml_sh_dq() {
@@ -1181,7 +1189,7 @@ generate_mise_toml() {
   mkdir -p "$work_dir"
 
   {
-    echo "# mise.toml — ctx managed environment for: $profile"
+    echo "# mise.toml — ctx managed environment for: $(_ctx_toml_comment_text "$profile")"
     echo "# Edit freely. This file is safe to commit (no secrets here)."
     echo "# Secrets load in [hooks.enter]: macOS Keychain, or ~/.ctx/secrets on other OSes."
     echo ""
@@ -1219,8 +1227,8 @@ generate_mise_toml() {
       echo "  git config user.name  \"$(_ctx_toml_sh_dq "$git_name")\""
       echo "  git config user.email \"$(_ctx_toml_sh_dq "$git_email")\""
     else
-      echo "  # Skipped invalid git email (looks like a username, not an address): \"$(_ctx_toml_escape "$git_email")\""
-      echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/${profile}.conf and re-run setup, or edit mise.toml."
+      echo "  # Skipped invalid git email (looks like a username, not an address): \"$(_ctx_toml_comment_text "$git_email")\""
+      echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/$(_ctx_toml_comment_text "$profile").conf and re-run setup, or edit mise.toml."
     fi
     echo ""
 
@@ -1294,8 +1302,9 @@ detect_ssh_keys() {
 detect_gh_accounts() {
   command -v gh &>/dev/null || return 0
   # gh prints "Logged in to github.com account USER (…)" (newer) or "… as USER (…)" (older).
+  # "Failed to log in to github.com account USER" (invalid token) is not a login.
   run_with_timeout 8 gh auth status 2>&1 \
-    | awk '{
+    | awk '/Logged in to github\.com (account|as) / {
         for (i = 1; i + 2 <= NF; i++)
           if ($i == "github.com" && ($(i+1) == "account" || $(i+1) == "as") && $(i-1) == "to") {
             print $(i+2); break

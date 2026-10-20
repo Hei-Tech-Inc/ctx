@@ -368,11 +368,6 @@ cmd_import() {
   _ctx_setup_scope_clone && [[ -n "$CTX_SETUP_EXTEND" ]] \
     && die "setup: --extend cannot be combined with --scope clone"
 
-  if ! _ctx_setup_dry_run; then
-    ctx_init_dirs
-  elif [[ ! -d "$CTX_DIR" || ! -d "$CTX_PROFILES_DIR" || ! -d "${CTX_DIR}/backups" || ! -f "$CTX_CONFIG" ]]; then
-    _ctx_setup_dry "create $CTX_DIR"
-  fi
   ctx_header "Add a client profile"
 
   if $CTX_SETUP_BATCH; then
@@ -923,6 +918,13 @@ cmd_import() {
       "$_imp" "${SSH_KEY_PATH:-}" "${GITHUB_USER:-}" "${AWS_PROFILE_NAME:-}" \
       "${AZURE_SUBSCRIPTION:-}" "${AZURE_TENANT:-}" "${GCP_PROJECT:-}" "${GCP_ACCOUNT:-}" "${KUBE_CONTEXT:-}" \
       || die "Aborted before write."
+  fi
+
+  # ~/.ctx is created only now, after the review, so a cancelled run leaves no trace.
+  if ! _ctx_setup_dry_run; then
+    ctx_init_dirs
+  elif [[ ! -d "$CTX_DIR" || ! -d "$CTX_PROFILES_DIR" || ! -d "${CTX_DIR}/backups" || ! -f "$CTX_CONFIG" ]]; then
+    _ctx_setup_dry "create $CTX_DIR"
   fi
 
   # Secrets are stored only now, after the review (dry-run: listed only).

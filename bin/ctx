@@ -18,6 +18,10 @@ source "$CTX_LIB/cmd_import.sh"
 # shellcheck source=../lib/cmd_ops.sh
 source "$CTX_LIB/cmd_ops.sh"
 
+# A cancelled prompt (user_cancelled) signals this shell from a command
+# substitution; exit with status 130 instead of dying from the signal.
+trap 'exit 130' INT
+
 # ─── Flag parsing ─────────────────────────────────────────────────────────────
 CTX_DRY_RUN=0
 CTX_QUIET="${CTX_QUIET:-0}" # inherited (e.g. the autoswitch hook); --quiet/-q sets 1
