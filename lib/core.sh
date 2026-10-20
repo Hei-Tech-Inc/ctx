@@ -746,10 +746,15 @@ _secret_keychain_delete() {
   security delete-generic-password -a "$USER" -s "ctx-${1}-${2}" &>/dev/null || true
 }
 
+# Fails (status 1) when `security dump-keychain` fails: no keys and "could
+# not list" must not look alike.
 _secret_keychain_list_keys() {
-  security dump-keychain 2>/dev/null \
+  local dump
+  dump="$(security dump-keychain 2>/dev/null)" || return 1
+  printf '%s\n' "$dump" \
     | grep -o "\"ctx-${1}-[^\"]*\"" \
     | sed "s/\"ctx-${1}-//;s/\"//" | sort
+  return 0
 }
 
 _secret_file_set() {
@@ -780,6 +785,7 @@ _secret_file_delete() {
 _secret_file_list_keys() {
   local d="${CTX_DIR}/secrets/${1}"
   [[ -d "$d" ]] || return 0
+  [[ -r "$d" && -x "$d" ]] || return 1 # exists but cannot be listed
   local f
   for f in "$d"/*; do
     [[ -e "$f" ]] || continue
@@ -815,6 +821,7 @@ _secret_pass_delete() {
 _secret_pass_list_keys() {
   local base="${PASSWORD_STORE_DIR:-$HOME/.password-store}/ctx/${1}"
   [[ -d "$base" ]] || return 0
+  [[ -r "$base" && -x "$base" ]] || return 1 # exists but cannot be listed
   local f
   for f in "$base"/*.gpg; do
     [[ -e "$f" ]] || continue

@@ -48,6 +48,9 @@ func Uninstall(t tui.Term, args []string) int {
 		purge = true
 	}
 
+	// Ctrl+C anywhere (also while the list prints, before the prompt) cancels
+	// with the cancel line and 130.
+	defer OnInterrupt(t, nil)()
 	ctxBin, err := exec.LookPath("ctx")
 	if err != nil && !errors.Is(err, exec.ErrDot) {
 		ctxBin = ""
@@ -75,7 +78,7 @@ func Uninstall(t tui.Term, args []string) int {
 		me = ""
 	}
 	bin, _ := physFile(ctxBin)
-	if me == "" || bin != me {
+	if me == "" || bin != me || !sameFile(bin, ctxBin) {
 		return refuse("Refusing to uninstall: the ctx on PATH (" + ctxBin + ") is not the one running (" + self + ").")
 	}
 	installLib = installedLib(ctxBin)
@@ -97,7 +100,7 @@ func Uninstall(t tui.Term, args []string) int {
 	}
 	dataPhys := ""
 	if _, err := os.Lstat(trimSlashes(data)); purge && err == nil {
-		if dataPhys, why = rmRfOK(data, "data"); why != "" {
+		if dataPhys, why = rmRfOK(data, "data", bashDirname(bin), lib); why != "" {
 			return refuse("Refusing to remove " + data + ": " + why + ".")
 		}
 	}
@@ -117,17 +120,21 @@ func Uninstall(t tui.Term, args []string) int {
 		}
 		profiles, _ = profile.List(profile.Dir())
 	}
-	keysOf := func(p string) []string {
-		var keys []string
-		if store != nil {
-			all, _ := store.List(p)
-			for _, k := range all {
-				if k != "" {
-					keys = append(keys, k)
-				}
+	// keysOf lists p's keys; ok is false when the store could not be listed.
+	keysOf := func(p string) (keys []string, ok bool) {
+		if store == nil {
+			return nil, true
+		}
+		all, err := store.List(p)
+		if err != nil {
+			return nil, false
+		}
+		for _, k := range all {
+			if k != "" {
+				keys = append(keys, k)
 			}
 		}
-		return keys
+		return keys, true
 	}
 
 	u.bold("\n  ctx uninstall\n")
@@ -147,7 +154,10 @@ func Uninstall(t tui.Term, args []string) int {
 
 	if FlagsFromEnv().DryRun {
 		for _, p := range profiles {
-			if n := len(keysOf(p)); n > 0 {
+			keys, ok := keysOf(p)
+			if !ok {
+				u.dim("  [dry-run] could not list the secrets of " + p + " in the " + label)
+			} else if n := len(keys); n > 0 {
 				u.dim("  [dry-run] would delete " + strconv.Itoa(n) + " secret(s) of " + p + " from the " + label)
 			}
 		}
@@ -166,7 +176,6 @@ func Uninstall(t tui.Term, args []string) int {
 		return 0
 	}
 
-	defer OnInterrupt(t, nil)()
 	yes, err := t.Prompter().AskYN("Continue?", false)
 	if err != nil {
 		return t.Cancelled()
@@ -178,14 +187,24 @@ func Uninstall(t tui.Term, args []string) int {
 	// Secrets first; any key left after deleting stops everything.
 	failed := false
 	for _, p := range profiles {
-		keys := keysOf(p)
+		keys, ok := keysOf(p)
+		if !ok {
+			u.error("Could not list the secrets of " + p + " in the " + label)
+			failed = true
+			continue
+		}
 		if len(keys) == 0 {
 			continue
 		}
 		for _, k := range keys {
 			_ = store.Delete(p, k)
 		}
-		left := keysOf(p)
+		left, ok := keysOf(p)
+		if !ok {
+			u.error("Could not list the secrets of " + p + " in the " + label + " after deleting; cannot verify they are gone")
+			failed = true
+			continue
+		}
 		if n := len(keys) - len(left); n > 0 {
 			u.success("Deleted " + strconv.Itoa(n) + " secret(s) of " + p + " from the " + label)
 		}
@@ -281,15 +300,57 @@ func installedLib(bin string) string {
 	return ""
 }
 
+// sameFile mirrors [[ a -ef b ]]: both exist and are the same file.
+func sameFile(a, b string) bool {
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	sb, err := os.Stat(b)
+	return err == nil && os.SameFile(sa, sb)
+}
+
+// holds mirrors _ctx_holds: whether directory cand is path or one of its
+// ancestors, by file identity (never by name: case-insensitive file systems
+// and symlinks spell one directory many ways). A path that does not exist is
+// walked from its nearest existing ancestor, over physical paths.
+func holds(cand, path string) bool {
+	d := path
+	for d != "/" && d != "." {
+		if _, err := os.Stat(d); err == nil {
+			break
+		}
+		d = bashDirname(d)
+	}
+	ph, ok := physDir(d)
+	if !ok {
+		ph = d
+	}
+	for {
+		if sameFile(ph, cand) {
+			return true
+		}
+		if ph == "/" || ph == "." {
+			return false
+		}
+		ph = bashDirname(ph)
+	}
+}
+
 // rmRfOK mirrors _ctx_rm_rf_ok: the physical path to delete when rm -rf of
 // dir is safe (why ""), else why not. kind is "lib" (the install's lib dir) or
-// "data" (CTX_DIR for --purge). Refused: not absolute, a . or .. component, a
+// "data" (CTX_DIR for --purge); keep are install dirs a data dir must not
+// hold. Refused: a newline in it, not absolute, a . or .. component, a
 // symlink (trailing slashes ignored), not a directory, /, $HOME or a
 // directory holding it, CTX_DIR's parent; a lib dir not named ctx, holding
 // CTX_DIR, without core.sh, or a git checkout; a data dir not named .ctx with
 // neither a config file nor a profiles dir (R15: ctx-core cannot tell an
-// explicit CTX_DIR from the default, which always ends in .ctx).
-func rmRfOK(dir, kind string) (phys, why string) {
+// explicit CTX_DIR from the default, which always ends in .ctx), or holding
+// the install. Directories are compared by identity, not by name.
+func rmRfOK(dir, kind string, keep ...string) (phys, why string) {
+	if strings.Contains(dir, "\n") {
+		return "", "it contains a newline"
+	}
 	if !strings.HasPrefix(dir, "/") {
 		return "", "it is not an absolute path"
 	}
@@ -309,28 +370,27 @@ func rmRfOK(dir, kind string) (phys, why string) {
 	if !ok {
 		return "", "it cannot be resolved"
 	}
-	if p == "/" {
+	if strings.Contains(p, "\n") {
+		return "", "it resolves to a path with a newline"
+	}
+	if !sameFile(p, t) {
+		return "", "it cannot be resolved"
+	}
+	if sameFile(p, "/") {
 		return "", "it is /"
 	}
-	home, ok := physDir(os.Getenv("HOME"))
-	if !ok {
-		home = os.Getenv("HOME")
-	}
-	if strings.HasPrefix(strings.TrimSuffix(home, "/")+"/", p+"/") {
+	if holds(p, os.Getenv("HOME")) {
 		return "", "it is your home directory or holds it"
 	}
-	data, ok := physDir(ctxDirRaw())
-	if !ok {
-		data = ctxDirRaw()
-	}
-	if p == bashDirname(data) {
+	data := ctxDirRaw()
+	if sameFile(p, data+"/..") || sameFile(p, bashDirname(data)) {
 		return "", "it is the parent of CTX_DIR"
 	}
 	if kind == "lib" {
 		if bashBasename(p) != "ctx" {
 			return "", "its name is not 'ctx'"
 		}
-		if strings.HasPrefix(strings.TrimSuffix(data, "/")+"/", p+"/") {
+		if holds(p, data) {
 			return "", "it holds CTX_DIR"
 		}
 		if !isRegular(p + "/core.sh") {
@@ -343,6 +403,11 @@ func rmRfOK(dir, kind string) (phys, why string) {
 	}
 	if bashBasename(t) != ".ctx" && !isRegular(p+"/config") && !isDir(p+"/profiles") {
 		return "", "it does not look like a ctx data directory (no config or profiles)"
+	}
+	for _, k := range keep {
+		if holds(p, k) {
+			return "", "it holds the ctx install (" + k + ")"
+		}
 	}
 	return p, ""
 }

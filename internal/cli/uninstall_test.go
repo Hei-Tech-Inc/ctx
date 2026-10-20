@@ -25,7 +25,7 @@ import (
 // from bin/ctx as in a real install.
 
 const keychainFake = `case "$1" in
-dump-keychain) cat "$KEYCHAIN" 2>/dev/null ;;
+dump-keychain) [ -n "$KEYCHAIN_LIST_FAIL" ] && exit 45; cat "$KEYCHAIN" 2>/dev/null || true ;;
 delete-generic-password)
   [ -n "$KEYCHAIN_RO" ] && exit 44
   svc=""; while [ $# -gt 0 ]; do [ "$1" = -s ] && svc="$2"; shift; done
@@ -47,6 +47,7 @@ type unEnv struct {
 	binTmpl                    string // bin/ctx for prefix, hard-linked into place by seed
 	secDir, secLog             string
 	coreDir, coreLog           string
+	locked                     string // a dir made unreadable (mode 0) only while the command runs
 }
 
 func newUnEnv(t *testing.T) *unEnv {
@@ -256,6 +257,13 @@ func (e *unEnv) run(t *testing.T, goImpl bool, bin, stdin string, dry bool, extr
 	}
 	env := e.p.Environ(append(impl, extraEnv...)...)
 	e.mustSandbox(t, env, bin, stdin)
+	if e.locked != "" {
+		// Snapshot cannot read a mode-0 dir: lock it only for the run.
+		if err := os.Chmod(e.locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chmod(e.locked, 0o700) }()
+	}
 	cmd := exec.Command(bin, append(append(pre, "uninstall"), args...)...)
 	cmd.Env = env
 	cmd.Dir = e.root
@@ -269,6 +277,9 @@ func (e *unEnv) run(t *testing.T, goImpl bool, bin, stdin string, dry bool, extr
 			t.Fatal(err)
 		}
 		code = ee.ExitCode()
+	}
+	if e.locked != "" {
+		_ = os.Chmod(e.locked, 0o700)
 	}
 	if goImpl {
 		log, _ := os.ReadFile(e.coreLog)
@@ -301,6 +312,7 @@ type unCase struct {
 	libUnknown bool
 	outside    bool
 	darwinOnly bool
+	caseFold   bool // needs a case-insensitive file system
 }
 
 func runUnCases(t *testing.T, cases []unCase) {
@@ -310,6 +322,9 @@ func runUnCases(t *testing.T, cases []unCase) {
 				t.Skip("the Keychain exists only on darwin")
 			}
 			e := newUnEnv(t)
+			if c.caseFold && !caseInsensitive(t, e.root) {
+				t.Skip("the temp dir's file system is case-sensitive")
+			}
 			var bin string
 			var extra []string
 			prep := func() {
@@ -351,6 +366,19 @@ func runUnCases(t *testing.T, cases []unCase) {
 			}
 		})
 	}
+}
+
+// caseInsensitive reports whether dir's file system folds case: a file
+// created as "cf" is found as "CF".
+func caseInsensitive(t *testing.T, dir string) bool {
+	t.Helper()
+	p := filepath.Join(dir, "cf")
+	if err := os.WriteFile(p, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(p)
+	_, err := os.Stat(filepath.Join(dir, "CF"))
+	return err == nil
 }
 
 func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
@@ -407,6 +435,22 @@ func TestUninstallMatchesBash(t *testing.T) {
 					t.Errorf("no hint: %q", r.stdout)
 				}
 			}},
+		{name: "purge keychain cannot be listed", darwinOnly: true, stdin: "y\n", args: []string{"--purge"}, tweak: keychain,
+			env:      func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=keychain", "KEYCHAIN_LIST_FAIL=1"} },
+			wantCode: 1, vacuous: "Could not list the secrets of acme in the Keychain"},
+		{name: "purge file store cannot be listed", stdin: "y\n", args: []string{"--purge"}, changes: true,
+			tweak:    func(e *unEnv) { e.locked = filepath.Join(e.ctxDir, "secrets", "acme") },
+			wantCode: 1, vacuous: "Could not list the secrets of acme in the file store",
+			check: func(t *testing.T, e *unEnv, r unRun) {
+				for _, p := range []string{filepath.Join(e.prefix, "bin", "ctx"), filepath.Join(e.prefix, "lib", "ctx"), e.ctxDir} {
+					if !exists(p) {
+						t.Errorf("%s removed although the store could not be listed", p)
+					}
+				}
+			}},
+		{name: "dry run store cannot be listed", dry: true, args: []string{"--purge"},
+			tweak:   func(e *unEnv) { e.locked = filepath.Join(e.ctxDir, "secrets", "acme") },
+			vacuous: "[dry-run] could not list the secrets of acme in the file store"},
 		{name: "purge keychain", darwinOnly: true, stdin: "y\n", args: []string{"--purge"}, tweak: keychain, env: func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=keychain"} },
 			vacuous: "Removed ", check: func(t *testing.T, e *unEnv, r unRun) {
 				removed(true)(t, e, r)
@@ -528,6 +572,18 @@ func TestUninstallSafety(t *testing.T) {
 			env: func(e *unEnv) []string { return []string{"CTX_DIR=" + filepath.Join(e.home, "link.ctx") + "//"} }, vacuous: "it is a symlink"},
 		{name: "purge pass not installed", args: []string{"--purge"}, env: func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=pass"} },
 			vacuous: "Refusing to purge: the pass password store (pass) is not available here"},
+		{name: "purge CTX_DIR is HOME in another case", caseFold: true, args: []string{"--purge"},
+			tweak: func(e *unEnv) { _ = os.MkdirAll(filepath.Join(e.home, "profiles"), 0o755) },
+			env:   func(e *unEnv) []string { return []string{"CTX_DIR=" + filepath.Join(e.root, "HOME")} }, vacuous: "it is your home directory or holds it"},
+		{name: "CTX_LIB holds CTX_DIR in another case", caseFold: true, env: func(e *unEnv) []string {
+			return []string{"CTX_DIR=" + filepath.Join(e.prefix, "LIB", "ctx", "a", ".ctx")}
+		}, vacuous: "it holds CTX_DIR"},
+		{name: "purge CTX_DIR holds the install", args: []string{"--purge"},
+			tweak: func(e *unEnv) { _ = os.MkdirAll(filepath.Join(e.prefix, "profiles"), 0o755) },
+			env:   func(e *unEnv) []string { return []string{"CTX_DIR=" + e.prefix} }, vacuous: "it holds the ctx install ("},
+		{name: "purge CTX_DIR with a trailing newline", args: []string{"--purge"},
+			tweak: func(e *unEnv) { _ = os.MkdirAll(filepath.Join(e.home, "nl\n", "profiles"), 0o755) },
+			env:   func(e *unEnv) []string { return []string{"CTX_DIR=" + filepath.Join(e.home, "nl") + "\n"} }, vacuous: "it contains a newline"},
 		{name: "purge CTX_DIR is /", args: []string{"--purge"}, outside: true, env: func(*unEnv) []string { return []string{"CTX_DIR=/"} }, vacuous: "Refusing to remove /: it is /."},
 		{name: "purge CTX_DIR is HOME", args: []string{"--purge"}, env: func(e *unEnv) []string { return []string{"CTX_DIR=" + e.home} }, vacuous: "it is your home directory or holds it"},
 		{name: "purge CTX_DIR holds HOME", args: []string{"--purge"}, env: func(e *unEnv) []string { return []string{"CTX_DIR=" + e.root} }, vacuous: "it is your home directory or holds it"},
@@ -622,6 +678,12 @@ func TestUninstallCtrlC(t *testing.T) {
 	bin := filepath.Join(e.prefix, "bin", "ctx")
 	env := e.p.Environ("CTX_CORE=", "CTX_CORE_BIN="+filepath.Join(e.coreDir, "ctx-core"))
 	e.mustSandbox(t, env, bin, "n\n")
+	// RunPTY answers after a second of silence; a first exec of a new file can
+	// take that long on macOS, so warm up bin/ctx and ctx-core first.
+	warm := exec.Command(bin, "version")
+	warm.Env = env
+	_ = warm.Run()
+	_ = os.Remove(e.coreLog)
 	cmd := exec.Command(bin, "--no-gum", "uninstall", "--purge")
 	cmd.Env = env
 	out, code := testutil.RunPTY(t, cmd, []string{testutil.CtrlC}, 30*time.Second)

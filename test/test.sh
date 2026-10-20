@@ -1839,6 +1839,12 @@ test_uninstall_removes_install_and_purges() {
     [[ "$out" == *"Could not delete from the file store for acme: API_KEY"* && -f "$p/bin/ctx" && -d "$CTX_DIR" ]] \
       || { echo "secret failure: $out"; exit 1; }
     chmod 700 "$CTX_DIR/secrets/acme"
+    # a store that cannot be listed stops everything too
+    chmod 000 "$CTX_DIR/secrets/acme"
+    out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" && { echo "unlistable store should fail: $out"; exit 1; }
+    [[ "$out" == *"Could not list the secrets of acme in the file store"* && -f "$p/bin/ctx" && -d "$CTX_DIR" ]] \
+      || { echo "list failure: $out"; exit 1; }
+    chmod 700 "$CTX_DIR/secrets/acme"
 
     out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" || { echo "uninstall: $out"; exit 1; }
     [[ ! -e "$p/bin/ctx" && ! -e "$p/bin/ctx-core" && ! -e "$p/lib/ctx" && ! -e "$CTX_DIR" ]] || { echo "left behind: $(find "$td" | head -20)"; exit 1; }
@@ -1891,6 +1897,15 @@ test_uninstall_refuses_unsafe_paths() {
     _refuse y "it has a . or .. component" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/z/l/../home"
     _refuse y "it is a symlink" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME/link.ctx//"
     _refuse y "the pass password store (pass) is not available here" "$p/bin/ctx" "$p/bin" CTX_SECRET_PROVIDER=pass
+    # a data dir that holds the install; a newline in CTX_DIR; and, on a
+    # case-insensitive file system (macOS default), HOME spelled another way
+    mkdir -p "$p/profiles" "$HOME/profiles" "$HOME/nl"$'\n'
+    before="$(cd "$td" && find . | LC_ALL=C sort)"
+    _refuse y "it holds the ctx install ($p/bin)" "$p/bin/ctx" "$p/bin" CTX_DIR="$p"
+    _refuse y "it contains a newline" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME/nl"$'\n'
+    if [[ -e "$td/HOME" ]]; then
+      _refuse y "Refusing to remove $td/HOME: it is your home directory or holds it" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/HOME"
+    fi
     # a hand-edited CTX_LIB pointing at HOME (with the scripts in it, so ctx runs)
     cp "$ROOT_DIR"/lib/*.sh "$HOME/"
     sed -i.bak "9s|^CTX_LIB=.*|CTX_LIB=\"$HOME\"|" "$p/bin/ctx" && rm -f "$p/bin/ctx.bak"

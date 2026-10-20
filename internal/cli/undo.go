@@ -37,6 +37,9 @@ func ctxDirRaw() string {
 // ("Aborted."); Ctrl+C or EOF at the prompt exits 130.
 func Undo(t tui.Term, args []string) int {
 	u := termUI(t)
+	// Ctrl+C anywhere (also while the list prints, before the prompt) cancels
+	// with the cancel line and 130.
+	defer OnInterrupt(t, nil)()
 	dir := ctxDirRaw()
 	latest := ctxconfig.LatestBackup()
 	if latest == "" {
@@ -109,7 +112,6 @@ func Undo(t tui.Term, args []string) int {
 		return 0
 	}
 
-	defer OnInterrupt(t, nil)()
 	yes, err := t.Prompter().AskYN("Restore these files?", true)
 	if err != nil {
 		return t.Cancelled()

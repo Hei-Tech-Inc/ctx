@@ -1078,16 +1078,35 @@ _ctx_has_dot_component() {
   return 1
 }
 
+# Whether directory CAND is PATH or one of its ancestors, by file identity
+# (-ef), never by string: case-insensitive file systems and symlinks make
+# equal directories with different spellings. A PATH that does not exist is
+# walked from its nearest existing ancestor; the walk is over physical paths.
+_ctx_holds() {
+  local cand="$1" d="$2" ph
+  while [[ ! -e "$d" && "$d" != / && "$d" != . ]]; do d="$(dirname "$d")"; done
+  ph="$(_ctx_phys_dir "$d")" || ph="$d"
+  while :; do
+    [[ "$ph" -ef "$cand" ]] && return 0
+    [[ "$ph" == / || "$ph" == . ]] && return 1
+    ph="$(dirname "$ph")"
+  done
+}
+
 # Whether `rm -rf DIR` is safe; KIND is lib (the install's lib dir) or data
-# (CTX_DIR for --purge). On success it prints the physical path to delete
-# (the caller deletes that, never DIR as given); otherwise it prints why not
-# and returns 1: not absolute, a . or .. component, a symlink (trailing
+# (CTX_DIR for --purge); further args are install dirs a data dir must not
+# hold. On success it prints the physical path to delete (the caller deletes
+# that, never DIR as given); otherwise it prints why not and returns 1: a
+# newline in it, not absolute, a . or .. component, a symlink (trailing
 # slashes ignored), not a directory, /, $HOME or a directory holding it,
 # CTX_DIR's parent; a lib dir must be named ctx, hold core.sh, not hold
 # CTX_DIR and not be a git checkout; a data dir must be named .ctx or hold a
-# config file or profiles dir (R15).
+# config file or profiles dir (R15), and not hold the install. Directories
+# are compared by identity (-ef), not by name.
 _ctx_rm_rf_ok() {
-  local dir="$1" kind="$2" p home data t
+  local dir="$1" kind="$2" p t keep
+  shift 2
+  case "$dir" in *$'\n'*) echo "it contains a newline"; return 1 ;; esac
   case "$dir" in /*) ;; *) echo "it is not an absolute path"; return 1 ;; esac
   _ctx_has_dot_component "$dir" && { echo "it has a . or .. component"; return 1; }
   t="$dir"
@@ -1095,19 +1114,24 @@ _ctx_rm_rf_ok() {
   [[ "$t" != / && -L "$t" ]] && { echo "it is a symlink"; return 1; }
   [[ -d "$t" ]] || { echo "it is not a directory"; return 1; }
   p="$(_ctx_phys_dir "$t")" || { echo "it cannot be resolved"; return 1; }
-  [[ "$p" == / ]] && { echo "it is /"; return 1; }
-  home="$(_ctx_phys_dir "$HOME")" || home="$HOME"
-  case "${home%/}/" in "$p"/*) echo "it is your home directory or holds it"; return 1 ;; esac
-  data="$(_ctx_phys_dir "$CTX_DIR")" || data="$CTX_DIR"
-  [[ "$p" == "$(dirname "$data")" ]] && { echo "it is the parent of CTX_DIR"; return 1; }
+  case "$p" in *$'\n'*) echo "it resolves to a path with a newline"; return 1 ;; esac
+  [[ "$p" -ef "$t" ]] || { echo "it cannot be resolved"; return 1; }
+  [[ "$p" -ef / ]] && { echo "it is /"; return 1; }
+  _ctx_holds "$p" "$HOME" && { echo "it is your home directory or holds it"; return 1; }
+  if [[ "$p" -ef "$CTX_DIR/.." || "$p" -ef "$(dirname "$CTX_DIR")" ]]; then
+    echo "it is the parent of CTX_DIR"; return 1
+  fi
   if [[ "$kind" == lib ]]; then
     [[ "$(basename "$p")" == ctx ]] || { echo "its name is not 'ctx'"; return 1; }
-    case "${data%/}/" in "$p"/*) echo "it holds CTX_DIR"; return 1 ;; esac
+    _ctx_holds "$p" "$CTX_DIR" && { echo "it holds CTX_DIR"; return 1; }
     [[ -f "$p/core.sh" ]] || { echo "it has no core.sh"; return 1; }
     [[ -e "$p/.git" ]] && { echo "it is a git checkout"; return 1; }
   else
     [[ "$(basename "$t")" == .ctx || -f "$p/config" || -d "$p/profiles" ]] \
       || { echo "it does not look like a ctx data directory (no config or profiles)"; return 1; }
+    for keep in "$@"; do
+      _ctx_holds "$p" "$keep" && { echo "it holds the ctx install ($keep)"; return 1; }
+    done
   fi
   printf '%s\n' "$p"
 }
@@ -1139,7 +1163,12 @@ _ctx_uninstall_refuse() {
 }
 
 # Secret keys left for profile P in provider PROV, one per line.
-_ctx_uninstall_keys() { secret_list_with_provider "$1" "$2" | grep . || true; }
+# Fails when the store could not be listed.
+_ctx_uninstall_keys() {
+  local out
+  out="$(secret_list_with_provider "$1" "$2")" || return 1
+  printf '%s\n' "$out" | grep . || true
+}
 
 # ctx uninstall [--purge]. The ctx on PATH must be the running one, a regular
 # file with the installer's CTX_LIB="..." line, whose lib dir is this ctx's;
@@ -1147,7 +1176,8 @@ _ctx_uninstall_keys() { secret_list_with_provider "$1" "$2" | grep . || true; }
 # refusal with nothing removed and a list of what to remove by hand. What is
 # deleted is the checked physical path. Removes the guard (when on), ctx,
 # ctx-core next to it, the lib dir and, with --purge, each profile's secrets
-# (the store must be available; a key left behind stops everything) and CTX_DIR.
+# (the store must be available; a key left behind, or a store that cannot be
+# listed, stops everything) and CTX_DIR.
 cmd_uninstall() {
   local purge_data=false
   while [[ $# -gt 0 ]]; do
@@ -1166,7 +1196,7 @@ cmd_uninstall() {
   [[ -f "$ctx_bin" ]] || _ctx_uninstall_refuse "Refusing to uninstall: $ctx_bin is not a regular file."
   me="$(_ctx_phys_file "$CTX_BIN/ctx" || true)"
   bin="$(_ctx_phys_file "$ctx_bin" || true)"
-  [[ -n "$me" && "$bin" == "$me" ]] \
+  [[ -n "$me" && "$bin" == "$me" && "$bin" -ef "$ctx_bin" ]] \
     || _ctx_uninstall_refuse "Refusing to uninstall: the ctx on PATH ($ctx_bin) is not the one running ($CTX_BIN/ctx)."
   lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
   if [[ "$lib_line" =~ ^CTX_LIB=\"(/[^\"]*)\"$ ]]; then
@@ -1181,7 +1211,7 @@ cmd_uninstall() {
   local cdt="$CTX_DIR"
   while [[ "$cdt" == */ && "$cdt" != / ]]; do cdt="${cdt%/}"; done
   if $purge_data && [[ -e "$cdt" || -L "$cdt" ]]; then
-    why="$(_ctx_rm_rf_ok "$CTX_DIR" data)" || _ctx_uninstall_refuse "Refusing to remove $CTX_DIR: $why."
+    why="$(_ctx_rm_rf_ok "$CTX_DIR" data "$(dirname "$bin")" "$lib")" || _ctx_uninstall_refuse "Refusing to remove $CTX_DIR: $why."
     data="$why"
   fi
   core_bin="$(dirname "$bin")/ctx-core"
@@ -1207,8 +1237,12 @@ cmd_uninstall() {
 
   if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
     for p in "${profiles[@]+"${profiles[@]}"}"; do
-      n="$(_ctx_uninstall_keys "$provider" "$p" | grep -c . || true)"
-      [[ "$n" -gt 0 ]] && dim "  [dry-run] would delete $n secret(s) of $p from the $label"
+      if keys="$(_ctx_uninstall_keys "$provider" "$p")"; then
+        n="$(printf '%s' "$keys" | grep -c . || true)"
+        [[ "$n" -gt 0 ]] && dim "  [dry-run] would delete $n secret(s) of $p from the $label"
+      else
+        dim "  [dry-run] could not list the secrets of $p in the $label"
+      fi
     done
     _ctx_guard_installed && dim "  [dry-run] would run ctx guard uninstall"
     dim "  [dry-run] would remove $bin"
@@ -1224,12 +1258,20 @@ cmd_uninstall() {
   # Secrets first; the store is listed again after deleting, and any key left
   # stops everything (the stores' delete commands do not report failures).
   for p in "${profiles[@]+"${profiles[@]}"}"; do
-    keys="$(_ctx_uninstall_keys "$provider" "$p")"
+    if ! keys="$(_ctx_uninstall_keys "$provider" "$p")"; then
+      error "Could not list the secrets of $p in the $label"
+      failed=1
+      continue
+    fi
     [[ -z "$keys" ]] && continue
     while IFS= read -r k; do
       secret_delete_with_provider "$provider" "$p" "$k" || true
     done <<<"$keys"
-    left="$(_ctx_uninstall_keys "$provider" "$p")"
+    if ! left="$(_ctx_uninstall_keys "$provider" "$p")"; then
+      error "Could not list the secrets of $p in the $label after deleting; cannot verify they are gone"
+      failed=1
+      continue
+    fi
     n="$(printf '%s\n' "$keys" | grep -c .)"
     [[ -n "$left" ]] && n=$((n - $(printf '%s\n' "$left" | grep -c .)))
     [[ $n -gt 0 ]] && success "Deleted $n secret(s) of $p from the $label"

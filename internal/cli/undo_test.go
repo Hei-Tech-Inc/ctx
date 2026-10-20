@@ -361,6 +361,9 @@ func TestUndoCtrlC(t *testing.T) {
 	e.seed(t, map[string]string{".gitconfig": "git now\n"}, []backup{{stamp: "20200101-000000",
 		files: map[string]string{".gitconfig": "git old\n"}, manifest: "$HOME/.gitconfig\n"}}, nil)
 	before := testutil.Snapshot(t, e.f.home)
+	// RunPTY answers after a second of silence; a first exec of a new binary
+	// can take that long on macOS, so warm it up first.
+	_ = exec.Command(core, "version").Run()
 	cmd := exec.Command(core, "undo")
 	cmd.Env = e.p.Environ()
 	out, code := testutil.RunPTY(t, cmd, []string{testutil.CtrlC}, 30*time.Second)

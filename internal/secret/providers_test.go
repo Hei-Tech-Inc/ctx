@@ -362,3 +362,43 @@ func TestOpenWith(t *testing.T) {
 		t.Errorf("keychain on darwin: %v", err)
 	}
 }
+
+// TestListReportsFailures: a store that cannot be listed is an error, not an
+// empty list (uninstall --purge must not take it for "no secrets"), in Go
+// and in the Bash list functions (status 1).
+func TestListReportsFailures(t *testing.T) {
+	f := newFakeEnv(t)
+	f.seed()
+	bad, _ := testutil.FakeBin(t, "security", "exit 3")
+	t.Setenv("PATH", bad+":"+os.Getenv("PATH"))
+	if _, err := (Keychain{}).List("p"); err == nil {
+		t.Error("Keychain.List: a failed dump-keychain gave no error")
+	}
+	fileDir := filepath.Join(f.ctxDir, "secrets", "p")
+	passDir := filepath.Join(f.passStore, "ctx", "p")
+	if err := os.MkdirAll(passDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{fileDir, passDir} {
+		if err := os.Chmod(d, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(d, 0o755) })
+	}
+	if _, err := (File{}).List("p"); err == nil {
+		t.Error("File.List: an unreadable dir gave no error")
+	}
+	if _, err := (Pass{}).List("p"); err == nil {
+		t.Error("Pass.List: an unreadable dir gave no error")
+	}
+	if keys, err := (File{}).List("nobody"); err != nil || keys != nil {
+		t.Errorf("File.List of a missing dir = %q, %v", keys, err)
+	}
+	core, _ := filepath.Abs("../../lib/core.sh")
+	for _, fn := range []string{"_secret_keychain_list_keys", "_secret_file_list_keys", "_secret_pass_list_keys"} {
+		cmd := exec.Command("bash", "-c", `source "$1"; `+fn+` p`, "_", core)
+		if err := cmd.Run(); err == nil {
+			t.Errorf("bash %s: status 0 for a store that cannot be listed", fn)
+		}
+	}
+}
