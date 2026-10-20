@@ -22,11 +22,14 @@ func TestListStatusImplements(t *testing.T) {
 		if rc := run([]string{"implements", c, "--json"}, &out, &errb); rc != 0 {
 			t.Errorf("implements %s --json: rc=%d, want 0", c, rc)
 		}
-		if rc := run([]string{"implements", c}, &out, &errb); rc != 1 {
-			t.Errorf("implements %s: rc=%d, want 1", c, rc)
+		if rc := run([]string{"implements", c}, &out, &errb); rc != 0 {
+			t.Errorf("implements %s: rc=%d, want 0", c, rc)
 		}
-		if rc := run([]string{c}, &out, &errb); rc != 127 {
-			t.Errorf("%s without --json: rc=%d, want 127", c, rc)
+		if rc := run([]string{"implements", c, "bogus"}, &out, &errb); rc != 1 {
+			t.Errorf("implements %s bogus: rc=%d, want 1", c, rc)
+		}
+		if rc := run([]string{c, "bogus"}, &out, &errb); rc != 127 {
+			t.Errorf("%s bogus: rc=%d, want 127", c, rc)
 		}
 	}
 }

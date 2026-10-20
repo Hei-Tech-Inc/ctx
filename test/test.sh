@@ -783,9 +783,11 @@ EOS
     rc=$?
     set -e
     [[ $rc -eq 127 && -z "$out" ]] || { echo "rc127: rc=$rc out=$out"; exit 1; }
-    # Text list is not forwarded
-    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" list 2>/dev/null)"
-    [[ "$out" != GO* ]] || { echo "text list forwarded: $out"; exit 1; }
+    # Text list and its ls alias forward as the canonical name
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" ls 2>/dev/null)"
+    [[ "$out" == "GO list" ]] || { echo "text list not forwarded: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" st 2>/dev/null)"
+    [[ "$out" == "GO status" ]] || { echo "text status not forwarded: $out"; exit 1; }
     # Any exit code is ctx-core's answer
     printf '#!/usr/bin/env bash\n[[ "$1" == implements ]] && exit 0\necho nope\nexit 3\n' >"$td/fake3"
     chmod +x "$td/fake3"

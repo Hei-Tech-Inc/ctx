@@ -440,11 +440,11 @@ main() {
       cmd_deactivate "$@"
       ;;
     list|ls)
-      [[ "$CTX_JSON" == 1 ]] && _ctx_core_forward list --json
+      if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward list --json; else _ctx_core_forward list; fi
       cmd_list
       ;;
     status|st)
-      [[ "$CTX_JSON" == 1 ]] && _ctx_core_forward status --json
+      if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward status --json; else _ctx_core_forward status; fi
       cmd_status
       ;;
     clone)            cmd_clone "$@" ;;

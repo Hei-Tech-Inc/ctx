@@ -32,11 +32,11 @@ const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry reports whether it handles the given first argument (the
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
-// list and status count only with --json; guard for every subcommand; use only
+// list and status take no subcommand besides --json; guard for every subcommand; use only
 // with CTX_QUIET=1 in the environment (the non-quiet output stays in Bash).
 var implemented = map[string]func(sub string) bool{
-	"list":           func(sub string) bool { return sub == "--json" },
-	"status":         func(sub string) bool { return sub == "--json" },
+	"list":           func(sub string) bool { return sub == "" || sub == "--json" },
+	"status":         func(sub string) bool { return sub == "" || sub == "--json" },
 	"workdir-prompt": func(string) bool { return true },
 	"env":            func(string) bool { return true },
 	"run":            func(string) bool { return true },
@@ -245,12 +245,20 @@ func runKnowledge(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runListStatus serves `list --json` and `status --json`. Any other form is not
-// ported (the text screens stay in Bash) and exits 127 so a caller can fall back.
+// runListStatus serves `list`, `status` and their --json forms. Any other form
+// exits 127.
 func runListStatus(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 2 || args[1] != "--json" {
+	if len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
 		fmt.Fprintf(stderr, "ctx-core: %s supports only --json\n", args[0])
 		return 127
+	}
+	if len(args) == 1 {
+		term := tui.FromOS()
+		term.Out, term.Err = stdout, stderr
+		if args[0] == "list" {
+			return cli.ListText(term)
+		}
+		return cli.StatusText(term)
 	}
 	var err error
 	if args[0] == "list" {
