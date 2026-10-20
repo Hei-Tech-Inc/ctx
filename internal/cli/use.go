@@ -14,6 +14,7 @@ import (
 	"github.com/Hei-Tech-Inc/ctx/internal/gitident"
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
+	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
 const useUsage = "Usage: ctx use <profile> [--eval bash|fish]"
@@ -26,15 +27,16 @@ var profileVars = []string{
 	"KUBE_CONTEXT", "SECRET_KEYS", "EXTRA_ENVS", "SIGNING_FORMAT", "SIGNING_KEY",
 }
 
-// Use runs quiet `ctx use <profile> [--eval bash|fish]` (CTX_QUIET=1),
-// mirroring cmd_use and _ctx_use_apply in lib/cmd_ops.sh, and returns the
-// exit code: the number of failed switches. With --eval, stdout carries only
-// the exports and everything else goes to stderr. The non-quiet output (and
-// the "not applied to this shell" warning, which quiet suppresses) stays in Bash.
-func Use(stdout, stderr io.Writer, args []string) int {
-	colors := ttyColors(stdout)
+// UseIn runs `ctx use <profile> [--eval bash|fish]`, mirroring cmd_use and
+// _ctx_use_apply in lib/cmd_ops.sh, and returns the exit code: the number of
+// failed switches. Like Bash, it is quiet unless CTX_QUIET is unset or "0".
+// With --eval, stdout carries only the exports and everything else goes to
+// stderr.
+func UseIn(t tui.Term, args []string) int {
+	stdout, stderr := t.Out, t.Err
+	quiet := os.Getenv("CTX_QUIET") != "" && os.Getenv("CTX_QUIET") != "0"
 	name, evalShell := "", ""
-	usage := ui{out: stdout, err: stderr, colors: colors}
+	usage := ui{out: stdout, err: stderr, colors: t.Colors}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -60,11 +62,25 @@ func Use(stdout, stderr io.Writer, args []string) int {
 	}
 
 	if evalShell == "" {
-		a := &useApply{u: ui{out: stdout, err: stderr, colors: colors}, out: stdout}
+		a := &useApply{u: termUI(t), out: stdout, quiet: quiet, tm: t}
 		code, _ := a.run(name)
+		if !quiet && len(a.exports) > 1 {
+			var names []string
+			for _, kv := range a.exports {
+				if kv[0] != "CTX_ACTIVE_PROFILE" {
+					names = append(names, kv[0])
+				}
+			}
+			w := a.u
+			w.out = w.err
+			w.warn(fmt.Sprintf("These variables were not applied to this shell: %s. Run ctx install-hook and open a new shell, or run: eval \"$(ctx use %s --eval bash)\"  (fish: ctx use %s --eval fish | source)", strings.Join(names, ", "), name, name))
+		}
 		return code
 	}
-	a := &useApply{u: ui{out: stderr, err: stderr, colors: colors}, out: stderr}
+	// Bash runs _ctx_use_apply "$name" >&2: every message line goes to stderr.
+	et := t
+	et.Out = stderr
+	a := &useApply{u: termUI(et), out: stderr, quiet: quiet, tm: et}
 	code, ok := a.run(name)
 	if !ok {
 		return code
@@ -84,6 +100,8 @@ func Use(stdout, stderr io.Writer, args []string) int {
 // useApply holds one quiet _ctx_use_apply run.
 type useApply struct {
 	u       ui
+	quiet   bool
+	tm      tui.Term  // rich selects the Accent "Active context" line
 	out     io.Writer // where the tools' stdout goes (stderr under --eval)
 	exports [][2]string
 	vars    map[string]string // the profile's shell variables (exports overwrite them)
@@ -118,7 +136,14 @@ func (a *useApply) upsert(key, value string) {
 	}
 }
 
-// run is _ctx_use_apply with CTX_QUIET=1. ok is false when the profile could
+// ok prints a success line unless quiet.
+func (a *useApply) ok(msg string) {
+	if !a.quiet {
+		a.u.success(msg)
+	}
+}
+
+// run is _ctx_use_apply (quiet suppresses the progress lines). ok is false when the profile could
 // not be loaded (Bash's die: nothing is exported).
 func (a *useApply) run(name string) (code int, ok bool) {
 	u := a.u
@@ -138,6 +163,10 @@ func (a *useApply) run(name string) (code int, ok bool) {
 		a.vars["PROFILE_NAME"] = name // Bash stops on the unbound variable; keep going
 	}
 
+	if !a.quiet {
+		u.info("Switching to: " + u.c(ansiBold) + name + u.c(ansiReset))
+	}
+
 	errs := 0
 
 	// 1. GitHub — the autoswitch hook sets GH_TOKEN per terminal instead.
@@ -145,6 +174,8 @@ func (a *useApply) run(name string) (code int, ok bool) {
 		if a.tool(a.out, nil, "gh", "auth", "switch", "-u", p.GithubUser) != nil {
 			u.warn(fmt.Sprintf("gh switch failed for '%s' — run: gh auth login", p.GithubUser))
 			errs++
+		} else {
+			a.ok("GitHub → " + p.GithubUser)
 		}
 	}
 
@@ -153,9 +184,13 @@ func (a *useApply) run(name string) (code int, ok bool) {
 		if agentAddedKey() != p.SSHKeyPath {
 			agentDropAddedKey()
 		}
-		if !agentHasKey(p.SSHKeyPath) {
+		base := filepath.Base(p.SSHKeyPath)
+		if agentHasKey(p.SSHKeyPath) {
+			a.ok("SSH key → " + base + " (already in agent)")
+		} else {
 			if a.tool(a.out, nil, "ssh-add", p.SSHKeyPath) == nil {
 				a.upsert("ssh_agent_added", p.SSHKeyPath)
+				a.ok("SSH key → " + base)
 			} else {
 				u.warn("SSH key not loaded into the agent — github-" + name + " still reads it from disk")
 			}
@@ -168,6 +203,7 @@ func (a *useApply) run(name string) (code int, ok bool) {
 	// 3. AWS
 	if p.AWSProfile != "" {
 		a.export("AWS_PROFILE", p.AWSProfile)
+		a.ok("AWS_PROFILE → " + p.AWSProfile)
 	}
 
 	// 4. Azure
@@ -176,6 +212,8 @@ func (a *useApply) run(name string) (code int, ok bool) {
 			if a.tool(nil, nil, "az", "account", "set", "--subscription", p.AzureSubscription) != nil {
 				u.warn("Azure subscription switch failed")
 				errs++
+			} else {
+				a.ok("Azure → " + p.AzureSubscription)
 			}
 		} else {
 			a.export("AZURE_SUBSCRIPTION", p.AzureSubscription)
@@ -190,6 +228,8 @@ func (a *useApply) run(name string) (code int, ok bool) {
 		if has("gcloud") {
 			if a.tool(a.out, nil, "gcloud", "config", "set", "project", p.GCPProject, "--quiet") != nil {
 				u.warn("GCP project switch failed")
+			} else {
+				a.ok("GCP → " + p.GCPProject)
 			}
 			if p.GCPAccount != "" {
 				_ = a.tool(a.out, nil, "gcloud", "config", "set", "account", p.GCPAccount, "--quiet")
@@ -203,6 +243,8 @@ func (a *useApply) run(name string) (code int, ok bool) {
 	if p.KubeContext != "" && has("kubectl") {
 		if a.tool(nil, nil, "kubectl", "config", "use-context", p.KubeContext) != nil {
 			u.warn(fmt.Sprintf("kubectl context '%s' not found", p.KubeContext))
+		} else {
+			a.ok("kubectl → " + p.KubeContext)
 		}
 	}
 
@@ -224,6 +266,7 @@ func (a *useApply) run(name string) (code int, ok bool) {
 			}
 			if val != "" {
 				a.export(key, val)
+				a.ok(fmt.Sprintf("Secret → %s (%s)", key, label))
 			} else {
 				u.warn(fmt.Sprintf("Secret '%s' missing (%s) — run: ctx secret set %s %s", key, label, a.vars["PROFILE_NAME"], key))
 			}
@@ -263,6 +306,16 @@ func (a *useApply) run(name string) (code int, ok bool) {
 			pwd = os.Getenv("HOME")
 		}
 		_ = ctxconfig.SetManual(pwd)
+	}
+
+	if !a.quiet {
+		u.say("")
+		if t := a.tm; t.Rich {
+			u.say(tui.Accent(78, "Active context: "+name))
+		} else {
+			u.success("Active context: " + u.c(ansiBold) + name + u.c(ansiReset))
+		}
+		u.say("")
 	}
 	return errs, true
 }

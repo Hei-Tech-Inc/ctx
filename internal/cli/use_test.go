@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
+	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
 // useFakes are the external tools ctx use runs. Each appends its name and argv
@@ -98,7 +99,14 @@ func evalBash(t *testing.T, bash, code string) string {
 	return strings.Join(names, " ") + "\n" + string(out)
 }
 
-func TestUseMatchesBash(t *testing.T) {
+func TestUseMatchesBash(t *testing.T) { runUseDiff(t, true) }
+
+// TestUseNonQuietMatchesBash runs the same scenarios without CTX_QUIET, so the
+// progress lines, the closing "Active context" block and the "not applied to
+// this shell" warning are compared against Bash (plain mode, as without gum).
+func TestUseNonQuietMatchesBash(t *testing.T) { runUseDiff(t, false) }
+
+func runUseDiff(t *testing.T, quiet bool) {
 	realBash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
@@ -246,7 +254,11 @@ func TestUseMatchesBash(t *testing.T) {
 			}
 			t.Setenv("PATH", path)
 			t.Setenv("PWD", cwd)
-			t.Setenv("CTX_QUIET", "1")
+			if quiet {
+				t.Setenv("CTX_QUIET", "1")
+			} else {
+				t.Setenv("CTX_QUIET", "")
+			}
 			t.Setenv("CTX_AUTO_SWITCH", "")
 			if sc.auto {
 				t.Setenv("CTX_AUTO_SWITCH", "1")
@@ -287,7 +299,7 @@ func TestUseMatchesBash(t *testing.T) {
 			t.Chdir(cwd)
 			saved := os.Environ()
 			var gout, gerr bytes.Buffer
-			gcode := Use(&gout, &gerr, sc.args[1:])
+			gcode := UseIn(tui.Term{Out: &gout, Err: &gerr}, sc.args[1:])
 			restoreEnv(saved)
 			got := collect(gout.String(), gerr.String(), gcode)
 
@@ -321,6 +333,9 @@ func TestUseMatchesBash(t *testing.T) {
 			}
 			if d := testutil.DiffSnapshots(want.tree, got.tree); d != "" {
 				t.Errorf("files differ (first=bash):\n%s", d)
+			}
+			if !quiet && sc.name == "no eval" && (!strings.Contains(want.stdout, "Active context: demo") || !strings.Contains(want.stdout, "SSH key → id_demo") || !strings.Contains(want.stdout, "Secret → API_KEY") || !strings.Contains(want.stderr, "not applied to this shell")) {
+				t.Errorf("bash non-quiet run looks vacuous: %q", want.stdout)
 			}
 			if sc.name == "full profile auto switch" && (len(want.calls) < 8 || !strings.Contains(want.tree[".ctx/ctx.log"], "Switched to profile: demo")) {
 				t.Errorf("bash run looks vacuous: calls %q", want.calls)
@@ -370,10 +385,34 @@ func TestUseMinimalProfile(t *testing.T) {
 	saved := os.Environ()
 	defer restoreEnv(saved)
 	var out, errb bytes.Buffer
-	if code := Use(&out, &errb, []string{"demo", "--eval", "bash"}); code != 0 || errb.String() != "" {
+	if code := UseIn(tui.Term{Out: &out, Err: &errb}, []string{"demo", "--eval", "bash"}); code != 0 || errb.String() != "" {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 	if out.String() != "export CTX_ACTIVE_PROFILE=demo\n" {
 		t.Errorf("stdout %q", out.String())
+	}
+}
+
+// TestUseRichActiveContext: rich mode keeps the wording of the closing block
+// but styles the "Active context" line with Accent; --eval keeps it on stderr.
+func TestUseRichActiveContext(t *testing.T) {
+	f := newFixture(t)
+	f.write("profiles/demo.conf", "PROFILE_NAME=demo\n")
+	t.Setenv("CTX_QUIET", "")
+	t.Setenv("CTX_AUTO_SWITCH", "1")
+	saved := os.Environ()
+	defer restoreEnv(saved)
+	var out, errb bytes.Buffer
+	if code := UseIn(tui.Term{Out: &out, Err: &errb, Rich: true}, []string{"demo", "--eval", "bash"}); code != 0 {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+	if out.String() != "export CTX_ACTIVE_PROFILE=demo\n" {
+		t.Errorf("stdout %q", out.String())
+	}
+	if want := "\n" + tui.Accent(78, "Active context: demo") + "\n\n"; !strings.HasSuffix(errb.String(), want) {
+		t.Errorf("stderr %q does not end with %q", errb.String(), want)
+	}
+	if !strings.HasPrefix(errb.String(), "→ Switching to: demo\n") {
+		t.Errorf("stderr %q", errb.String())
 	}
 }

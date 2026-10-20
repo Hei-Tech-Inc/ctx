@@ -66,18 +66,14 @@ func TestWorkdirPromptImplements(t *testing.T) {
 	}
 }
 
-func TestUseImplementsOnlyWhenQuiet(t *testing.T) {
+func TestUseImplementsAlways(t *testing.T) {
 	var out, errb strings.Builder
-	for quiet, want := range map[string]int{"1": 0, "0": 1, "": 1, "yes": 1} {
+	for _, quiet := range []string{"1", "0", "", "yes"} {
 		t.Setenv("CTX_QUIET", quiet)
 		for _, sub := range [][]string{{"use", "demo"}, {"use", "--eval", "bash"}, {"use"}} {
-			if rc := run(append([]string{"implements"}, sub...), &out, &errb); rc != want {
-				t.Errorf("CTX_QUIET=%q implements %v: rc=%d, want %d", quiet, sub, rc, want)
+			if rc := run(append([]string{"implements"}, sub...), &out, &errb); rc != 0 {
+				t.Errorf("CTX_QUIET=%q implements %v: rc=%d, want 0", quiet, sub, rc)
 			}
 		}
-	}
-	t.Setenv("CTX_QUIET", "0")
-	if rc := run([]string{"use", "demo"}, &out, &errb); rc != 127 {
-		t.Errorf("use without CTX_QUIET=1: rc=%d, want 127", rc)
 	}
 }

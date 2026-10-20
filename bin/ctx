@@ -432,7 +432,7 @@ main() {
     init)             cmd_init ;;
     setup|import|add) cmd_import "$@" ;;
     use)
-      _ctx_core_forward use "$@" # only when quiet (CTX_QUIET=1)
+      _ctx_core_forward use "$@" # always (quiet and non-quiet)
       cmd_use "$@"
       ;;
     deactivate)

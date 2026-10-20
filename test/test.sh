@@ -1056,7 +1056,7 @@ test_inherited_quiet_use() {
       [[ -z "$(cat "$td/err")" ]] || { echo "inherited CTX_QUIET=1 not quiet ($mode): $(cat "$td/err")"; exit 1; }
       grep -qx 'export AWS_PROFILE=demo-prod' <<<"$out" || { echo "exports ($mode): $out"; exit 1; }
     done
-    # With ctx-core installed, quiet use runs in Go; plain use stays in Bash.
+    # With ctx-core installed, quiet use runs in Go; non-quiet use runs there too.
     if [[ "${CTX_CORE:-}" != off && -x "$ROOT_DIR/bin/ctx-core" ]]; then
       printf '#!/bin/sh\necho "$*" >>"%s/core-calls"\nexec "%s" "$@"\n' "$td" "$ROOT_DIR/bin/ctx-core" >"$td/core"
       chmod +x "$td/core"
@@ -1065,7 +1065,7 @@ test_inherited_quiet_use() {
       grep -qx 'use demo --eval bash' "$td/core-calls" || { echo "quiet use not forwarded: $(cat "$td/core-calls")"; exit 1; }
       : >"$td/core-calls"
       CTX_CORE_BIN="$td/core" ctx --no-gum use demo --eval bash >/dev/null 2>&1
-      ! grep -q '^use ' "$td/core-calls" || { echo "non-quiet use forwarded"; exit 1; }
+      grep -qx 'use demo --eval bash' "$td/core-calls" || { echo "non-quiet use not forwarded: $(cat "$td/core-calls")"; exit 1; }
     fi
     rm -rf "$td"
   ) || fail "inherited CTX_QUIET"

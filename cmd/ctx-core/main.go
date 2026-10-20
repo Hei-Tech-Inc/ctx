@@ -32,8 +32,7 @@ const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry reports whether it handles the given first argument (the
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
-// list and status take no subcommand besides --json; guard for every subcommand; use only
-// with CTX_QUIET=1 in the environment (the non-quiet output stays in Bash).
+// list and status take no subcommand besides --json; guard for every subcommand.
 var implemented = map[string]func(sub string) bool{
 	"list":           func(sub string) bool { return sub == "" || sub == "--json" },
 	"status":         func(sub string) bool { return sub == "" || sub == "--json" },
@@ -44,7 +43,7 @@ var implemented = map[string]func(sub string) bool{
 	"secret":         func(sub string) bool { return secretSubs[sub] },
 	"config":         func(sub string) bool { return configSubs[sub] },
 	"deactivate":     func(string) bool { return true },
-	"use":            func(string) bool { return os.Getenv("CTX_QUIET") == "1" },
+	"use":            func(string) bool { return true },
 }
 
 // secretSubs are the `secret` subcommands ctx-core runs.
@@ -118,11 +117,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "deactivate":
 		return cli.Deactivate(stdout, stderr, args[1:])
 	case "use":
-		if !implements("use", args[1:]) {
-			fmt.Fprintln(stderr, "ctx-core: use supports only CTX_QUIET=1")
-			return 127
-		}
-		return cli.Use(stdout, stderr, args[1:])
+		term := tui.FromOS()
+		term.Out, term.Err = stdout, stderr
+		return cli.UseIn(term, args[1:])
 	case "guard":
 		sub := ""
 		if len(args) > 1 {
