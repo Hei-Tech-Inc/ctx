@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"charm.land/huh/v2"
@@ -100,28 +101,55 @@ func (r rich) PickOne(prompt string, items []string) (string, error) {
 }
 
 func (r rich) run(f *huh.Form, help bool) error {
+	in := r.input()
 	err := f.WithTheme(huh.ThemeFunc(theme)).
 		WithShowHelp(help).
-		WithInput(r.input()).
+		WithInput(in).
 		WithOutput(r.t.Err).
 		Run()
+	if fi, ok := in.(*formInput); ok {
+		fi.ended.Store(true)
+	}
 	if errors.Is(err, huh.ErrUserAborted) {
 		return ErrCancelled
 	}
 	return err
 }
 
-// input is t.In, except that input which is not a terminal (where bubbletea
-// would wait forever at EOF) sends Ctrl+C shortly after EOF, so the form is
-// cancelled unless the keys before EOF already finished it. FromOS never makes
-// a rich Term without a terminal on stdin; this keeps other callers and tests
-// from hanging.
+// input is t.In for one form: a terminal wrapped in a formInput, and input
+// which is not a terminal (where bubbletea would wait forever at EOF) sending
+// Ctrl+C shortly after EOF, so the form is cancelled unless the keys before
+// EOF already finished it. FromOS never makes a rich Term without a terminal
+// on stdin; this keeps other callers and tests from hanging.
 func (r rich) input() io.Reader {
 	if f, ok := r.t.In.(*os.File); ok && isTerminal(f.Fd()) {
-		return f
+		return &formInput{File: f}
 	}
 	return &eofCancel{r: r.t.In}
 }
+
+// formInput is the terminal as one form's input; run marks it ended when the
+// form returns. bubbletea's input goroutine can outlive its program: on exit
+// the program stops waiting for it while it is still in a cancelreader Read,
+// which (on a busy machine, after the reader's epoll/kqueue descriptor was
+// closed and reused by the next form's) can wake on the next form's input and
+// read it, and the old program drops what it read: the next prompt loses its
+// first keys. An ended formInput reads nothing, so those bytes stay in the
+// terminal for the form that is running.
+type formInput struct {
+	*os.File
+	ended atomic.Bool
+}
+
+func (f *formInput) Read(p []byte) (int, error) {
+	if f.ended.Load() {
+		return 0, io.EOF
+	}
+	return f.File.Read(p)
+}
+
+// Close leaves the terminal open: it is the process's stdin, not the form's.
+func (f *formInput) Close() error { return nil }
 
 // eofGrace lets bubbletea handle the keys read before EOF.
 const eofGrace = 250 * time.Millisecond
