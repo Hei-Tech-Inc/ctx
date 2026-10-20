@@ -26,19 +26,33 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|guard> [args]\n"
+const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|guard> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry reports whether it handles the given first argument (the
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
-// list and status count only with --json; guard only with check.
+// list and status count only with --json; guard for every subcommand; use only
+// with CTX_QUIET=1 in the environment (the non-quiet output stays in Bash).
 var implemented = map[string]func(sub string) bool{
 	"list":           func(sub string) bool { return sub == "--json" },
 	"status":         func(sub string) bool { return sub == "--json" },
 	"workdir-prompt": func(string) bool { return true },
 	"env":            func(string) bool { return true },
 	"run":            func(string) bool { return true },
-	"guard":          func(sub string) bool { return sub == "check" },
+	"guard":          func(sub string) bool { return guardSubs[sub] },
+	"secret":         func(sub string) bool { return sub == "get" || sub == "list" || sub == "delete" },
+	"config":         func(sub string) bool { return configSubs[sub] },
+	"deactivate":     func(string) bool { return true },
+	"use":            func(string) bool { return os.Getenv("CTX_QUIET") == "1" },
+}
+
+// guardSubs are the `guard` subcommands ctx-core runs ("" is status).
+var guardSubs = map[string]bool{"": true, "check": true, "install": true, "uninstall": true, "remove": true, "status": true}
+
+// configSubs are the `config` subcommands ctx-core runs ("" is show).
+var configSubs = map[string]bool{
+	"": true, "show": true, "work-root": true, "secret-provider": true, "prompt-workdir-depth": true,
+	"prompt-extra-paths": true, "autoswitch-notify": true, "export": true, "import": true,
 }
 
 func implements(cmd string, rest []string) bool {
@@ -87,16 +101,43 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0 // the Bash command never fails
 	case "env", "run":
 		return runEnvRun(args, stdout, stderr)
-	case "guard":
-		if len(args) < 2 || args[1] != "check" {
-			fmt.Fprintln(stderr, "ctx-core: guard supports only check")
+	case "secret":
+		if len(args) < 2 || !implements("secret", args[1:]) {
+			fmt.Fprintln(stderr, "ctx-core: secret supports only get, list, delete")
 			return 127
 		}
-		hook, rest := "", []string(nil)
-		if len(args) > 2 {
-			hook, rest = args[2], args[3:]
+		return runSecret(args[1:], stdout, stderr)
+	case "config":
+		return cli.Config(stdout, stderr, args[1:])
+	case "deactivate":
+		return cli.Deactivate(stdout, stderr, args[1:])
+	case "use":
+		if !implements("use", args[1:]) {
+			fmt.Fprintln(stderr, "ctx-core: use supports only CTX_QUIET=1")
+			return 127
 		}
-		return guard.Check(hook, rest, stderr)
+		return cli.Use(stdout, stderr, args[1:])
+	case "guard":
+		sub := ""
+		if len(args) > 1 {
+			sub = args[1]
+		}
+		switch sub {
+		case "", "status":
+			return guard.Status(stdout, stderr)
+		case "install":
+			return guard.Install(stdout, stderr)
+		case "uninstall", "remove":
+			return guard.Uninstall(stdout, stderr)
+		case "check":
+			hook, rest := "", []string(nil)
+			if len(args) > 2 {
+				hook, rest = args[2], args[3:]
+			}
+			return guard.Check(hook, rest, stderr)
+		}
+		fmt.Fprintln(stderr, "ctx-core: guard supports only status, install, uninstall and check")
+		return 127
 	case "implements":
 		if len(args) >= 2 && implements(args[1], args[2:]) {
 			return 0
@@ -136,7 +177,7 @@ func runMCP(args []string, stderr io.Writer) int {
 		return 1
 	}
 	opts.Cwd = cwd
-	d := mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.CLIGetter{}}
+	d := mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.ProviderGetter{}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := mcpserver.Run(ctx, d, opts, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
@@ -229,6 +270,21 @@ func runEnvRun(args []string, stdout, stderr io.Writer) int {
 	} else {
 		err = cli.Run(args[1:])
 	}
+	if err == nil {
+		return 0
+	}
+	var ee *cli.ExitError
+	if errors.As(err, &ee) {
+		fmt.Fprintln(stderr, ee.Msg)
+		return ee.Code
+	}
+	fmt.Fprintf(stderr, "\u2717 %v\n", err)
+	return 1
+}
+
+// runSecret serves `secret get|list|delete`.
+func runSecret(args []string, stdout, stderr io.Writer) int {
+	err := cli.Secret(stdout, args)
 	if err == nil {
 		return 0
 	}
