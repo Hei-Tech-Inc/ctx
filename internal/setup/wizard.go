@@ -155,7 +155,8 @@ func echoCaptured(s string) string {
 
 // GenKey ports _gen_ssh_key: an existing key is kept (warning); under
 // --dry-run only the dry-run line prints (R2, R12: no passphrase or GitHub
-// pause). Otherwise it asks for an optional passphrase, runs
+// pause). Otherwise it asks for an optional passphrase, creates ~/.ssh (mode
+// 700) as the batch path does, runs
 // `ssh-keygen -t ed25519 -C comment -f path -N pass -q` (the passphrase is on
 // argv, as in Bash), sets mode 600, shows the public key and waits for Enter.
 // The answer to that pause is echoed to stdout, as Bash's uncaptured ask does.
@@ -181,6 +182,10 @@ func (w *Wizard) GenKey(path, comment string) error {
 		}
 		pass = echoCaptured(p)
 	}
+	// ssh-keygen does not create ~/.ssh (mkdir -p; chmod 700, as the batch path).
+	sshDir := w.Home + "/.ssh"
+	_ = os.MkdirAll(sshDir, 0o777)
+	_ = os.Chmod(sshDir, 0o700)
 	if w.Run("ssh-keygen", "-t", "ed25519", "-C", comment, "-f", path, "-N", pass, "-q") != nil {
 		return &DieError{Msg: "ssh-keygen failed for " + path, Hint: true}
 	}

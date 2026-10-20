@@ -93,6 +93,7 @@ type cloneCase struct {
 	args    []string // after `setup` ({HOME} is replaced); nil means --scope clone
 	answers []string
 	env     []string
+	noSSH   bool // HOME starts without ~/.ssh
 	seed    func(t *testing.T, home string)
 	check   func(t *testing.T, r cloneRun)
 	// normalize, when set, rewrites both transcripts before they are compared.
@@ -132,10 +133,12 @@ func runClone(t *testing.T, td, fakes, core string, c cloneCase) cloneRun {
 		}
 	}
 	cwd := filepath.Join(home, "cur")
-	seedFile(t, home, ".ssh/id_ed25519", "PRIVATE")
-	seedFile(t, home, ".ssh/id_ed25519.pub", "ssh-ed25519 AAAA me")
-	seedFile(t, home, ".ssh/id_work", "PRIVATE")
-	seedFile(t, home, ".ssh/config", "Host *\n  AddKeysToAgent yes\n")
+	if !c.noSSH {
+		seedFile(t, home, ".ssh/id_ed25519", "PRIVATE")
+		seedFile(t, home, ".ssh/id_ed25519.pub", "ssh-ed25519 AAAA me")
+		seedFile(t, home, ".ssh/id_work", "PRIVATE")
+		seedFile(t, home, ".ssh/config", "Host *\n  AddKeysToAgent yes\n")
+	}
 	seedFile(t, home, ".gitconfig", "[user]\n\tname = Me\n")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
@@ -246,6 +249,11 @@ func cloneCases() []cloneCase {
 			check: exit(0, "clients/team-acme")},
 		{name: "upload fails", env: []string{"FAKE_GH_ADD_RC=1"}, answers: []string{"acme", "2", "n", "", "alice", "1", "y", "y"},
 			check: exit(0, "Could not upload key automatically")},
+		{name: "generate with no ~/.ssh", noSSH: true, answers: []string{"acme", "2", "n", "", "alice", "1", "y", "y"},
+			check: func(t *testing.T, r cloneRun) {
+				exit(0, "SSH key generated: ")(t, r)
+				checkNewSSHDir(t, r)
+			}},
 		{name: "key mode skipped generates", answers: []string{"acme", "0", "n", "", "", "1", "y"},
 			check: exit(0, "SSH key generated: ")},
 		{name: "key exists already", seed: func(t *testing.T, home string) {
@@ -314,5 +322,17 @@ func TestCloneWizardMatchesBash(t *testing.T) {
 				c.check(t, want)
 			}
 		})
+	}
+}
+
+// checkNewSSHDir: the wizard created ~/.ssh with mode 0700 and generated
+// ~/.ssh/ctx_acme in it.
+func checkNewSSHDir(t *testing.T, r cloneRun) {
+	t.Helper()
+	if d := r.tree[".ssh"]; !strings.HasPrefix(d, "drwx------ ") {
+		t.Errorf("~/.ssh: %q, want drwx------", d)
+	}
+	if _, ok := r.tree[".ssh/ctx_acme"]; !ok {
+		t.Errorf("no ~/.ssh/ctx_acme\n%s", r.transcript)
 	}
 }

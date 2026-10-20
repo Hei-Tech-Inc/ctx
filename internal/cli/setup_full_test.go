@@ -108,6 +108,12 @@ func fullCases() []cloneCase {
 			answers: []string{"2", "acme", "Dev", "dev@acme.com", "1", "1", "2", "2", "n", "", "n", "bob", "y",
 				"awsp", "sub1", "ten1", "proj1", "acct1", "kctx", "1", "n", "y"},
 			check: expect(0, "SSH key generated", "SSH key uploaded to GitHub (bob)", "Manual mode selected")},
+		{name: "import, no ~/.ssh, generate", args: full, noSSH: true,
+			answers: tail("2", "acme", "Dev", "dev@acme.com", "1", "1", "1", "y", "n", "", "n", "2", "y"),
+			check: func(t *testing.T, r cloneRun) {
+				expect(0, "No SSH keys found. Generate one", "SSH key generated: ")(t, r)
+				checkNewSSHDir(t, r)
+			}},
 		{name: "manual, existing tilde key", args: full,
 			answers: tail("2", "acme", "Dev", "", "1", "1", "2", "1", "~/.ssh/id_work", "n", ""),
 			check:   expect(0, "Using existing key: id_work")},
@@ -268,7 +274,8 @@ func TestWizardCancelEachStep(t *testing.T) {
 				allowed["proj"], allowed["proj/new"] = true, true
 			}
 			if k > 10 {
-				allowed[".ssh/ctx_acme"], allowed[".ssh/ctx_acme.pub"] = true, true
+				// GenKey also sets ~/.ssh to 0700.
+				allowed[".ssh"], allowed[".ssh/ctx_acme"], allowed[".ssh/ctx_acme.pub"] = true, true, true
 			}
 			for p := range union(base.tree, r.tree) {
 				if base.tree[p] != r.tree[p] && !allowed[p] {

@@ -1426,6 +1426,26 @@ test_setup_key_comment_never_empty() {
   pass "setup never runs ssh-keygen -C \"\""
 }
 
+# A generated key on a HOME with no ~/.ssh: the wizard creates ~/.ssh (0700).
+test_setup_generate_creates_ssh_dir() {
+  (
+    set -euo pipefail
+    local td out mode
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    rm -rf "$HOME/.ssh"
+    cd "$td/w/acme"
+    # import mode; "No SSH keys found. Generate one?" y, passphrase? n, Enter; gh login n; ...
+    out="$(printf '%s\n' 2 acme Dev dev@acme.com 1 1 1 y n '' n '' '' '' '' '' 1 n y | ctx --no-gum setup 2>&1)" \
+      || { echo "setup failed: $out"; exit 1; }
+    mode="$(ls -ld "$HOME/.ssh" | cut -c1-10)"
+    [[ "$mode" == drwx------ ]] || { echo "$HOME/.ssh mode: $mode"; exit 1; }
+    [[ -f "$HOME/.ssh/ctx_acme" ]] || { echo "no key: $out"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup creates ~/.ssh before generating a key"
+  pass "setup creates ~/.ssh (0700) before generating a key"
+}
+
 test_setup_pick_existing_key_index() {
   (
     set -euo pipefail
@@ -1663,6 +1683,7 @@ test_setup_dry_run_changes_nothing
 test_setup_gh_accounts_both_formats
 test_setup_secrets_wait_for_confirm
 test_setup_key_comment_never_empty
+test_setup_generate_creates_ssh_dir
 test_setup_pick_existing_key_index
 test_setup_mise_toml_escaping
 test_setup_no_secrets_bash32
