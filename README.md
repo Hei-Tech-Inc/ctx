@@ -38,7 +38,7 @@ Profiles auto-activate when you `cd` into a client directory.
 - bash or zsh
 - Internet connection (for the one-liner install)
 
-Everything else (`mise`, `gh`, `git`, `awscli`) is installed automatically; `gum` is optional when `ctx-core` is installed (see below).
+Everything else (`mise`, `gh`, `git`, `awscli`) is installed automatically; `gum` is installed by `install.sh` for the Bash fallback, but the rich UI does not need it when `ctx-core` is installed (see below).
 
 ### Windows support
 

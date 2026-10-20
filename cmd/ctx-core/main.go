@@ -110,20 +110,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "ctx-core: secret supports only get, list, delete, set and migrate")
 			return 127
 		}
-		term := tui.FromOS()
-		term.Out, term.Err = stdout, stderr
+		term := osTerm(stdout, stderr)
 		return cli.SecretIn(term, args[1:])
 	case "config":
 		return cli.Config(stdout, stderr, args[1:])
 	case "deactivate":
 		return cli.Deactivate(stdout, stderr, args[1:])
 	case "use":
-		term := tui.FromOS()
-		term.Out, term.Err = stdout, stderr
+		term := osTerm(stdout, stderr)
 		return cli.UseIn(term, args[1:])
 	case "remove":
-		term := tui.FromOS()
-		term.Out, term.Err = stdout, stderr
+		term := osTerm(stdout, stderr)
 		return cli.Remove(term, args[1:])
 	case "guard":
 		sub := ""
@@ -251,12 +248,11 @@ func runKnowledge(args []string, stdout, stderr io.Writer) int {
 // exits 127.
 func runListStatus(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
-		fmt.Fprintf(stderr, "ctx-core: %s supports only --json\n", args[0])
+		fmt.Fprintf(stderr, "ctx-core: %s takes no arguments other than --json\n", args[0])
 		return 127
 	}
 	if len(args) == 1 {
-		term := tui.FromOS()
-		term.Out, term.Err = stdout, stderr
+		term := osTerm(stdout, stderr)
 		if args[0] == "list" {
 			return cli.ListText(term)
 		}
@@ -296,4 +292,11 @@ func runEnvRun(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "\u2717 %v\n", err)
 	return 1
+}
+
+// osTerm is the process terminal with its output streams replaced.
+func osTerm(stdout, stderr io.Writer) tui.Term {
+	term := tui.FromOS()
+	term.Out, term.Err = stdout, stderr
+	return term
 }

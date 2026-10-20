@@ -151,7 +151,8 @@ func awkLines(s string) []string {
 // separator line directly above that header. Other profiles' includes (even
 // ones whose identity file name merely starts with this one's) and every other
 // line are kept. A path line not directly under an [includeIf header is left alone.
-// Like the Bash version, the rewritten file ends up at mode 0600.
+// The file is only rewritten (after a backup) when a line is dropped, and a
+// symlinked ~/.gitconfig is written through with its mode kept.
 func gitconfigRemoveInclude(identityFile string) error {
 	path := filepath.Join(os.Getenv("HOME"), ".gitconfig")
 	data, err := os.ReadFile(path)
@@ -173,10 +174,47 @@ func gitconfigRemoveInclude(identityFile string) error {
 		}
 	}
 	var out strings.Builder
+	dropped := false
 	for i, l := range lines {
-		if !drop[i] {
-			out.WriteString(l + "\n")
+		if drop[i] {
+			dropped = true
+			continue
 		}
+		out.WriteString(l + "\n")
 	}
-	return writeReplacing(path, []byte(out.String()))
+	if !dropped {
+		return nil
+	}
+	_ = ctxconfig.BackupFile(path)
+	return writeThrough(path, []byte(out.String()))
+}
+
+// writeThrough atomically replaces the file path points to (following a
+// symlink) with data, keeping that file's mode, like `cat tmp > file` does.
+func writeThrough(path string, data []byte) error {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
+	mode := os.FileMode(0o600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".")
+	if err != nil {
+		return err
+	}
+	_, werr := tmp.Write(data)
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp.Name(), mode)
+	}
+	if werr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil {
+		os.Remove(tmp.Name())
+	}
+	return werr
 }

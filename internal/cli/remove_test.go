@@ -296,3 +296,77 @@ func TestRemoveHelpers(t *testing.T) {
 		t.Errorf("mode %v", st.Mode())
 	}
 }
+
+// TestRemoveGitconfigLinkAndNoMatch covers ~/.gitconfig edge cases, Go vs Bash:
+// a symlinked file is written through (link kept, target mode kept), and a
+// file with nothing to drop is left untouched (no rewrite, no backup).
+func TestRemoveGitconfigLinkAndNoMatch(t *testing.T) {
+	linked := func(f *fixture) {
+		body, err := os.ReadFile(filepath.Join(f.home, ".gitconfig"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(f.home, "dotfiles", "gitconfig")
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Chmod(target, 0o644)
+		_ = os.Remove(filepath.Join(f.home, ".gitconfig"))
+		if err := os.Symlink(target, filepath.Join(f.home, ".gitconfig")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	noMatch := func(f *fixture) {
+		f.writeHome(".gitconfig", "[user]\n\tname = Me\n")
+		_ = os.Chmod(filepath.Join(f.home, ".gitconfig"), 0o644)
+	}
+	for _, c := range []struct {
+		name  string
+		tweak func(f *fixture)
+		check func(t *testing.T, home string, r removeRun)
+	}{
+		{"symlink with match", linked, func(t *testing.T, home string, r removeRun) {
+			if fi, err := os.Lstat(filepath.Join(home, ".gitconfig")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+				t.Errorf(".gitconfig is no longer a symlink: %v %v", fi, err)
+			}
+			st, err := os.Stat(filepath.Join(home, "dotfiles", "gitconfig"))
+			if err != nil || st.Mode().Perm() != 0o644 {
+				t.Errorf("target mode: %v %v", st, err)
+			}
+			b, _ := os.ReadFile(filepath.Join(home, "dotfiles", "gitconfig"))
+			if strings.Contains(string(b), "ctx-acme\n") || !strings.Contains(string(b), "ctx-acme-old") {
+				t.Errorf("target content wrong:\n%s", b)
+			}
+		}},
+		{"no match", noMatch, func(t *testing.T, home string, r removeRun) {
+			p := filepath.Join(home, ".gitconfig")
+			b, _ := os.ReadFile(p)
+			st, _ := os.Stat(p)
+			if string(b) != "[user]\n\tname = Me\n" || st.Mode().Perm() != 0o644 {
+				t.Errorf("untouched file changed: %q %v", b, st.Mode())
+			}
+			for k := range r.tree {
+				if strings.HasSuffix(k, "/.gitconfig") && strings.HasPrefix(k, ".ctx/backups") {
+					t.Errorf("unexpected backup %s", k)
+				}
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newRemoveEnv(t)
+			e.seed(t, "", c.tweak)
+			want := e.bash(t, "y\n", "acme")
+			c.check(t, e.f.home, want)
+			e.seed(t, "", c.tweak)
+			got := e.goRun(t, "y\n", "acme")
+			c.check(t, e.f.home, got)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("Go and Bash differ\n stdout go: %q bash: %q\n stderr go: %q bash: %q\n tree diff: %s",
+					got.stdout, want.stdout, got.stderr, want.stderr, testutil.DiffSnapshots(want.tree, got.tree))
+			}
+		})
+	}
+}

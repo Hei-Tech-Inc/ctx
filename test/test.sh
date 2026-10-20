@@ -1119,14 +1119,46 @@ test_plain_prompts_use_stderr() {
     out="$(printf '1,3\n' | pick_many "Pick" a b c 2>/dev/null)"
     [[ "$out" == $'a\nc' ]] || { echo "pick_many captured: '$out'"; exit 1; }
 
-    printf 'secret_provider=pass\n' >"$CTX_DIR/config"
-    [[ -z "$(PATH="/usr/bin:/bin" type -P pass)" ]] || { echo "pass unexpectedly on PATH"; exit 1; }
-    err="$(printf 'x\n' | PATH="$ROOT_DIR/bin:/usr/bin:/bin" ctx --no-gum secret set p API_KEY 2>&1 >/dev/null || true)"
-    grep -q "provider 'pass password store'" <<<"$err" || { echo "error label: $err"; exit 1; }
-    ! grep -q 'command not found' <<<"$err" || { echo "command not found in: $err"; exit 1; }
+    # The label sub-check needs a PATH without a real `pass`; skip it when /usr/bin:/bin has one.
+    if [[ -z "$(PATH="/usr/bin:/bin" type -P pass)" ]]; then
+      printf 'secret_provider=pass\n' >"$CTX_DIR/config"
+      err="$(printf 'x\n' | PATH="$ROOT_DIR/bin:/usr/bin:/bin" ctx --no-gum secret set p API_KEY 2>&1 >/dev/null || true)"
+      grep -q "provider 'pass password store'" <<<"$err" || { echo "error label: $err"; exit 1; }
+      ! grep -q 'command not found' <<<"$err" || { echo "command not found in: $err"; exit 1; }
+    fi
     rm -rf "$td"
   ) || fail "plain prompts write to stderr"
   pass "plain prompts keep stdout clean"
+}
+
+test_remove_gitconfig_symlink_and_nomatch() {
+  (
+    set -euo pipefail
+    local td m
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$ROOT_DIR/bin:$PATH"
+    mkdir -p "$CTX_DIR/profiles" "$HOME/.config/git" "$HOME/dotfiles"
+    printf 'secret_provider=file\n' >"$CTX_DIR/config"
+    printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' >"$CTX_DIR/profiles/acme.conf"
+    printf '[user]\n\tname = Dev\n' >"$HOME/.config/git/ctx-acme"
+    printf '[user]\n\tname = Me\n\n[includeIf "gitdir:~/w/acme/"]\n  path = %s/.config/git/ctx-acme\n' "$HOME" >"$HOME/dotfiles/gitconfig"
+    chmod 644 "$HOME/dotfiles/gitconfig"
+    ln -s "$HOME/dotfiles/gitconfig" "$HOME/.gitconfig"
+    printf 'y\n' | ctx --no-gum remove acme >/dev/null 2>&1 || { echo "remove failed"; exit 1; }
+    [[ -L "$HOME/.gitconfig" ]] || { echo ".gitconfig no longer a symlink"; exit 1; }
+    ! grep -q includeIf "$HOME/dotfiles/gitconfig" || { echo "target not updated"; exit 1; }
+    m="$(stat -c %a "$HOME/dotfiles/gitconfig" 2>/dev/null || stat -f %Lp "$HOME/dotfiles/gitconfig")"
+    [[ "$m" == 644 ]] || { echo "target mode $m"; exit 1; }
+    # Nothing to drop: the file stays as it is.
+    printf '[user]\n\tname = Me\n' >"$HOME/dotfiles/gitconfig"
+    printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' >"$CTX_DIR/profiles/acme.conf"
+    rm -rf "$CTX_DIR/backups"
+    printf 'y\n' | ctx --no-gum remove acme >/dev/null 2>&1 || { echo "second remove failed"; exit 1; }
+    [[ -L "$HOME/.gitconfig" && "$(cat "$HOME/dotfiles/gitconfig")" == $'[user]\n\tname = Me' ]] || { echo "no-match changed the file"; exit 1; }
+    ! grep -rq gitconfig "$CTX_DIR/backups" 2>/dev/null || { echo "backup made without a rewrite"; exit 1; }
+    rm -rf "$td"
+  ) || fail "remove keeps a symlinked gitconfig and leaves it alone when nothing matches"
+  pass "remove writes through a symlinked ~/.gitconfig and skips no-match files"
 }
 
 test_remove_only_own_include() {
@@ -1198,4 +1230,5 @@ test_use_deactivate_served_by_go
 test_plain_prompts_use_stderr
 
 test_remove_only_own_include
+test_remove_gitconfig_symlink_and_nomatch
 echo "All tests passed."

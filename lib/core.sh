@@ -1110,20 +1110,26 @@ gitconfig_remove_include() {
   local identity_file="$1"
   local gitconfig="$HOME/.gitconfig"
   [[ -f "$gitconfig" ]] || return 0
-  local tmp; tmp=$(mktemp)
+  local tmp rc=0; tmp=$(mktemp)
   ID="  path = ${identity_file}" awk '
     { l[NR] = $0 }
     END {
       for (i = 2; i <= NR; i++) {
         if (l[i] == ENVIRON["ID"] && l[i-1] ~ /^\[includeIf/) {
-          del[i] = 1; del[i-1] = 1
+          del[i] = 1; del[i-1] = 1; hit = 1
           if (i > 2 && l[i-2] == "") del[i-2] = 1
         }
       }
       for (i = 1; i <= NR; i++) if (!del[i]) print l[i]
+      exit(hit ? 10 : 0)
     }
-  ' "$gitconfig" > "$tmp" || true
-  mv "$tmp" "$gitconfig"
+  ' "$gitconfig" > "$tmp" || rc=$?
+  # Rewrite in place (keeps a symlink and the file's mode) only if a line was dropped.
+  if [[ $rc -eq 10 ]]; then
+    backup_file "$gitconfig"
+    cat "$tmp" > "$gitconfig"
+  fi
+  rm -f "$tmp"
 }
 
 # ─── mise.toml generation ─────────────────────────────────────────────────────
