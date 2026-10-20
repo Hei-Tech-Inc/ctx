@@ -1521,13 +1521,17 @@ test_edit_editor_with_args() {
     unset EDITOR VISUAL CTX_NO_GUM
     mkdir -p "$CTX_DIR/profiles" "$td/fake"
     echo 'GIT_EMAIL=a@b.co' >"$CTX_DIR/profiles/acme.conf"
-    cat >"$td/fake/fake ed" <<EOS
+    cat >"$td/fake/ed1" <<EOS
 #!/bin/sh
 { printf 'ed'; printf ' [%s]' "\$@"; echo; } >>"$td/argv.log"
 EOS
-    cp "$td/fake/fake ed" "$td/fake/ed1"
-    sed 's/printf .ed./printf "ed2"/' "$td/fake/ed1" >"$td/fake/ed2"
-    chmod +x "$td/fake/ed1" "$td/fake/ed2"
+    cat >"$td/fake/ed2" <<EOS
+#!/bin/sh
+{ printf 'ed2'; printf ' [%s]' "\$@"; echo; } >>"$td/argv.log"
+EOS
+    mkdir "$td/sp ace"
+    cp "$td/fake/ed1" "$td/sp ace/ed"
+    chmod +x "$td/fake/ed1" "$td/fake/ed2" "$td/sp ace/ed"
     : >"$td/argv.log"
     EDITOR="$td/fake/ed1 -w" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme \
       || { echo "edit failed"; exit 1; }
@@ -1538,7 +1542,12 @@ EOS
       || { echo "edit failed"; exit 1; }
     out="$(cat "$td/argv.log")"
     [[ "$out" == "ed2 [$CTX_DIR/profiles/acme.conf]" ]] || { echo "VISUAL should win: $out"; exit 1; }
-    # a path with a space and a failing editor: exit status is the editor's
+    : >"$td/argv.log"
+    EDITOR="\"$td/sp ace/ed\" -w" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme \
+      || { echo "edit failed"; exit 1; }
+    grep -qx "ed \[-w\] \[$CTX_DIR/profiles/acme.conf\]" "$td/argv.log" \
+      || { echo "quoted path with a space: $(cat "$td/argv.log")"; exit 1; }
+    # a failing editor: the exit status is the editor's
     printf '#!/bin/sh\nexit 7\n' >"$td/fake/bad"; chmod +x "$td/fake/bad"
     rc=0; EDITOR="$td/fake/bad" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme || rc=$?
     [[ $rc -eq 7 ]] || { echo "exit status $rc, want 7"; exit 1; }

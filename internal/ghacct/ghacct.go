@@ -10,21 +10,29 @@ type entry struct {
 
 func scan(out string) []entry {
 	var es []entry
+	cur := -1 // index in es of the current block's entry; -1 for a block that is not one
 	for _, l := range strings.Split(out, "\n") {
-		if t := strings.TrimSpace(l); strings.HasPrefix(t, "- Active account:") && len(es) > 0 {
-			if strings.TrimSpace(strings.TrimPrefix(t, "- Active account:")) == "true" {
-				es[len(es)-1].active = 1
-			} else {
-				es[len(es)-1].active = -1
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "- Active account:") {
+			if cur >= 0 {
+				if strings.TrimSpace(strings.TrimPrefix(t, "- Active account:")) == "true" {
+					es[cur].active = 1
+				} else {
+					es[cur].active = -1
+				}
 			}
 			continue
 		}
+		if !strings.Contains(l, "Logged in to ") && !strings.Contains(l, "Failed to log in to ") {
+			continue
+		}
+		cur = -1 // every login line starts a block
 		f := strings.Fields(l)
 		for i := 1; i+2 < len(f); i++ {
 			if f[i] == "github.com" && f[i-1] == "to" && (f[i+1] == "account" || f[i+1] == "as") {
 				// awk's pattern: "Logged in to github.com (account|as) ".
 				if strings.Contains(l, "Logged in to github.com account ") || strings.Contains(l, "Logged in to github.com as ") {
 					es = append(es, entry{user: f[i+2]})
+					cur = len(es) - 1
 				}
 				break
 			}

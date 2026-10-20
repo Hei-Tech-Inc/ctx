@@ -51,6 +51,8 @@ func TestActive(t *testing.T) {
 		{"new picks the active one", newTwo, "bob-2"},
 		{"old has no marker: first", old, "carol"},
 		{"failed account is not a login", failed, ""},
+		{"failed after valid", "  ✓ Logged in to github.com account alice (keyring)\n  - Active account: false\n  X Failed to log in to github.com account dave (keyring)\n  - Active account: true\n", ""},
+		{"other host after valid", "  ✓ Logged in to github.com account alice (keyring)\n  - Active account: false\n  ✓ Logged in to ghe.corp account zed (keyring)\n  - Active account: true\n", ""},
 		{"empty", "", ""},
 	} {
 		if got := Active(c.in); got != c.want {
