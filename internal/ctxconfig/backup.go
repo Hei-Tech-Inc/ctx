@@ -79,6 +79,13 @@ func BackupFile(src string) error {
 	if err := os.MkdirAll(bdir, 0o777); err != nil {
 		return err
 	}
+	return BackupFileIn(bdir, src)
+}
+
+// BackupFileIn copies src into the backup dir bdir and records it in bdir's
+// manifest.txt, as backup_file does into its stamp dir (_ctx_backup_into).
+// A failed copy returns the error with nothing recorded or logged.
+func BackupFileIn(bdir, src string) error {
 	if err := CopyFile(src, filepath.Join(bdir, filepath.Base(src))); err != nil {
 		return err
 	}
@@ -92,6 +99,33 @@ func BackupFile(src string) error {
 	}
 	Log("Backed up " + src + " → " + bdir)
 	return first
+}
+
+// NewBackupDir mirrors _ctx_backup_new_dir: it creates and returns a backup
+// stamp dir that did not exist, $CTX_DIR/backups/<stamp>, else <stamp>-2,
+// -3… (up to 99), so an undo in the second of the backup it restores never
+// writes into that backup. The path starts with $CTX_DIR as given.
+func NewBackupDir() (string, error) {
+	dir := os.Getenv("CTX_DIR")
+	if dir == "" {
+		dir = filepath.Join(os.Getenv("HOME"), ".ctx")
+	}
+	base := dir + "/backups"
+	if err := os.MkdirAll(base, 0o777); err != nil {
+		return "", err
+	}
+	stamp := Now().Format("20060102-150405")
+	d := base + "/" + stamp
+	for n := 2; ; n++ {
+		err := os.Mkdir(d, 0o777)
+		if err == nil {
+			return d, nil
+		}
+		if !os.IsExist(err) || n > 99 {
+			return "", err
+		}
+		d = fmt.Sprintf("%s/%s-%d", base, stamp, n)
+	}
 }
 
 // LatestBackup mirrors latest_backup: the newest entry of $CTX_DIR/backups

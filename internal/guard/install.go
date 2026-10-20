@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Hei-Tech-Inc/ctx/internal/cli"
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
 	"github.com/Hei-Tech-Inc/ctx/internal/resolve"
+	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
 // hookNames is CTX_GUARD_HOOK_NAMES. reference-transaction is left out: it
@@ -29,7 +29,7 @@ type ui struct {
 	colors   bool
 }
 
-func newUI(stdout, stderr io.Writer) ui { return ui{stdout, stderr, cli.TTYColors(stdout)} }
+func newUI(stdout, stderr io.Writer) ui { return ui{stdout, stderr, tui.TTYColors(stdout)} }
 
 func (u ui) c(code string) string {
 	if u.colors {
@@ -38,7 +38,7 @@ func (u ui) c(code string) string {
 	return ""
 }
 
-func (u ui) say(w io.Writer, s string) { _, _ = io.WriteString(w, cli.EchoE(s)) }
+func (u ui) say(w io.Writer, s string) { _, _ = io.WriteString(w, tui.EchoE(s)) }
 
 func (u ui) info(m string)    { u.say(u.out, u.c("\033[0;36m")+"→"+u.c("\033[0m")+" "+m) }
 func (u ui) success(m string) { u.say(u.out, u.c("\033[0;32m")+"✓"+u.c("\033[0m")+" "+m) }

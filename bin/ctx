@@ -553,10 +553,16 @@ main() {
       _ctx_core_forward remove "$@"
       cmd_remove "${1:-}"
       ;;
-    undo)             cmd_undo ;;
+    undo)
+      _ctx_core_forward undo "$@"
+      cmd_undo
+      ;;
     install-hook)     cmd_install_hook "${1:-}" ;;
     upgrade)          cmd_upgrade "$@" ;;
-    uninstall)        cmd_uninstall "$@" ;;
+    uninstall)
+      _ctx_core_forward uninstall "$@"
+      cmd_uninstall "$@"
+      ;;
     doctor)           cmd_doctor ;;
     guard)
       case "${1:-}" in ""|check|status|install|uninstall|remove) _ctx_core_forward guard "$@" ;; esac
