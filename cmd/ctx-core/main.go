@@ -44,6 +44,7 @@ var implemented = map[string]func(sub string) bool{
 	"config":         func(sub string) bool { return configSubs[sub] },
 	"deactivate":     func(string) bool { return true },
 	"use":            func(string) bool { return true },
+	"remove":         func(string) bool { return true },
 }
 
 // secretSubs are the `secret` subcommands ctx-core runs.
@@ -120,6 +121,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		term := tui.FromOS()
 		term.Out, term.Err = stdout, stderr
 		return cli.UseIn(term, args[1:])
+	case "remove":
+		term := tui.FromOS()
+		term.Out, term.Err = stdout, stderr
+		return cli.Remove(term, args[1:])
 	case "guard":
 		sub := ""
 		if len(args) > 1 {

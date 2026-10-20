@@ -1102,14 +1102,27 @@ gitconfig_add_include() {
   return 0
 }
 
+# Remove what gitconfig_add_include wrote for one identity file: the exact
+# "  path = <file>" line, the [includeIf …] header directly above it, and the
+# blank separator line directly above that header. Other profiles' includes
+# (e.g. ctx-acme-old when removing ctx-acme) and user sections are kept.
 gitconfig_remove_include() {
   local identity_file="$1"
   local gitconfig="$HOME/.gitconfig"
   [[ -f "$gitconfig" ]] || return 0
   local tmp; tmp=$(mktemp)
-  grep -v "$identity_file" "$gitconfig" \
-    | grep -v "\[includeIf.*$(basename "$identity_file")" \
-    > "$tmp" || true
+  ID="  path = ${identity_file}" awk '
+    { l[NR] = $0 }
+    END {
+      for (i = 2; i <= NR; i++) {
+        if (l[i] == ENVIRON["ID"] && l[i-1] ~ /^\[includeIf/) {
+          del[i] = 1; del[i-1] = 1
+          if (i > 2 && l[i-2] == "") del[i-2] = 1
+        }
+      }
+      for (i = 1; i <= NR; i++) if (!del[i]) print l[i]
+    }
+  ' "$gitconfig" > "$tmp" || true
   mv "$tmp" "$gitconfig"
 }
 

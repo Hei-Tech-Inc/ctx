@@ -467,7 +467,10 @@ main() {
       profile_exists "$pname" || die "Profile '$pname' not found."
       "${EDITOR:-nano}" "$CTX_PROFILES_DIR/${pname}.conf"
       ;;
-    remove|rm|del)    cmd_remove "${1:-}" ;;
+    remove|rm|del)
+      _ctx_core_forward remove "$@"
+      cmd_remove "${1:-}"
+      ;;
     undo)             cmd_undo ;;
     install-hook)     cmd_install_hook "${1:-}" ;;
     upgrade)          cmd_upgrade "$@" ;;

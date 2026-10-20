@@ -1129,6 +1129,36 @@ test_plain_prompts_use_stderr() {
   pass "plain prompts keep stdout clean"
 }
 
+test_remove_only_own_include() {
+  (
+    set -euo pipefail
+    local td gc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$ROOT_DIR/bin:$PATH"
+    mkdir -p "$CTX_DIR/profiles" "$HOME/.config/git" "$HOME/.ssh"
+    printf 'secret_provider=file\n' >"$CTX_DIR/config"
+    local n
+    for n in acme acme-old; do
+      printf 'PROFILE_NAME=%s\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' "$n" >"$CTX_DIR/profiles/$n.conf"
+      printf '[user]\n\tname = Dev\n' >"$HOME/.config/git/ctx-$n"
+    done
+    printf '[user]\n\tname = Me\n\n[includeIf "gitdir:~/w/acme/"]\n  path = %s/.config/git/ctx-acme\n\n[includeIf "gitdir:~/w/acme-old/"]\n  path = %s/.config/git/ctx-acme-old\n[alias]\n\tco = checkout\n' \
+      "$HOME" "$HOME" >"$HOME/.gitconfig"
+    printf '\nHost github-acme\n  HostName github.com\n  User git\n  IdentityFile k\n  IdentitiesOnly yes\n\nHost github-acme-old\n  HostName github.com\n  User git\n  IdentityFile k2\n  IdentitiesOnly yes\n' >"$HOME/.ssh/ctx_config"
+    printf 'y\n' | ctx --no-gum remove acme >/dev/null 2>&1 || { echo "remove failed"; exit 1; }
+    gc="$(cat "$HOME/.gitconfig")"
+    grep -q 'ctx-acme-old' <<<"$gc" || { echo "acme-old include lost: $gc"; exit 1; }
+    ! grep -q 'ctx-acme$' <<<"$gc" || { echo "acme path left: $gc"; exit 1; }
+    [[ "$(grep -c 'includeIf' <<<"$gc")" == 1 ]] || { echo "includeIf headers: $gc"; exit 1; }
+    grep -q 'name = Me' <<<"$gc" && grep -q 'co = checkout' <<<"$gc" || { echo "user sections lost: $gc"; exit 1; }
+    grep -q 'Host github-acme-old' "$HOME/.ssh/ctx_config" || { echo "acme-old host lost"; exit 1; }
+    ! grep -qx 'Host github-acme' "$HOME/.ssh/ctx_config" || { echo "acme host left"; exit 1; }
+    [[ ! -e "$CTX_DIR/profiles/acme.conf" && -e "$CTX_DIR/profiles/acme-old.conf" ]] || { echo "profile files wrong"; exit 1; }
+    rm -rf "$td"
+  ) || fail "remove deletes only the profile's own include"
+  pass "remove keeps other profiles' includes and user sections"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1167,4 +1197,5 @@ test_inherited_quiet_use
 test_use_deactivate_served_by_go
 test_plain_prompts_use_stderr
 
+test_remove_only_own_include
 echo "All tests passed."
