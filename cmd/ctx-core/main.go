@@ -27,7 +27,7 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|remove|setup|guard> [args]\n"
+const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|remove|setup|guard|agent-rules|edit> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry gets the arguments after the command and reports whether
@@ -58,6 +58,8 @@ var implemented = map[string]func(args []string) bool{
 	"ctx-version": func([]string) bool { return true },
 	"help":        func([]string) bool { return true },
 	"completion":  func([]string) bool { return true },
+	"agent-rules": func([]string) bool { return true },
+	"edit":        func([]string) bool { return true },
 }
 
 // first is args[0], or "" when there are no arguments.
@@ -145,6 +147,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "setup", "import", "add":
 		term := osTerm(stdout, stderr)
 		return cli.SetupIn(term, args[1:])
+	case "agent-rules":
+		return cli.AgentRules(osTerm(stdout, stderr), args[1:])
+	case "edit":
+		return cli.Edit(osTerm(stdout, stderr), args[1:])
 	case "guard":
 		sub := ""
 		if len(args) > 1 {

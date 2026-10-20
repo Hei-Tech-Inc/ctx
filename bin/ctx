@@ -541,6 +541,7 @@ main() {
       ;;
     verify)           cmd_verify "${1:-}" ;;
     edit)
+      _ctx_core_forward edit "$@"
       local pname="${1:-}"
       [[ -z "$pname" ]] && die "Usage: ctx edit <profile>"
       profile_exists "$pname" || die "Profile '$pname' not found."
@@ -569,7 +570,7 @@ main() {
       _ctx_core_forward run "$@"
       cmd_run "$@"
       ;;
-    agent-rules)      cmd_agent_rules "$@" ;;
+    agent-rules)      _ctx_core_forward agent-rules "$@"; cmd_agent_rules "$@" ;;
     mcp|knowledge)    _ctx_core_exec "$cmd" "$@" ;;
     completion)
       _ctx_core_forward completion "$@"
