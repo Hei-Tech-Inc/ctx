@@ -21,6 +21,7 @@ import (
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
 	"github.com/Hei-Tech-Inc/ctx/internal/resolve"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
+	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -40,11 +41,14 @@ var implemented = map[string]func(sub string) bool{
 	"env":            func(string) bool { return true },
 	"run":            func(string) bool { return true },
 	"guard":          func(sub string) bool { return guardSubs[sub] },
-	"secret":         func(sub string) bool { return sub == "get" || sub == "list" || sub == "delete" },
+	"secret":         func(sub string) bool { return secretSubs[sub] },
 	"config":         func(sub string) bool { return configSubs[sub] },
 	"deactivate":     func(string) bool { return true },
 	"use":            func(string) bool { return os.Getenv("CTX_QUIET") == "1" },
 }
+
+// secretSubs are the `secret` subcommands ctx-core runs.
+var secretSubs = map[string]bool{"get": true, "list": true, "delete": true, "set": true, "migrate": true}
 
 // guardSubs are the `guard` subcommands ctx-core runs ("" is status).
 var guardSubs = map[string]bool{"": true, "check": true, "install": true, "uninstall": true, "remove": true, "status": true}
@@ -103,10 +107,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runEnvRun(args, stdout, stderr)
 	case "secret":
 		if len(args) < 2 || !implements("secret", args[1:]) {
-			fmt.Fprintln(stderr, "ctx-core: secret supports only get, list, delete")
+			fmt.Fprintln(stderr, "ctx-core: secret supports only get, list, delete, set and migrate")
 			return 127
 		}
-		return runSecret(args[1:], stdout, stderr)
+		term := tui.FromOS()
+		term.Out, term.Err = stdout, stderr
+		return cli.SecretIn(term, args[1:])
 	case "config":
 		return cli.Config(stdout, stderr, args[1:])
 	case "deactivate":
@@ -270,21 +276,6 @@ func runEnvRun(args []string, stdout, stderr io.Writer) int {
 	} else {
 		err = cli.Run(args[1:])
 	}
-	if err == nil {
-		return 0
-	}
-	var ee *cli.ExitError
-	if errors.As(err, &ee) {
-		fmt.Fprintln(stderr, ee.Msg)
-		return ee.Code
-	}
-	fmt.Fprintf(stderr, "\u2717 %v\n", err)
-	return 1
-}
-
-// runSecret serves `secret get|list|delete`.
-func runSecret(args []string, stdout, stderr io.Writer) int {
-	err := cli.Secret(stdout, args)
 	if err == nil {
 		return 0
 	}

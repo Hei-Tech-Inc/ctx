@@ -24,14 +24,19 @@ const (
 // goos is runtime.GOOS; tests replace it to exercise Open's availability check.
 var goos = runtime.GOOS
 
-// Store reads and deletes the secrets of one provider. Get returns "" (and no
+// Store reads, writes and deletes the secrets of one provider. Get returns "" (and no
 // error) for a missing secret; trailing newlines are stripped, as Bash's
 // command substitution does. List is sorted like `sort` sorts.
 type Store interface {
 	Get(profile, key string) (string, error)
 	List(profile string) ([]string, error)
 	Delete(profile, key string) error
+	// Set stores value, replacing any existing secret (the _secret_*_set functions).
+	Set(profile, key, value string) error
 }
+
+// AsciiLower lowercases ASCII letters only, like `tr '[:upper:]' '[:lower:]'` in the C locale.
+func AsciiLower(s string) string { return asciiLower(s) }
 
 func asciiLower(s string) string {
 	b := []byte(s)
@@ -94,6 +99,21 @@ type unavailable struct{}
 func (unavailable) Get(string, string) (string, error) { return "", nil }
 func (unavailable) List(string) ([]string, error)      { return nil, nil }
 func (unavailable) Delete(string, string) error        { return ErrUnavailable }
+func (unavailable) Set(string, string, string) error   { return ErrUnavailable }
+
+// OpenWith mirrors secret_*_with_provider's availability checks: keychain needs
+// darwin and `security`, pass needs `pass`. A provider that cannot be used, or
+// is unknown, yields ErrUnavailable.
+func OpenWith(provider string) (Store, error) {
+	switch provider {
+	case ProviderKeychain, ProviderFile, ProviderPass:
+		st, _ := Open(provider)
+		if _, bad := st.(unavailable); !bad {
+			return st, nil
+		}
+	}
+	return nil, ErrUnavailable
+}
 
 // Open returns the store for provider (keychain, file or pass). A keychain
 // without darwin and `security`, or a pass without `pass`, yields a store that
@@ -181,6 +201,15 @@ func (k Keychain) Get(profile, key string) (string, error) {
 	return trimNL(out), nil
 }
 
+// Set mirrors _secret_keychain_set: delete, then add with an empty trusted-app list.
+func (k Keychain) Set(profile, key, value string) error {
+	svc := k.service(profile, key)
+	user := os.Getenv("USER")
+	_, _ = output("security", "delete-generic-password", "-a", user, "-s", svc)
+	_, err := output("security", "add-generic-password", "-a", user, "-s", svc, "-w", value, "-T", "", "-U")
+	return err
+}
+
 // Delete mirrors _secret_keychain_delete (failures ignored).
 func (k Keychain) Delete(profile, key string) error {
 	_, _ = output("security", "delete-generic-password", "-a", os.Getenv("USER"), "-s", k.service(profile, key))
@@ -226,6 +255,22 @@ func (f File) Get(profile, key string) (string, error) {
 		return "", nil
 	}
 	return trimNL(string(bytes.ReplaceAll(data, []byte{0}, nil))), nil
+}
+
+// Set mirrors _secret_file_set: the profile dir is 0700 (as is secrets/), the
+// file 0600, and the value is written without a trailing newline.
+func (f File) Set(profile, key, value string) error {
+	p := f.path(profile, key)
+	if err := os.MkdirAll(filepath.Dir(p), 0o777); err != nil {
+		return err
+	}
+	_ = os.Chmod(ctxDir()+"/secrets", 0o700)
+	_ = os.Chmod(ctxDir()+"/secrets/"+profile, 0o700)
+	if err := os.WriteFile(p, []byte(value), 0o666); err != nil {
+		return err
+	}
+	_ = os.Chmod(p, 0o600)
+	return nil
 }
 
 // Delete mirrors _secret_file_delete (rm -f, failures ignored).
@@ -278,6 +323,13 @@ func (p Pass) Get(profile, key string) (string, error) {
 	}
 	first, _, _ := strings.Cut(out, "\n")
 	return first, nil
+}
+
+// Set mirrors _secret_pass_set: `pass insert -m -f` fed the value and a newline.
+func (p Pass) Set(profile, key, value string) error {
+	cmd := exec.Command("pass", "insert", "-m", "-f", p.path(profile, key))
+	cmd.Stdin = strings.NewReader(value + "\n")
+	return cmd.Run()
 }
 
 // Delete mirrors _secret_pass_delete (failures ignored).

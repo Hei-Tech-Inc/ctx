@@ -77,7 +77,7 @@ func TestSecretCLIMatchesBash(t *testing.T) {
 }
 
 func TestSecretImplements(t *testing.T) {
-	for sub, want := range map[string]bool{"get": true, "list": true, "delete": true, "set": false, "migrate": false, "": false} {
+	for sub, want := range map[string]bool{"get": true, "list": true, "delete": true, "set": true, "migrate": true, "": false, "bogus": false} {
 		if got := implements("secret", []string{sub}); got != want {
 			t.Errorf("implements secret %q = %v, want %v", sub, got, want)
 		}

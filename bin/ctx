@@ -457,7 +457,7 @@ main() {
       cmd_config "$@"
       ;;
     secret)
-      case "${1:-}" in get|list|delete) _ctx_core_forward secret "$@" ;; esac
+      case "${1:-}" in get|list|delete|set|migrate) _ctx_core_forward secret "$@" ;; esac
       cmd_secret "$@"
       ;;
     verify)           cmd_verify "${1:-}" ;;

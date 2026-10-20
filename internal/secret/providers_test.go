@@ -1,6 +1,8 @@
 package secret
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,6 +119,7 @@ esac`)
 case "$1" in
 show) f="$FAKE_STATE/pass/$2"; [ -f "$f" ] || exit 1; cat "$f" ;;
 rm) rm -f "$FAKE_STATE/pass/$3" ;;
+insert) cat > "$FAKE_STATE/pass_stdin" ;;
 esac`)
 	f.securityLog, f.pLog = secLog, passLog
 	t.Setenv("PATH", secDir+":"+passDir+":"+os.Getenv("PATH"))
@@ -275,5 +278,87 @@ func TestProviderGetter(t *testing.T) {
 	_, err := ProviderGetter{}.Get("p", "missing")
 	if err == nil || !strings.Contains(err.Error(), "No secret 'missing' for profile 'p'") {
 		t.Errorf("missing err = %v", err)
+	}
+}
+
+func TestStoreSetMatchesBash(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		store  Store
+		prefix string
+	}{
+		{"keychain", Keychain{}, "_secret_keychain"},
+		{"file", File{}, "_secret_file"},
+		{"pass", Pass{}, "_secret_pass"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeEnv(t)
+			snapshot := func() string {
+				var b strings.Builder
+				_ = filepath.Walk(f.ctxDir, func(p string, info os.FileInfo, err error) error {
+					if err != nil || p == f.ctxDir {
+						return nil
+					}
+					fmt.Fprintf(&b, "%s %v", strings.TrimPrefix(p, f.ctxDir), info.Mode())
+					if info.Mode().IsRegular() {
+						data, _ := os.ReadFile(p)
+						fmt.Fprintf(&b, " %q", data)
+					}
+					b.WriteString("\n")
+					return nil
+				})
+				stdin, _ := os.ReadFile(filepath.Join(f.state, "pass_stdin"))
+				return b.String() + "stdin=" + string(stdin)
+			}
+			reset := func() {
+				f.resetLogs()
+				_ = os.RemoveAll(filepath.Join(f.ctxDir, "secrets"))
+				_ = os.Remove(filepath.Join(f.state, "pass_stdin"))
+			}
+			for _, v := range []string{"hunter2", "a b", "-x", "$HOME", `q"'`, ""} {
+				reset()
+				f.bash(c.prefix+`_set "$1" "$2" "$3"`, "p", "K", v)
+				wantArgv, wantState := f.argv(), snapshot()
+				reset()
+				if err := c.store.Set("p", "K", v); err != nil {
+					t.Fatalf("Set(%q): %v", v, err)
+				}
+				if got := f.argv(); !reflect.DeepEqual(got, wantArgv) {
+					t.Errorf("Set(%q) argv %q, bash %q", v, got, wantArgv)
+				}
+				if got := snapshot(); got != wantState {
+					t.Errorf("Set(%q) state\n%s\nbash\n%s", v, got, wantState)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenWith(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	for _, p := range []string{ProviderKeychain, ProviderPass, "vault"} {
+		if _, err := OpenWith(p); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("OpenWith(%s) err = %v, want ErrUnavailable", p, err)
+		}
+	}
+	if st, err := OpenWith(ProviderFile); err != nil || st == nil {
+		t.Errorf("OpenWith(file) = %v, %v", st, err)
+	}
+	dir, _ := testutil.FakeBin(t, "pass", "exit 0")
+	t.Setenv("PATH", dir)
+	if _, err := OpenWith(ProviderPass); err != nil {
+		t.Errorf("OpenWith(pass) with pass: %v", err)
+	}
+	old := goos
+	defer func() { goos = old }()
+	sdir, _ := testutil.FakeBin(t, "security", "exit 0")
+	t.Setenv("PATH", sdir)
+	goos = "linux"
+	if _, err := OpenWith(ProviderKeychain); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("keychain on linux err = %v", err)
+	}
+	goos = "darwin"
+	if _, err := OpenWith(ProviderKeychain); err != nil {
+		t.Errorf("keychain on darwin: %v", err)
 	}
 }
