@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -50,6 +51,10 @@ func (p plain) AskYN(prompt string, def bool) (bool, error) {
 // successive lines.
 func (p plain) readLine(hidden bool) (string, error) {
 	if f, ok := p.t.In.(*os.File); ok && hidden && isTerminal(f.Fd()) {
+		line, err := readSecretTTY(int(f.Fd()), f)
+		if !errors.Is(err, errNoTermios) {
+			return line, err
+		}
 		b, err := term.ReadPassword(int(f.Fd()))
 		if err != nil {
 			return "", ErrCancelled
