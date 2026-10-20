@@ -1,0 +1,55 @@
+//go:build !windows
+
+package testutil
+
+import (
+	"os/exec"
+	"testing"
+	"time"
+)
+
+func TestRunPTY(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+	got, rc := RunPTY(t, exec.Command("bash", "-c", `read -r a; echo "got:$a"`), []string{"x"}, 10*time.Second)
+	if got != "got:x\n" || rc != 0 {
+		t.Errorf("transcript %q rc %d, want %q rc 0", got, rc, "got:x\n")
+	}
+
+	// Several prompts, each answered after its prompt; echo is off, so the
+	// answers do not show up in the transcript.
+	script := `printf 'one? '; read -r a; printf 'two: '; read -r b; [ -t 0 ] && [ -t 1 ] && echo tty; stty size; echo "$a,$b"; exit 3`
+	got, rc = RunPTY(t, exec.Command("bash", "-c", script), []string{"A", "B"}, 10*time.Second)
+	if want := "one? two: tty\n40 120\nA,B\n"; got != want || rc != 3 {
+		t.Errorf("transcript %q rc %d, want %q rc 3", got, rc, want)
+	}
+
+	// EOF sends Ctrl+D at the start of a line: read fails.
+	got, rc = RunPTY(t, exec.Command("bash", "-c", `printf 'q: '; read -r a || exit 130; echo "got:$a"`), []string{"EOF"}, 10*time.Second)
+	if got != "q: " || rc != 130 {
+		t.Errorf("EOF: transcript %q rc %d, want %q rc 130", got, rc, "q: ")
+	}
+
+	// Death by signal is reported like a shell does: 128+signal.
+	_, rc = RunPTY(t, exec.Command("bash", "-c", `kill -TERM $$`), nil, 10*time.Second)
+	if rc != 143 {
+		t.Errorf("signal rc = %d, want 143", rc)
+	}
+}
+
+func TestPromptLike(t *testing.T) {
+	for s, want := range map[string]bool{
+		"? Name: ":                      true,
+		"? Name \x1b[2m[acme]\x1b[0m: ": true,
+		"Continue? [Y/n] ":              true,
+		"> ":                            true,
+		"working...\n":                  false,
+		"done":                          false,
+		"":                              false,
+	} {
+		if got := promptLike([]byte(s)); got != want {
+			t.Errorf("promptLike(%q) = %v, want %v", s, got, want)
+		}
+	}
+}

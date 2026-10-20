@@ -23,7 +23,7 @@ func (r rich) AskSecret(prompt string) (string, error) {
 		Placeholder(prompt).
 		Prompt("> ").
 		Value(&v)
-	if err := r.run(huh.NewForm(huh.NewGroup(in)).WithWidth(60)); err != nil {
+	if err := r.run(huh.NewForm(huh.NewGroup(in)).WithWidth(60), false); err != nil {
 		return "", err
 	}
 	return v, nil
@@ -46,7 +46,7 @@ func (r rich) AskYN(prompt string, def bool) (bool, error) {
 		Affirmative(affirm).
 		Negative(deny).
 		Value(&v)
-	if err := r.run(huh.NewForm(huh.NewGroup(c)).WithKeyMap(km)); err != nil {
+	if err := r.run(huh.NewForm(huh.NewGroup(c)).WithKeyMap(km), false); err != nil {
 		return false, err
 	}
 	if !def {
@@ -55,9 +55,53 @@ func (r rich) AskYN(prompt string, def bool) (bool, error) {
 	return v, nil
 }
 
-func (r rich) run(f *huh.Form) error {
+// Ask is ask's gum input: the default is the editable value, the placeholder
+// shows once it is erased, and an empty answer is the default. gum's dim
+// "Your text appears after >…" line is not printed: it explains gum's own
+// shortcuts, and huh's help line shows the keys.
+func (r rich) Ask(prompt, def, hint string) (string, error) {
+	if hint == "" {
+		hint = "Type here, then Enter"
+		if def != "" {
+			hint = "Press Enter to keep, or edit"
+		}
+	}
+	v := def
+	in := huh.NewInput().
+		Title(prompt).
+		Prompt("> ").
+		Placeholder(hint).
+		Value(&v)
+	if err := r.run(huh.NewForm(huh.NewGroup(in)).WithWidth(72), true); err != nil {
+		return "", err
+	}
+	if v == "" {
+		v = def
+	}
+	return echoed(v), nil
+}
+
+// PickOne is pick_one's gum choose (height 10). The header drops gum's
+// "? shortcuts": huh has no "?" key and shows its help line instead.
+func (r rich) PickOne(prompt string, items []string) (string, error) {
+	if len(items) == 0 {
+		return "", nil
+	}
+	var v string
+	s := huh.NewSelect[string]().
+		Title(prompt + " (↑/↓ move, Enter picks, Ctrl+C cancel)").
+		Options(huh.NewOptions(items...)...).
+		Height(10).
+		Value(&v)
+	if err := r.run(huh.NewForm(huh.NewGroup(s)), true); err != nil {
+		return "", err
+	}
+	return echoed(v), nil
+}
+
+func (r rich) run(f *huh.Form, help bool) error {
 	err := f.WithTheme(huh.ThemeFunc(theme)).
-		WithShowHelp(false).
+		WithShowHelp(help).
 		WithInput(r.input()).
 		WithOutput(r.t.Err).
 		Run()
@@ -99,13 +143,16 @@ func (e *eofCancel) Read(p []byte) (int, error) {
 }
 
 // theme is huh's Charm theme with the gum accent color (99) on titles,
-// prompts and cursors.
+// prompts, cursors and the select indicator, and gum input's placeholder
+// color (245).
 func theme(isDark bool) *huh.Styles {
 	s := huh.ThemeCharm(isDark)
 	c := lipgloss.Color(strconv.Itoa(accent))
 	s.Focused.Title = s.Focused.Title.Foreground(c)
 	s.Focused.TextInput.Prompt = s.Focused.TextInput.Prompt.Foreground(c)
 	s.Focused.TextInput.Cursor = s.Focused.TextInput.Cursor.Foreground(c)
+	s.Focused.TextInput.Placeholder = s.Focused.TextInput.Placeholder.Foreground(lipgloss.Color("245"))
+	s.Focused.SelectSelector = s.Focused.SelectSelector.Foreground(c)
 	s.Blurred = s.Focused
 	s.Blurred.Base = s.Blurred.Base.BorderStyle(lipgloss.HiddenBorder())
 	return s

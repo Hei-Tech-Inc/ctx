@@ -5,10 +5,12 @@ go 1.26.0
 toolchain go1.27.2
 
 require (
+	charm.land/bubbles/v2 v2.0.0
 	charm.land/huh/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/BurntSushi/toml v1.2.1
 	github.com/charmbracelet/colorprofile v0.4.3
+	github.com/creack/pty v1.1.24
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
@@ -16,7 +18,6 @@ require (
 )
 
 require (
-	charm.land/bubbles/v2 v2.0.0 // indirect
 	charm.land/bubbletea/v2 v2.0.2 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/catppuccin/go v0.2.0 // indirect
