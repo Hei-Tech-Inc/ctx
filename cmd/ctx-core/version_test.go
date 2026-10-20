@@ -82,8 +82,7 @@ func TestUseImplementsAlways(t *testing.T) {
 }
 
 // TestImplementsSetup: setup (and its import/add aliases) is ctx-core's for
-// every shape but --extend NAME (still Bash); implements sees every argument,
-// not just the first.
+// every shape, --extend NAME included.
 func TestImplementsSetup(t *testing.T) {
 	td := t.TempDir()
 	auto := filepath.Join(td, "auto.conf")
@@ -108,7 +107,10 @@ func TestImplementsSetup(t *testing.T) {
 		{[]string{"import", "--help"}, 0},
 		{[]string{"setup", "--scope", "clone"}, 0},
 		{[]string{"add", "--scope", "full"}, 0},
-		{[]string{"setup", "--extend", "acme"}, 1},
+		{[]string{"setup", "--extend", "acme"}, 0},
+		{[]string{"import", "-y", "--extend", "acme"}, 0},
+		{[]string{"add", "--extend", "acme", "--scope", "full"}, 0},
+		{[]string{"setup", "--extend", "acme", "--config", plain}, 0},
 	} {
 		var out, errb bytes.Buffer
 		if rc := run(append([]string{"implements"}, c.args...), &out, &errb); rc != c.want {

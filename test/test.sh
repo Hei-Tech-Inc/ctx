@@ -782,14 +782,16 @@ EOS
     [[ "$out" == "GO setup" ]] || { echo "go wizard: $out"; exit 1; }
     out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" add --scope full --help 2>/dev/null)"
     [[ "$out" == "GO setup --scope full --help" ]] || { echo "go help: $out"; exit 1; }
-    # The real ctx-core takes every setup shape but --extend NAME (still Bash)
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" setup --extend acme -y </dev/null 2>/dev/null)"
+    [[ "$out" == "GO setup --extend acme -y" ]] || { echo "go extend: $out"; exit 1; }
+    # The real ctx-core takes every setup shape, --extend NAME included
     if [[ -x "$ROOT_DIR/bin/ctx-core" ]]; then
       local shape
-      for shape in "" "--scope full" "--scope clone" "--help" "-y" "--config $td/missing" "--bogus" "--extend"; do
+      for shape in "" "--scope full" "--scope clone" "--help" "-y" "--config $td/missing" "--bogus" "--extend" \
+        "--extend acme" "-y --extend acme"; do
         # shellcheck disable=SC2086 # shape is a list of words
         "$ROOT_DIR/bin/ctx-core" implements setup $shape || { echo "implements setup $shape: no"; exit 1; }
       done
-      ! "$ROOT_DIR/bin/ctx-core" implements setup --extend acme || { echo "implements setup --extend acme: yes"; exit 1; }
     fi
     # implements 0 but the command exits 127: that is the answer, Bash must not run
     cat >"$td/fake127" <<'EOS'
@@ -1218,7 +1220,7 @@ test_remove_only_own_include() {
 _wizard_sandbox() {
   local td="$1" t
   # CTX_CORE follows the suite: with ctx-core built, these wizard runs are
-  # served by Go (all but --extend); under CTX_CORE=off by Bash.
+  # served by Go; under CTX_CORE=off by Bash.
   export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
   export CTX_SECRET_PROVIDER=file
   unset XDG_CONFIG_HOME CTX_WORK_ROOT CTX_NO_GUM

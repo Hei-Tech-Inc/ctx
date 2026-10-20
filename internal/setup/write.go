@@ -111,9 +111,12 @@ func storeSecrets(in *Inputs, u Out) {
 	in.PendingSecrets = nil
 }
 
-func extraEnvsText(pairs []EnvPair) string {
+// extraEnvsText is EXTRA_ENVS: the extended profile's text, then a "K=V"
+// line per pair.
+func extraEnvsText(in Inputs) string {
 	var b strings.Builder
-	for _, p := range pairs {
+	b.WriteString(in.ExtraEnvsRaw)
+	for _, p := range in.ExtraEnvs {
 		b.WriteString(p.Key + "=" + p.Value + "\n")
 	}
 	return b.String()
@@ -131,7 +134,7 @@ func confBody(in Inputs, signingFormat, signingKey string) string {
 		{"WORK_DIR", in.WorkDir}, {"GITHUB_USER", in.GitHubUser}, {"SSH_KEY_PATH", in.SSHKeyPath},
 		{"AWS_PROFILE_NAME", in.AWSProfile}, {"AZURE_SUBSCRIPTION", in.AzureSub}, {"AZURE_TENANT", in.AzureTenant},
 		{"GCP_PROJECT", in.GCPProject}, {"GCP_ACCOUNT", in.GCPAccount}, {"KUBE_CONTEXT", in.KubeContext},
-		{"SECRET_KEYS", strings.Join(in.SecretKeys, " ")}, {"EXTRA_ENVS", extraEnvsText(in.ExtraEnvs)},
+		{"SECRET_KEYS", strings.Join(in.SecretKeys, " ")}, {"EXTRA_ENVS", extraEnvsText(in)},
 		{"SIGNING_FORMAT", signingFormat}, {"SIGNING_KEY", signingKey},
 	} {
 		b.WriteString(kv[0] + "=" + shquote.Quote(kv[1]) + "\n")
@@ -322,7 +325,7 @@ func Write(in Inputs, u Out) error {
 // write returns before trust and log, as Bash does.
 func generateMise(in Inputs, toml string) error {
 	body := MiseTOML(in.Profile, in.GitName, in.GitEmail, in.AWSProfile, in.AzureSub, in.GCPProject,
-		in.KubeContext, strings.Join(in.SecretKeys, " "), extraEnvsText(in.ExtraEnvs))
+		in.KubeContext, strings.Join(in.SecretKeys, " "), extraEnvsText(in))
 	if err := os.WriteFile(toml, []byte(body), 0o666); err != nil {
 		return err
 	}

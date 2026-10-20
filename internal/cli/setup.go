@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -77,15 +76,6 @@ func parseSetup(args []string) (f setupFlags, dieMsg string) {
 	return f, ""
 }
 
-// SetupImplemented reports whether ctx-core runs `ctx setup args...`: every
-// shape except --extend NAME, whose wizard is still Bash (Task 8). Help,
-// argument errors (also those involving --extend) and unreadable config
-// files are Go's too: it prints the same help and dies with the same text.
-func SetupImplemented(args []string) bool {
-	f, msg := parseSetup(args)
-	return msg != "" || f.help || f.extend == ""
-}
-
 // isTTYReader is [[ -t 0 ]] for t.In.
 func isTTYReader(r io.Reader) bool {
 	f, ok := r.(*os.File)
@@ -109,18 +99,12 @@ func (u ui) setupDie(err error) int {
 	return u.die(err.Error())
 }
 
-func notPorted(t tui.Term) int {
-	fmt.Fprintln(t.Err, "ctx-core: setup --extend is not ported yet")
-	return 127
-}
-
 // SetupIn runs `ctx setup|import|add`, mirroring cmd_import in
 // lib/cmd_import.sh: -h/--help prints the reference (setup.Help); without
 // --config it runs the interactive wizard (setupWizard). With --config it
 // follows the R17 order (every check before any side effect): header,
 // preconditions, the account scan, resolution, mkdir of WORK_DIR and
-// ssh-keygen, then the shared tail (finishSetup). --extend NAME is not ported
-// yet (exit 127; `implements` keeps it in Bash).
+// ssh-keygen, then the shared tail (finishSetup).
 func SetupIn(t tui.Term, args []string) int {
 	u := termUI(t)
 	f, msg := parseSetup(args)
@@ -130,9 +114,6 @@ func SetupIn(t tui.Term, args []string) int {
 	}
 	if msg != "" {
 		return u.die(msg)
-	}
-	if f.extend != "" {
-		return notPorted(t)
 	}
 	_, _ = io.WriteString(u.out, tui.Header(t, "ctx v"+os.Getenv("CTX_VERSION")+" — Add a client profile"))
 	if !f.batch {
@@ -232,13 +213,18 @@ func wizardExit(t tui.Term, u ui, err error) int {
 }
 
 // setupWizard is the interactive part of cmd_import after the header: the
-// welcome block, the account scan, the mode picker and the wizard steps
+// welcome block, the account scan, then --extend NAME's questions
+// (setup.Wizard.Extend) or the mode picker and the wizard steps
 // (setup.Wizard.Full, which runs Clone for --scope clone or the picker's
 // clone answer), then the shared tail.
 func setupWizard(t tui.Term, u ui, f setupFlags) int {
 	w := newWizard(t, u)
 	in := setup.Inputs{Scope: f.scope, AutoYes: f.autoYes}
-	if err := w.Full(&in); err != nil {
+	run := w.Full
+	if f.extend != "" {
+		in.Profile, run = f.extend, w.Extend
+	}
+	if err := run(&in); err != nil {
 		return wizardExit(t, u, err)
 	}
 	return finishSetup(t, u, w, &in)

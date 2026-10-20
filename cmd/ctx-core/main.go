@@ -46,11 +46,11 @@ var implemented = map[string]func(args []string) bool{
 	"deactivate":     func([]string) bool { return true },
 	"use":            func([]string) bool { return true },
 	"remove":         func([]string) bool { return true },
-	// setup and its aliases: the wizard, help and --config; only
-	// --extend NAME is still Bash (cli.SetupImplemented).
-	"setup":  cli.SetupImplemented,
-	"import": cli.SetupImplemented,
-	"add":    cli.SetupImplemented,
+	// setup and its aliases: every shape (the wizard, --extend, help,
+	// --config and the argument errors).
+	"setup":  func([]string) bool { return true },
+	"import": func([]string) bool { return true },
+	"add":    func([]string) bool { return true },
 }
 
 // first is args[0], or "" when there are no arguments.

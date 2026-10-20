@@ -408,9 +408,8 @@ func TestBatchRerunIdempotent(t *testing.T) {
 	}
 }
 
-// TestBatchNeedsYes: ctx-core takes every setup shape except --extend NAME
-// (Task 8); --config without --yes/-y or AUTO_CONFIRM on a non-TTY stdin dies
-// like Bash.
+// TestBatchNeedsYes: --config without --yes/-y or AUTO_CONFIRM on a non-TTY
+// stdin dies like Bash.
 func TestBatchNeedsYes(t *testing.T) {
 	td := t.TempDir()
 	yes := filepath.Join(td, "yes.conf")
@@ -421,42 +420,6 @@ func TestBatchNeedsYes(t *testing.T) {
 	if err := os.WriteFile(no, []byte("PROFILE_NAME=a\nAUTO_CONFIRM=false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct {
-		args []string
-		want bool
-	}{
-		{[]string{"--config", yes}, true},
-		{[]string{"--config", no, "--yes"}, true},
-		{[]string{"-y", "--config", no}, true},
-		{[]string{"--scope", "clone", "--config", no, "-y"}, true},
-		{[]string{"--config", no}, true}, // the review, or the needs-yes die
-		{[]string{"--config", filepath.Join(td, "missing")}, true},
-		{[]string{"--config", td, "--yes"}, true},
-		{[]string{"--config", yes, "--help"}, true},
-		{[]string{"-h", "--config", yes}, true},
-		{[]string{"--config"}, true},
-		{[]string{"--yes"}, true},
-		{nil, true},
-		{[]string{"--scope", "clone"}, true},
-		{[]string{"--scope", "clone", "-y"}, true},
-		{[]string{"--scope", "full"}, true},
-		{[]string{"--scope", "clone", "--help"}, true},
-		{[]string{"--scope", "clone", "--extend", "acme"}, true}, // the die
-		{[]string{"--scope", "clone", "--bogus"}, true},
-		{[]string{"--extend", "acme", "--config", yes}, true}, // the die
-		{[]string{"--bogus", "--config", yes}, true},
-		{[]string{"--extend"}, true}, // the die
-		{[]string{"--extend", "acme", "--help"}, true},
-		// --extend NAME stays in Bash until Task 8.
-		{[]string{"--extend", "acme"}, false},
-		{[]string{"-y", "--extend", "acme"}, false},
-		{[]string{"--extend", "acme", "--scope", "full"}, false},
-	} {
-		if got := SetupImplemented(c.args); got != c.want {
-			t.Errorf("SetupImplemented(%q) = %v, want %v", c.args, got, c.want)
-		}
-	}
-
 	e := newBatchEnv(t)
 	e.reset(t, nil)
 	r := e.goRun(t, false, "", "--config", no)

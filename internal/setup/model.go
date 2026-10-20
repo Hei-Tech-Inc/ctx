@@ -26,8 +26,11 @@ type Inputs struct {
 	SecretKeys                          []string
 	PendingSecrets                      []Secret
 	ExtraEnvs                           []EnvPair
-	SigningFormat, SigningKey           string
-	Overwrite, AutoYes, Extend          bool
+	// ExtraEnvsRaw is EXTRA_ENVS as an extended profile has it, kept byte for
+	// byte; ExtraEnvs are appended to it (Bash: EXTRA_ENVS+="K=V"$'\n').
+	ExtraEnvsRaw               string
+	SigningFormat, SigningKey  string
+	Overwrite, AutoYes, Extend bool
 }
 
 // Out is the styled output the setup code needs. internal/cli adapts it to
