@@ -526,7 +526,10 @@ main() {
       if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward status --json; else _ctx_core_forward status; fi
       cmd_status
       ;;
-    clone)            cmd_clone "$@" ;;
+    clone)
+      _ctx_core_forward clone "$@"
+      cmd_clone "$@"
+      ;;
     workdir-prompt)
       _ctx_core_forward workdir-prompt "$@"
       cmd_workdir_prompt
@@ -539,7 +542,10 @@ main() {
       case "${1:-}" in get|list|delete|set|migrate) _ctx_core_forward secret "$@" ;; esac
       cmd_secret "$@"
       ;;
-    verify)           cmd_verify "${1:-}" ;;
+    verify)
+      _ctx_core_forward verify "$@"
+      cmd_verify "${1:-}"
+      ;;
     edit)
       _ctx_core_forward edit "$@"
       local pname="${1:-}"
