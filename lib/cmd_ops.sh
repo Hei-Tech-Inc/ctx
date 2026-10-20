@@ -420,7 +420,7 @@ cmd_status() {
     dim "  $act_note"
   else
     hr
-    echo "  Profile  : ${BOLD}$current${RESET}"
+    echo -e "  Profile  : ${BOLD}$current${RESET}"
     echo "  Git      : ${GIT_NAME:-—} <${GIT_EMAIL:-—}>"
     echo "  Dir      : ${WORK_DIR:-—}"
     echo "  GitHub   : ${GITHUB_USER:-—}"
@@ -442,7 +442,7 @@ cmd_status() {
   if has gh && [[ -n "${GITHUB_USER:-}" ]]; then
     local active_gh
     active_gh=$(gh auth status 2>&1 | grep "Logged in to github.com account" \
-      | awk '{print $NF}' | tr -d '()' | head -1)
+      | head -1 | awk '{for (i = 1; i < NF; i++) if ($i == "account") { print $(i + 1); exit }}' | tr -d '()')
     if [[ "$active_gh" == "$GITHUB_USER" ]]; then
       success "gh account matches ($active_gh)"
     else
@@ -554,8 +554,8 @@ cmd_list() {
     local marker=""
     [[ "$pname" == "$current" ]] && marker=" ${GREEN}← active${RESET}"
 
-    local tags=()
-    [[ -n "${WORK_DIR:-}"          ]] && tags+=("${WORK_DIR/$HOME/~}")
+    local tags=() tilde='~'
+    [[ -n "${WORK_DIR:-}"          ]] && tags+=("${WORK_DIR/$HOME/$tilde}")
     [[ -n "${GITHUB_USER:-}"       ]] && tags+=("gh:$GITHUB_USER")
     [[ -n "${AWS_PROFILE_NAME:-}"  ]] && tags+=("aws:$AWS_PROFILE_NAME")
     [[ -n "${AZURE_SUBSCRIPTION:-}" ]] && tags+=("azure")
@@ -565,7 +565,11 @@ cmd_list() {
 
     echo -e "  ${BOLD}${pname}${RESET}${marker}"
     echo -e "  ${DIM}${GIT_NAME:-—} <${GIT_EMAIL:-—}>${RESET}"
-    [[ ${#tags[@]} -gt 0 ]] && echo -e "  ${DIM}$(IFS=' | '; echo "${tags[*]}")${RESET}"
+    if [[ ${#tags[@]} -gt 0 ]]; then
+      local joined="" tag
+      for tag in "${tags[@]}"; do joined+="${joined:+ | }$tag"; done
+      echo -e "  ${DIM}${joined}${RESET}"
+    fi
     echo ""
   done
 

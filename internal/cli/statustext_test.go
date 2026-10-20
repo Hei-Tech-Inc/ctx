@@ -5,7 +5,9 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
@@ -15,22 +17,91 @@ import (
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata/*.golden")
 
-// statusEnv installs fake tools on a PATH of just the fakes plus a symlink
-// farm of the few real tools Bash needs, so absent tools are really absent.
-func statusEnv(t *testing.T, fakes map[string]string) {
+var fakeTools = []string{"gh", "ssh-add", "mise", "aws", "git"}
+
+var (
+	sharedOnce sync.Once
+	sharedRoot string // holds fake.sh and the real-tool symlink farm
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if sharedRoot != "" {
+		_ = os.RemoveAll(sharedRoot)
+	}
+	os.Exit(code)
+}
+
+// shared builds, once per test binary, the fake script every fake tool
+// symlinks to (a fresh script is slow on its first exec, so it is written a
+// single time) and a farm of the few real tools Bash needs.
+func shared(t *testing.T) (script, farm string) {
 	t.Helper()
-	bin := t.TempDir()
-	for _, tool := range []string{"bash", "env", "grep", "cut", "tr", "awk", "head", "wc", "basename", "date", "mkdir", "chmod", "cat", "sed", "dirname", "touch", "rm", "uname", "sort", "id", "base64", "tail", "mktemp", "mv", "cp", "ln", "tee", "sleep", "stat", "ls", "pwd", "readlink", "tput", "xargs", "find", "diff", "ps", "hostname", "whoami"} {
-		if p, err := lookReal(tool); err == nil {
-			_ = os.Symlink(p, filepath.Join(bin, tool))
+	sharedOnce.Do(func() {
+		root, err := os.MkdirTemp("", "ctx-fakes")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sharedRoot = root
+		body := "#!/bin/sh\n" +
+			"n=${0##*/}\n" +
+			"for a in \"$@\"; do printf '%s\\000' \"$a\" >> \"$FAKE_LOGDIR/$n.argv\"; done\n" +
+			"printf '\\n' >> \"$FAKE_LOGDIR/$n.argv\"\n" +
+			"case $n in\n" +
+			"gh) eval \"$FAKE_BODY_gh\" ;;\n" +
+			"ssh-add) eval \"$FAKE_BODY_ssh_add\" ;;\n" +
+			"mise) eval \"$FAKE_BODY_mise\" ;;\n" +
+			"aws) eval \"$FAKE_BODY_aws\" ;;\n" +
+			"git) eval \"$FAKE_BODY_git\" ;;\n" +
+			"esac\n"
+		if err := os.WriteFile(filepath.Join(root, "fake.sh"), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(root, "farm"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range []string{"bash", "env", "grep", "cut", "tr", "awk", "head", "wc", "basename", "date", "mkdir", "chmod", "cat", "sed", "dirname", "touch", "rm", "uname", "sort", "id", "base64", "tail", "mktemp", "mv", "cp", "ln", "tee", "sleep", "stat", "ls", "pwd", "readlink", "tput", "xargs", "find", "diff", "ps", "hostname", "whoami"} {
+			if p, err := lookReal(tool); err == nil {
+				_ = os.Symlink(p, filepath.Join(root, "farm", tool))
+			}
+		}
+	})
+	return filepath.Join(sharedRoot, "fake.sh"), filepath.Join(sharedRoot, "farm")
+}
+
+// statusEnv puts the given fake tools (name -> shell body) ahead of a PATH of
+// just the real tools Bash needs, so absent tools are really absent. It
+// returns setLog, which points the fakes at a fresh argv log dir and returns it.
+func statusEnv(t *testing.T, fakes map[string]string) (setLog func() string) {
+	t.Helper()
+	script, farm := shared(t)
+	dir := t.TempDir()
+	for name := range fakes {
+		if err := os.Symlink(script, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
 		}
 	}
-	paths := []string{bin}
-	for name, script := range fakes {
-		d, _ := testutil.FakeBin(t, name, script)
-		paths = append([]string{d}, paths...)
+	for _, name := range fakeTools {
+		t.Setenv("FAKE_BODY_"+strings.ReplaceAll(name, "-", "_"), fakes[name])
 	}
-	t.Setenv("PATH", strings.Join(paths, string(os.PathListSeparator)))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+farm)
+	return func() string {
+		d := t.TempDir()
+		t.Setenv("FAKE_LOGDIR", d)
+		return d
+	}
+}
+
+// argvs returns every fake's recorded invocations.
+func argvs(t *testing.T, dir string) map[string][][]string {
+	t.Helper()
+	m := map[string][][]string{}
+	for _, name := range fakeTools {
+		if a := testutil.ReadArgv(t, filepath.Join(dir, name+".argv")); a != nil {
+			m[name] = a
+		}
+	}
+	return m
 }
 
 func lookReal(name string) (string, error) {
@@ -45,7 +116,7 @@ func lookReal(name string) (string, error) {
 
 func TestStatusTextMatchesBash(t *testing.T) {
 	good := map[string]string{
-		"gh":      `echo "  ✓ Logged in to github.com account (gooduser)"; echo "  - Active account: true"`,
+		"gh":      `echo "  ✓ Logged in to github.com account gooduser (keyring)"; echo "  - Active account: true"`,
 		"ssh-add": `echo "256 SHA256:abc $HOME/.ssh/id_good (ED25519)"`,
 		"mise":    `exit 0`,
 		"aws":     `exit 0`,
@@ -100,7 +171,8 @@ func TestStatusTextMatchesBash(t *testing.T) {
 			return f.home
 		}},
 		{"gh real format", with(map[string]string{"gh": `echo "  ✓ Logged in to github.com account gooduser (keyring)"`}), func(f *fixture) string { return full(f) }},
-		{"gh mismatch", with(map[string]string{"gh": `echo "Logged in to github.com account (other)"`}), func(f *fixture) string { return full(f) }},
+		{"gh old paren format", with(map[string]string{"gh": `echo "Logged in to github.com account (gooduser)"`}), func(f *fixture) string { return full(f) }},
+		{"gh mismatch", with(map[string]string{"gh": `echo "Logged in to github.com account other (keyring)"`}), func(f *fixture) string { return full(f) }},
 		{"key not in agent", with(map[string]string{"ssh-add": `echo "256 SHA256:abc /other (ED25519)"`}), func(f *fixture) string { return full(f) }},
 		{"key file missing", good, func(f *fixture) string {
 			wd := full(f)
@@ -142,11 +214,30 @@ func TestStatusTextMatchesBash(t *testing.T) {
 			f := newFixture(t)
 			t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 			cwd := c.setup(f)
-			statusEnv(t, c.fakes)
+			setLog := statusEnv(t, c.fakes)
+			bashLog := setLog()
 			want, wantCode := f.bashText(cwd, "status")
+			wantArgv := argvs(t, bashLog)
 			t.Chdir(cwd)
 			t.Setenv("PWD", cwd)
+			goLog := setLog()
 			got, stderr, code := goText(StatusText)
+			if gotArgv := argvs(t, goLog); !reflect.DeepEqual(gotArgv, wantArgv) {
+				t.Errorf("external argv differ\n go:   %q\nbash: %q", gotArgv, wantArgv)
+			}
+			if c.name == "auto in workdir" {
+				for tool, args := range map[string][]string{
+					"gh": {"auth", "status"}, "ssh-add": {"-l"},
+					"aws": {"configure", "list", "--profile", "awsp"}, "git": {"config", "user.email"},
+				} {
+					if g := wantArgv[tool]; !reflect.DeepEqual(g, [][]string{args}) {
+						t.Errorf("%s argv = %q, want %q", tool, g, args)
+					}
+				}
+				if _, ran := wantArgv["mise"]; ran {
+					t.Errorf("mise must only be looked up, not run: %q", wantArgv["mise"])
+				}
+			}
 			if got != want || code != wantCode {
 				t.Errorf("code %d want %d\n got: %q\nwant: %q", code, wantCode, got, want)
 			}
@@ -163,7 +254,7 @@ func TestStatusTextRichGolden(t *testing.T) {
 	f.profile("acme", "GIT_NAME", "A", "GIT_EMAIL", "a@x.io", "WORK_DIR", "/w/acme", "GITHUB_USER", "gooduser",
 		"SSH_KEY_PATH", "/k/id_good", "AWS_PROFILE_NAME", "awsp", "SECRET_KEYS", "K1 K2")
 	f.write("config", "active=acme\n")
-	statusEnv(t, map[string]string{})
+	statusEnv(t, map[string]string{})()
 	t.Chdir(f.home)
 	t.Setenv("PWD", f.home)
 	var out, errb strings.Builder
@@ -189,5 +280,29 @@ func TestStatusTextRichGolden(t *testing.T) {
 	}
 	if got != string(want) {
 		t.Errorf("golden mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestStatusTextRichNoColor(t *testing.T) {
+	f := newFixture(t)
+	f.profile("acme", "GIT_NAME", "A", "GIT_EMAIL", "a@x.io", "SSH_KEY_PATH", "/k/id_good")
+	f.write("config", "active=acme\n")
+	statusEnv(t, map[string]string{})()
+	t.Chdir(f.home)
+	t.Setenv("PWD", f.home)
+	t.Setenv("NO_COLOR", "1")
+	for _, fn := range []func(tui.Term) int{StatusText, ListText} {
+		out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code := fn(tui.Term{Out: out, Err: out, Rich: true, Colors: true}); code != 0 {
+			t.Fatalf("code %d", code)
+		}
+		out.Close()
+		got, _ := os.ReadFile(out.Name())
+		if strings.Contains(string(got), "\033") || !strings.Contains(string(got), "acme") {
+			t.Errorf("rich output with NO_COLOR: %q", got)
+		}
 	}
 }

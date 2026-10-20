@@ -25,12 +25,7 @@ func StatusText(t tui.Term) int {
 	}
 	current := cfg.Active
 
-	header := tui.Header(t, "ctx status")
-	if t.Rich {
-		_, _ = io.WriteString(richWriter(t.Out), header)
-	} else {
-		_, _ = io.WriteString(t.Out, header)
-	}
+	_, _ = io.WriteString(u.out, tui.Header(t, "ctx status"))
 
 	if current == "" {
 		u.warn("No active profile. Run: ctx use <profile>")
@@ -79,18 +74,12 @@ func StatusText(t tui.Term) int {
 			"kubectl  : " + orDash(p.KubeContext),
 			"Secrets  : " + secrets,
 		}
-		_, _ = io.WriteString(richWriter(t.Out), tui.Box(lines))
+		_, _ = io.WriteString(u.out, tui.Box(lines))
 		u.dim("  " + note)
 	} else {
 		hr := func() { u.line(u.out, u.c(ansiDim)+strings.Repeat("─", 40)+u.c(ansiReset)) }
 		hr()
-		// Bash's plain echo does not expand BOLD/RESET, so on a terminal the
-		// literal backslash sequences are printed (mirrored).
-		bold, reset := "", ""
-		if t.Colors {
-			bold, reset = `\033[1m`, `\033[0m`
-		}
-		u.say("  Profile  : " + bold + current + reset)
+		u.line(u.out, "  Profile  : "+u.c(ansiBold)+current+u.c(ansiReset))
 		u.say("  Git      : " + git)
 		u.say("  Dir      : " + orDash(p.WorkDir))
 		u.say("  GitHub   : " + orDash(p.GithubUser))
@@ -121,8 +110,13 @@ func liveChecks(u ui, current string, p *profile.Profile, pwd string) {
 			if !strings.Contains(line, "Logged in to github.com account") {
 				continue
 			}
-			if f := strings.Fields(line); len(f) > 0 {
-				activeGH = strings.NewReplacer("(", "", ")", "").Replace(f[len(f)-1])
+			// The word after "account", parentheses removed.
+			f := strings.Fields(line)
+			for i := 0; i+1 < len(f); i++ {
+				if f[i] == "account" {
+					activeGH = strings.NewReplacer("(", "", ")", "").Replace(f[i+1])
+					break
+				}
 			}
 			break
 		}

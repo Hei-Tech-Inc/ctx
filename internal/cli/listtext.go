@@ -12,8 +12,13 @@ import (
 	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
-// termUI is the Bash info/success/warn/bold/dim helpers writing to t.
+// termUI is the Bash info/success/warn/bold/dim helpers writing to t. In rich
+// mode every stream goes through richWriter, so NO_COLOR and dumb terminals
+// downgrade all of the output, not just the Charm-rendered parts.
 func termUI(t tui.Term) ui {
+	if t.Rich {
+		return ui{out: richWriter(t.Out), err: richWriter(t.Err), colors: t.Colors}
+	}
 	return ui{out: t.Out, err: t.Err, colors: t.Colors}
 }
 
@@ -26,9 +31,8 @@ func richWriter(w io.Writer) io.Writer {
 	return w
 }
 
-// tildeHome is ${s/$HOME/~} as bash 3.2 runs it: the first occurrence of $HOME,
-// anywhere in s, becomes a literal "~". (Bash 5 expands the tilde back to
-// $HOME, so there the replacement does nothing; ctx supports 3.2.)
+// tildeHome is ${s/$HOME/~}: the first occurrence of $HOME, anywhere in s,
+// becomes a literal "~" (Bash keeps the tilde in a variable so every bash agrees).
 func tildeHome(s string) string {
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -86,8 +90,7 @@ func ListText(t tui.Term) int {
 		u.line(u.out, "  "+u.c(ansiBold)+n+u.c(ansiReset)+marker)
 		u.line(u.out, "  "+u.c(ansiDim)+orDash(p.GitName)+" <"+orDash(p.GitEmail)+">"+u.c(ansiReset))
 		if len(tags) > 0 {
-			// Bash joins with `IFS=' | '`, whose first character is a space.
-			u.line(u.out, "  "+u.c(ansiDim)+strings.Join(tags, " ")+u.c(ansiReset))
+			u.line(u.out, "  "+u.c(ansiDim)+strings.Join(tags, " | ")+u.c(ansiReset))
 		}
 		u.say("")
 	}

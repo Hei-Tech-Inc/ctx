@@ -40,13 +40,6 @@ func (f *fixture) bashText(dir string, args ...string) (string, int) {
 	return out.String(), code
 }
 
-// bashTildeLiteral reports whether the test bash keeps "~" literal in
-// ${v/pat/~} (3.2 does; 5.x expands it to $HOME, making the replacement a no-op).
-func bashTildeLiteral() bool {
-	out, err := exec.Command(bashOld(), "-c", `W=/h/x; HOME=/h; echo "${W/$HOME/~}"`).Output()
-	return err == nil && strings.TrimSpace(string(out)) == "~/x"
-}
-
 // goText runs fn and returns stdout, stderr and the exit code.
 func goText(fn func(tui.Term) int) (string, string, int) {
 	var out, errb bytes.Buffer
@@ -80,11 +73,6 @@ func TestListTextMatchesBash(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			setup(f)
-			if strings.Contains(name, "home") || name == "all tags" {
-				if !bashTildeLiteral() {
-					t.Skip("this bash expands ~ in ${v/pat/~}")
-				}
-			}
 			want, _ := f.bashText(f.home, "list")
 			got, _, code := goText(ListText)
 			if code != 0 || got != want {
