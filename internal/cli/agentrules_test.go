@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
@@ -41,6 +42,20 @@ func newArEnv(t *testing.T) *arEnv {
 // seed resets HOME to proj/ (and, with repo, a git repository at proj with a sub/ cwd).
 func (e *arEnv) seed(t *testing.T, repo bool, tweak func(home string)) {
 	t.Helper()
+	t.Cleanup(func() { // read-only fixtures must not block TempDir's cleanup
+		_ = filepath.WalkDir(e.f.home, func(p string, d os.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				_ = os.Chmod(p, 0o755)
+			}
+			return nil
+		})
+	})
+	_ = filepath.WalkDir(e.f.home, func(p string, d os.DirEntry, err error) error { // undo read-only fixtures
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o755)
+		}
+		return nil
+	})
 	if err := os.RemoveAll(e.f.home); err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +169,20 @@ func TestAgentRulesMatchesBash(t *testing.T) {
 			_ = os.MkdirAll(filepath.Join(home, "proj", "ro"), 0o755)
 			_ = os.Chmod(filepath.Join(home, "proj", "ro"), 0o555)
 		}, vacuous: "Cannot write ro/AGENTS.md"},
+		{name: "read-only directory existing file", args: []string{"--write", "ro/AGENTS.md"}, tweak: func(home string) {
+			_ = os.MkdirAll(filepath.Join(home, "proj", "ro"), 0o755)
+			write("ro/AGENTS.md", "mine\n")(home)
+			_ = os.Chmod(filepath.Join(home, "proj", "ro"), 0o555)
+		}, vacuous: "Cannot write ro/AGENTS.md"},
+		{name: "dangling symlink creates target", args: []string{"--write", "dl.md"}, tweak: func(home string) {
+			_ = os.Symlink("made.md", filepath.Join(home, "proj", "dl.md"))
+		}, vacuous: "written to dl.md"},
+		{name: "relative link chain", args: []string{"--write", "l1.md"}, tweak: func(home string) {
+			_ = os.MkdirAll(filepath.Join(home, "proj", "sub2"), 0o755)
+			write("sub2/real.md", "r\n")(home)
+			_ = os.Symlink("sub2/l2.md", filepath.Join(home, "proj", "l1.md"))
+			_ = os.Symlink("real.md", filepath.Join(home, "proj", "sub2", "l2.md"))
+		}, vacuous: "written to l1.md"},
 		{name: "mode kept", args: []string{"--write", "AGENTS.md"}, tweak: func(home string) {
 			write("AGENTS.md", "mine\n")(home)
 			_ = os.Chmod(filepath.Join(home, "proj", "AGENTS.md"), 0o644)
@@ -266,5 +295,48 @@ func TestAgentRulesUnreadable(t *testing.T) {
 	}
 	if !strings.Contains(res[0].stderr, "Cannot read AGENTS.md") {
 		t.Errorf("vacuous: %q", res[0].stderr)
+	}
+}
+
+// TestAgentRulesWriteFailureKeepsOriginal: a failure while writing the new
+// content leaves the file as it was and removes the temp file.
+func TestAgentRulesWriteFailureKeepsOriginal(t *testing.T) {
+	e := newArEnv(t)
+	e.seed(t, false, nil)
+	file := filepath.Join(e.cwd, "AGENTS.md")
+	if err := os.WriteFile(file, []byte("mine\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	procMu.Lock()
+	defer procMu.Unlock()
+	saved := writeTemp
+	defer func() { writeTemp = saved }()
+	writeTemp = func(f *os.File, data []byte) error {
+		_, _ = f.Write(data[:len(data)/2]) // a partial write, then ENOSPC
+		return syscall.ENOSPC
+	}
+	var o, eb bytes.Buffer
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(e.cwd); err != nil {
+		t.Fatal(err)
+	}
+	if code := AgentRules(tui.Term{Out: &o, Err: &eb}, []string{"--write", "AGENTS.md"}); code != 1 {
+		t.Errorf("code %d", code)
+	}
+	if !strings.Contains(eb.String(), "Cannot write AGENTS.md") {
+		t.Errorf("stderr %q", eb.String())
+	}
+	if b, _ := os.ReadFile(file); string(b) != "mine\n" {
+		t.Errorf("original changed: %q", b)
+	}
+	if st, _ := os.Stat(file); st.Mode().Perm() != 0o640 {
+		t.Errorf("mode %v", st.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(e.cwd)
+	for _, en := range entries {
+		if en.Name() != "AGENTS.md" && en.Name() != "sub" {
+			t.Errorf("leftover file: %s", en.Name())
+		}
 	}
 }

@@ -1736,12 +1736,33 @@ cmd_agent_rules() {
     if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp"; fi
   fi
   _ctx_agent_rules_text >>"$tmp"
-  # Write through (symlinks and the file's mode stay); a new file gets the umask default.
-  if ! { cat "$tmp" >"$file"; } 2>/dev/null; then
+  # Atomic write-through: follow symlinks, build the result in a temp file next
+  # to the target (same filesystem, mode kept via cp -p, or the umask default
+  # for a new file) and mv it over the target. A failure leaves the original as it was.
+  local target="$file" dest n=0 d new
+  while [[ -L "$target" && $n -lt 40 ]]; do
+    dest="$(readlink "$target")" || break
+    case "$dest" in /*) target="$dest" ;; *) target="$(dirname -- "$target")/$dest" ;; esac
+    n=$((n + 1))
+  done
+  # A file the user made read-only is not replaced behind their back.
+  [[ ! -e "$target" || -w "$target" ]] || { rm -f "$tmp"; die "Cannot write $file"; }
+  d="$(cd -P -- "$(dirname -- "$target")" 2>/dev/null && pwd)" || { rm -f "$tmp"; die "Cannot write $file"; }
+  new="$(mktemp "$d/.ctx-agent-rules.XXXXXX" 2>/dev/null)" || { rm -f "$tmp"; die "Cannot write $file"; }
+  if {
+    if [[ -e "$target" ]]; then
+      cp -p -- "$target" "$new"
+    else
+      chmod "$(printf '%03o' $((0666 & ~$(umask))))" "$new"
+    fi &&
+      cat "$tmp" >"$new" &&
+      mv -f -- "$new" "$d/$(basename -- "$target")"
+  } 2>/dev/null; then
     rm -f "$tmp"
+  else
+    rm -f "$tmp" "$new"
     die "Cannot write $file"
   fi
-  rm -f "$tmp"
   success "ctx agent rules written to $file"
 }
 

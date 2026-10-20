@@ -5,7 +5,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
@@ -81,15 +83,16 @@ func AgentRules(t tui.Term, args []string) int {
 		}
 	}
 	buf.WriteString(agentRulesText)
-	// Write through: symlinks and the file's mode stay; a new file gets the umask default.
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
-	if err == nil {
-		_, err = f.Write(buf.Bytes())
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
+	// Atomic write-through: symlinks and the file's mode stay; a new file gets
+	// the umask default. The original is replaced only by a complete temp file.
+	target := followLinks(file)
+	if f, err := os.OpenFile(target, os.O_WRONLY, 0); err == nil {
+		_ = f.Close()
+	} else if !os.IsNotExist(err) {
+		// A file the user made read-only is not replaced behind their back.
+		return u.die("Cannot write " + file)
 	}
-	if err != nil {
+	if err := writeThroughMode(target, buf.Bytes(), 0o666&^currentUmask()); err != nil {
 		return u.die("Cannot write " + file)
 	}
 	u.success("ctx agent rules written to " + file)
@@ -119,4 +122,31 @@ func stripAgentRules(data []byte) (out []byte, ok bool) {
 		}
 	}
 	return b.Bytes(), !skip
+}
+
+// followLinks resolves a chain of symlinks, also when the last one dangles
+// (the file is then created where it points), like the readlink loop in Bash.
+func followLinks(path string) string {
+	for i := 0; i < 40; i++ {
+		st, err := os.Lstat(path)
+		if err != nil || st.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		dest, err := os.Readlink(path)
+		if err != nil {
+			break
+		}
+		if !filepath.IsAbs(dest) {
+			dest = filepath.Join(filepath.Dir(path), dest)
+		}
+		path = dest
+	}
+	return path
+}
+
+// currentUmask reads the process umask.
+func currentUmask() os.FileMode {
+	m := syscall.Umask(0o022)
+	syscall.Umask(m)
+	return os.FileMode(m)
 }

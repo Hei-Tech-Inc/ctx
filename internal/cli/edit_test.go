@@ -167,7 +167,6 @@ func TestEditCtrlC(t *testing.T) {
 					t.Fatalf("editor never started: %s", eb.String())
 				}
 			}
-			time.Sleep(100 * time.Millisecond) // let the trap be installed
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
 			select {
 			case err := <-done:

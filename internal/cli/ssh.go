@@ -138,11 +138,25 @@ func gitconfigRemoveInclude(identityFile string, warn gitssh.Warn) error {
 
 // writeThrough atomically replaces the file path points to (following a
 // symlink) with data, keeping that file's mode, like `cat tmp > file` does.
+// A file that does not exist yet gets mode 0600.
 func writeThrough(path string, data []byte) error {
+	return writeThroughMode(path, data, 0o600)
+}
+
+// writeTemp writes data into the temp file; tests replace it to inject failures.
+var writeTemp = func(f *os.File, data []byte) error {
+	_, err := f.Write(data)
+	return err
+}
+
+// writeThroughMode is writeThrough with newMode for a file that does not exist
+// yet. The target is replaced only by a rename of a complete temp file in its
+// directory, so a failed write leaves the original as it was.
+func writeThroughMode(path string, data []byte, newMode os.FileMode) error {
 	if real, err := filepath.EvalSymlinks(path); err == nil {
 		path = real
 	}
-	mode := os.FileMode(0o600)
+	mode := newMode
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
@@ -150,7 +164,7 @@ func writeThrough(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	_, werr := tmp.Write(data)
+	werr := writeTemp(tmp, data)
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
