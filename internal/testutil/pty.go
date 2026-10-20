@@ -30,12 +30,18 @@ const CtrlC = "CTRL-C"
 // for input (see answerState): a line prompt, or a full-screen UI that has
 // turned bracketed paste on. A program that has never shown such a UI and
 // prints something else, or nothing (it reads without prompting), gets the
-// answer after slowGap of quiet instead. Both gaps are stretched by loadScale
+// answer after slowGap of quiet instead; one that has shows a UI program
+// between screens, so its answer waits for the next prompt or UI, or for
+// waitGap of quiet. The gaps are stretched by loadScale
 // on a busy machine, where a program can pause that long between its writes.
 const (
 	quietGap = 300 * time.Millisecond
 	slowGap  = time.Second
-	poll     = 10 * time.Millisecond
+	// waitGap is how long output that is not waiting for input (stateWait)
+	// must stay quiet before the answer is sent anyway: a UI program that
+	// later reads without a prompt or a UI still gets its answers.
+	waitGap = 3 * slowGap
+	poll    = 10 * time.Millisecond
 	// maxScale caps loadScale.
 	maxScale = 4
 	// drainGap bounds how long output is read after the command exits, for
@@ -56,8 +62,9 @@ const (
 // pauses for more than slowGap (times loadScale) before printing its prompt
 // can receive an answer early. Answers typed early still wait in the
 // terminal's line buffer for a canonical-mode read. Once a program has shown
-// a full-screen UI, answers wait for a prompt or the next UI instead: input
-// typed between two UIs can be read and dropped by the one shutting down.
+// a full-screen UI, answers wait for a prompt or the next UI instead (input
+// typed between two UIs can be read and dropped by the one shutting down), or
+// for waitGap of quiet when neither comes.
 func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration) (transcript string, exit int) {
 	t.Helper()
 	ptmx, tty, err := pty.Open()
@@ -144,10 +151,13 @@ func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration
 			since = lastWrite
 		}
 		gap := slowGap
-		if state == stateReady {
+		switch state {
+		case stateReady:
 			gap = quietGap
+		case stateWait:
+			gap = waitGap
 		}
-		if state == stateWait || time.Since(since) < scaled(gap) {
+		if time.Since(since) < scaled(gap) {
 			time.Sleep(poll)
 			continue
 		}
@@ -220,7 +230,7 @@ var (
 const (
 	stateReady = iota // waiting for input: answer after quietGap
 	stateMaybe        // unclear: answer after slowGap
-	stateWait         // not waiting for input yet: do not answer
+	stateWait         // not waiting for input yet: answer only after waitGap
 )
 
 // answerState tells from tail, the output since the previous answer, whether
@@ -230,8 +240,9 @@ const (
 // A UI turned on in tail and not off again is ready. After a UI turned off
 // (and while a UI program prints between two UIs) only a line prompt is: an
 // answer typed before the next UI starts can be swallowed by the one
-// shutting down. A program that never showed a UI may read without
-// prompting, so silence or other output only delays the answer.
+// shutting down; RunPTY still answers after waitGap of quiet. A program that
+// never showed a UI may read without prompting, so silence or other output
+// only delays the answer.
 func answerState(tail []byte, ui bool) int {
 	on, off := bytes.LastIndex(tail, pasteOn), bytes.LastIndex(tail, pasteOff)
 	if on > off {

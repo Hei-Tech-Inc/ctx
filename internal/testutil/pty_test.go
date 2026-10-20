@@ -59,6 +59,24 @@ echo "got:$a,$b"`
 	}
 }
 
+// TestRunPTYWaitFallback: after a UI, a program that reads without a prompt
+// or another UI still gets its answer, once the output has been quiet for
+// waitGap.
+func TestRunPTYWaitFallback(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+	script := `printf '\e[?2004hone'; read -r a; printf '\e[?2004lworking\n'; read -r b; echo "got:$a,$b"`
+	start := time.Now()
+	got, rc := RunPTY(t, exec.Command("bash", "-c", script), []string{"A", "B"}, 30*time.Second)
+	if rc != 0 || !strings.HasSuffix(got, "got:A,B\n") {
+		t.Errorf("transcript %q rc %d, want got:A,B", got, rc)
+	}
+	if took := time.Since(start); took < waitGap {
+		t.Errorf("second answer sent after %v, before waitGap (%v)", took, waitGap)
+	}
+}
+
 func TestAnswerState(t *testing.T) {
 	for _, c := range []struct {
 		tail string
