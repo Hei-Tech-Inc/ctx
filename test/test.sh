@@ -777,6 +777,20 @@ EOS
     [[ "$out" == "GO setup --config $td/s conf -y" ]] || { echo "go setup: $out"; exit 1; }
     CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --no-gum add --config "$td/missing" --yes >/dev/null 2>&1 || true
     [[ "$(head -1 "$td/calls")" == "implements setup --config $td/missing --yes" ]] || { echo "setup calls: $(cat "$td/calls")"; exit 1; }
+    # The wizard and help forward too (bare setup, --scope, --help)
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" setup </dev/null 2>/dev/null)"
+    [[ "$out" == "GO setup" ]] || { echo "go wizard: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" add --scope full --help 2>/dev/null)"
+    [[ "$out" == "GO setup --scope full --help" ]] || { echo "go help: $out"; exit 1; }
+    # The real ctx-core takes every setup shape but --extend NAME (still Bash)
+    if [[ -x "$ROOT_DIR/bin/ctx-core" ]]; then
+      local shape
+      for shape in "" "--scope full" "--scope clone" "--help" "-y" "--config $td/missing" "--bogus" "--extend"; do
+        # shellcheck disable=SC2086 # shape is a list of words
+        "$ROOT_DIR/bin/ctx-core" implements setup $shape || { echo "implements setup $shape: no"; exit 1; }
+      done
+      ! "$ROOT_DIR/bin/ctx-core" implements setup --extend acme || { echo "implements setup --extend acme: yes"; exit 1; }
+    fi
     # implements 0 but the command exits 127: that is the answer, Bash must not run
     cat >"$td/fake127" <<'EOS'
 #!/usr/bin/env bash
@@ -1203,7 +1217,9 @@ test_remove_only_own_include() {
 # gh auth status prints TD/gh_status. The caller cds into the work dir.
 _wizard_sandbox() {
   local td="$1" t
-  export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1 CTX_CORE=off
+  # CTX_CORE follows the suite: with ctx-core built, these wizard runs are
+  # served by Go (all but --extend); under CTX_CORE=off by Bash.
+  export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
   export CTX_SECRET_PROVIDER=file
   unset XDG_CONFIG_HOME CTX_WORK_ROOT CTX_NO_GUM
   mkdir -p "$HOME/.ssh" "$td/fake" "$td/w/acme"

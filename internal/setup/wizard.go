@@ -34,6 +34,60 @@ type Wizard struct {
 	Now      func() time.Time
 	// HasTool is Bash's `has` (command -v); nil means a PATH lookup.
 	HasTool func(name string) bool
+	// Output is a tool's stdout as `$(name args 2>/dev/null)` captures it
+	// (trailing newlines dropped; a failure gives what was printed). nil
+	// runs the tool with no stdin.
+	Output func(name string, args ...string) string
+	// Detect is the account scan and DetectGH its gh part (re-run after
+	// `gh auth login`); nil means Detect(Home, 8s) and the gh detector with
+	// the same timeout.
+	Detect   func() Detected
+	DetectGH func() []string
+}
+
+// scanTimeout bounds gh, az and gcloud during the scan (run_with_timeout 8).
+const scanTimeout = 8 * time.Second
+
+func (w *Wizard) output(name string, args ...string) string {
+	if w.Output != nil {
+		return w.Output(name, args...)
+	}
+	cmd := exec.Command(name, args...)
+	out, _ := cmd.Output()
+	return strings.TrimRight(string(out), "\n")
+}
+
+func (w *Wizard) detectGH() []string {
+	if w.DetectGH != nil {
+		return w.DetectGH()
+	}
+	return detectGH(scanTimeout)
+}
+
+// Scan is cmd_import's account scan: the intro lines (rich mode spins while
+// detecting, where Bash runs gum spin), the detection, and the Found/No
+// lines between blank lines. The result is in w.Det.
+func (w *Wizard) Scan() {
+	detect := w.Detect
+	if detect == nil {
+		detect = func() Detected { return Detect(w.Home, scanTimeout) }
+	}
+	scanned := false
+	var spin func()
+	if w.T.Rich {
+		spin = func() {
+			tui.Spin(w.T, "Scanning your machine for existing credentials...", func() {
+				w.Det, scanned = detect(), true
+			})
+		}
+	}
+	ScanIntro(w.U, spin)
+	if !scanned {
+		w.Det = detect()
+	}
+	w.U.Say("")
+	w.Det.Report(w.U)
+	w.U.Say("")
 }
 
 func (w *Wizard) runQuiet(name string, args ...string) error {
@@ -105,6 +159,7 @@ func echoCaptured(s string) string {
 // `ssh-keygen -t ed25519 -C comment -f path -N pass -q` (the passphrase is on
 // argv, as in Bash), sets mode 600, shows the public key and waits for Enter.
 // The answer to that pause is echoed to stdout, as Bash's uncaptured ask does.
+// A failing ssh-keygen is a *DieError with the doctor hint (R25).
 func (w *Wizard) GenKey(path, comment string) error {
 	if isFile(path) {
 		w.U.Warn("Key exists at " + path + " — skipping generation.")
@@ -126,7 +181,9 @@ func (w *Wizard) GenKey(path, comment string) error {
 		}
 		pass = echoCaptured(p)
 	}
-	_ = w.Run("ssh-keygen", "-t", "ed25519", "-C", comment, "-f", path, "-N", pass, "-q")
+	if w.Run("ssh-keygen", "-t", "ed25519", "-C", comment, "-f", path, "-N", pass, "-q") != nil {
+		return &DieError{Msg: "ssh-keygen failed for " + path, Hint: true}
+	}
 	chmod := exec.Command("chmod", "600", path)
 	chmod.Stdout, chmod.Stderr = w.T.Out, w.T.Err
 	_ = chmod.Run()
@@ -165,17 +222,24 @@ func (w *Wizard) cat(path string) {
 
 // UploadKey switches gh to user and adds pub as
 // ctx-<profile>-<hostname>-<YYYYMMDD>, both with stderr discarded, then
-// reports the result. A failed upload is a warning, not an error, as in
-// Bash; the error is reserved for callers that need one.
+// reports the result (the clone wizard's wording). A failed upload is a
+// warning, not an error, as in Bash; the error is reserved for callers that
+// need one.
 func (w *Wizard) UploadKey(user, pub, profile string) error {
+	w.upload(user, pub, profile, "Add it at https://github.com/settings/keys")
+	return nil
+}
+
+// upload is UploadKey with the failure hint of the calling flow (the full
+// wizard says "Add it manually at …").
+func (w *Wizard) upload(user, pub, profile, hint string) {
 	_ = w.runQuiet("gh", "auth", "switch", "-u", user)
 	title := "ctx-" + profile + "-" + w.hostname() + "-" + w.now().Format("20060102")
 	if w.runQuiet("gh", "ssh-key", "add", pub, "--title", title) == nil {
 		w.U.Success("SSH key uploaded to GitHub (" + user + ")")
 	} else {
-		w.U.Warn("Could not upload key automatically. Add it at https://github.com/settings/keys")
+		w.U.Warn("Could not upload key automatically. " + hint)
 	}
-	return nil
 }
 
 // pubKeyReady is _ctx_setup_pub_key_ready: the profile's public key exists,

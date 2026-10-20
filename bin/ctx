@@ -436,7 +436,7 @@ main() {
   case "$cmd" in
     init)             cmd_init ;;
     setup|import|add)
-      _ctx_core_forward setup "$@" # --config FILE with --yes or AUTO_CONFIRM
+      _ctx_core_forward setup "$@" # every shape but --extend NAME
       cmd_import "$@"
       ;;
     use)

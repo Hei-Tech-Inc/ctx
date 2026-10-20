@@ -46,8 +46,8 @@ var implemented = map[string]func(args []string) bool{
 	"deactivate":     func([]string) bool { return true },
 	"use":            func([]string) bool { return true },
 	"remove":         func([]string) bool { return true },
-	// setup and its aliases: only --config FILE with --yes/-y or AUTO_CONFIRM
-	// (cli.SetupImplemented reads FILE; any problem leaves it to Bash).
+	// setup and its aliases: the wizard, help and --config; only
+	// --extend NAME is still Bash (cli.SetupImplemented).
 	"setup":  cli.SetupImplemented,
 	"import": cli.SetupImplemented,
 	"add":    cli.SetupImplemented,

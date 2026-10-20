@@ -77,35 +77,13 @@ func parseSetup(args []string) (f setupFlags, dieMsg string) {
 	return f, ""
 }
 
-// wizardPorted reports whether the interactive wizard for f is ported: the
-// clone-only wizard (--scope clone). The full wizard and --extend are Task 7.
-func wizardPorted(f setupFlags) bool {
-	return !f.batch && f.scope == "clone" && f.extend == ""
-}
-
-// SetupImplemented reports whether ctx-core runs `ctx setup args...`: the
-// clone-only wizard (--scope clone without --config or --extend), and
-// --config FILE together with --yes/-y or a truthy AUTO_CONFIRM in FILE.
-// Help, argument errors and an unreadable FILE are left to Bash, which
-// reports them.
+// SetupImplemented reports whether ctx-core runs `ctx setup args...`: every
+// shape except --extend NAME, whose wizard is still Bash (Task 8). Help,
+// argument errors (also those involving --extend) and unreadable config
+// files are Go's too: it prints the same help and dies with the same text.
 func SetupImplemented(args []string) bool {
-	for _, a := range args {
-		if a == "-h" || a == "--help" {
-			return false
-		}
-	}
 	f, msg := parseSetup(args)
-	if msg != "" || f.help {
-		return false
-	}
-	if !f.batch {
-		return wizardPorted(f)
-	}
-	c, err := setup.ReadConfig(f.config)
-	if err != nil {
-		return false
-	}
-	return f.autoYes || setup.Truthy(c.Get("AUTO_CONFIRM", "false"))
+	return msg != "" || f.help || f.extend == ""
 }
 
 // isTTYReader is [[ -t 0 ]] for t.In.
@@ -132,28 +110,28 @@ func (u ui) setupDie(err error) int {
 }
 
 func notPorted(t tui.Term) int {
-	fmt.Fprintln(t.Err, "ctx-core: setup supports only --scope clone, and --config FILE with --yes or AUTO_CONFIRM")
+	fmt.Fprintln(t.Err, "ctx-core: setup --extend is not ported yet")
 	return 127
 }
 
 // SetupIn runs `ctx setup|import|add`, mirroring cmd_import in
-// lib/cmd_import.sh. Without --config it runs the interactive wizard
-// (setupWizard). With --config it follows the R17 order (every check before
-// any side effect): header, preconditions, the account scan, resolution,
-// mkdir of WORK_DIR and ssh-keygen, the auto-confirmed review, ~/.ctx, then
-// either the dry-run report or the backups, the writes and the summary. Help,
-// --extend and the full wizard are not ported yet (exit 127; `implements`
-// keeps them in Bash).
+// lib/cmd_import.sh: -h/--help prints the reference (setup.Help); without
+// --config it runs the interactive wizard (setupWizard). With --config it
+// follows the R17 order (every check before any side effect): header,
+// preconditions, the account scan, resolution, mkdir of WORK_DIR and
+// ssh-keygen, then the shared tail (finishSetup). --extend NAME is not ported
+// yet (exit 127; `implements` keeps it in Bash).
 func SetupIn(t tui.Term, args []string) int {
 	u := termUI(t)
 	f, msg := parseSetup(args)
 	if f.help {
-		return notPorted(t)
+		_, _ = io.WriteString(t.Out, setup.Help(t))
+		return 0
 	}
 	if msg != "" {
 		return u.die(msg)
 	}
-	if !f.batch && !wizardPorted(f) {
+	if f.extend != "" {
 		return notPorted(t)
 	}
 	_, _ = io.WriteString(u.out, tui.Header(t, "ctx v"+os.Getenv("CTX_VERSION")+" — Add a client profile"))
@@ -177,9 +155,6 @@ func SetupIn(t tui.Term, args []string) int {
 	}
 	if err != nil {
 		return u.setupDie(err)
-	}
-	if !autoYes && !dry {
-		return notPorted(t) // the interactive review (TTY stdin) is still Bash
 	}
 
 	so := u.setupOut()
@@ -217,21 +192,20 @@ func SetupIn(t tui.Term, args []string) int {
 		_ = os.Chmod(in.SSHKeyPath, 0o600)
 	}
 
-	if !dry {
-		u.info("Confirming automatically (--yes or AUTO_CONFIRM in config).")
-		_ = ctxconfig.InitDirs()
-	} else {
-		setup.DryRunReport(in, so)
-		return 0
+	// Without --yes or AUTO_CONFIRM (a TTY stdin; Preconditions dies
+	// otherwise) the review asks, as in Bash.
+	in.AutoYes = autoYes
+	return finishSetup(t, u, newWizard(t, u), &in)
+}
+
+// newWizard is the Wizard over t with the real tools and the scan.
+func newWizard(t tui.Term, u ui) *setup.Wizard {
+	return &setup.Wizard{
+		T: t, P: t.Prompter(), U: u.setupOut(),
+		DryRun: os.Getenv("CTX_DRY_RUN") == "1",
+		PWD:    currentPWD(), Home: os.Getenv("HOME"),
+		Run: toolRunner(t, false), RunQuiet: toolRunner(t, true),
 	}
-	if err := setup.Backups(in); err != nil {
-		return u.die(err.Error())
-	}
-	if err := setup.Write(in, so); err != nil {
-		return 1 // Write printed the failing step's error line
-	}
-	setup.Summary(in, so, t.Rich)
-	return 0
 }
 
 // toolRunner runs a tool the way a Bash command does: with the terminal's
@@ -258,51 +232,25 @@ func wizardExit(t tui.Term, u ui, err error) int {
 }
 
 // setupWizard is the interactive part of cmd_import after the header: the
-// welcome block, the account scan, the wizard steps, the review, then the
-// dry-run report or the writes and the summary. Only the clone-only wizard
-// (--scope clone) is ported; Task 7 adds the mode picker ("Clone helper only"
-// calls w.Clone as here), the full wizard and --extend in front of
-// finishWizard.
+// welcome block, the account scan, the mode picker and the wizard steps
+// (setup.Wizard.Full, which runs Clone for --scope clone or the picker's
+// clone answer), then the shared tail.
 func setupWizard(t tui.Term, u ui, f setupFlags) int {
-	home := os.Getenv("HOME")
-	so := u.setupOut()
-	w := &setup.Wizard{
-		T: t, P: t.Prompter(), U: so,
-		DryRun: os.Getenv("CTX_DRY_RUN") == "1",
-		PWD:    currentPWD(), Home: home,
-		Run: toolRunner(t, false), RunQuiet: toolRunner(t, true),
-	}
-	w.Welcome()
-
-	// The scan. Rich mode spins while detecting (Bash: gum spin before it).
-	scanned := false
-	var spin func()
-	if t.Rich {
-		spin = func() {
-			tui.Spin(t, "Scanning your machine for existing credentials...", func() {
-				w.Det, scanned = setup.Detect(home, 8*time.Second), true
-			})
-		}
-	}
-	setup.ScanIntro(so, spin)
-	if !scanned {
-		w.Det = setup.Detect(home, 8*time.Second)
-	}
-	u.say("")
-	w.Det.Report(so)
-	u.say("")
-
-	in := setup.Inputs{AutoYes: f.autoYes}
-	if err := w.Clone(&in); err != nil {
+	w := newWizard(t, u)
+	in := setup.Inputs{Scope: f.scope, AutoYes: f.autoYes}
+	if err := w.Full(&in); err != nil {
 		return wizardExit(t, u, err)
 	}
-	return finishWizard(t, u, w, &in)
+	return finishSetup(t, u, w, &in)
 }
 
-// finishWizard is cmd_import after the wizard steps: the review (skipped
-// under --dry-run), ~/.ctx (only after the review, R16), then the dry-run
-// report, or the backups, the writes and the summary.
-func finishWizard(t tui.Term, u ui, w *setup.Wizard, in *setup.Inputs) int {
+// finishSetup is the tail cmd_import's batch, clone and full paths share:
+// the review (skipped under --dry-run; in.AutoYes prints the "Confirming
+// automatically" line instead), ~/.ctx (only after the review, R16), then
+// the dry-run report, or the backups, the writes (R4 secrets first) and the
+// summary. A failed backup dies; a failed write exits 1 after its error line
+// (R23).
+func finishSetup(t tui.Term, u ui, w *setup.Wizard, in *setup.Inputs) int {
 	if w.DryRun {
 		setup.DryRunReport(*in, w.U)
 		return 0

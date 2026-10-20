@@ -54,16 +54,32 @@ func cloneFakes(t *testing.T) string {
 	}
 	logged("ssh-keygen", `f=""
 while [ $# -gt 0 ]; do
-  case "$1" in -f) f="$2"; shift ;; esac
+  case "$1" in
+    -lf) echo "256 SHA256:fp-$(basename "$2") comment (ED25519)"; exit 0 ;;
+    -f) f="$2"; shift ;;
+  esac
   shift
 done
+if [ -n "$FAKE_KEYGEN_RC" ]; then echo "ssh-keygen: fake failure" >&2; exit "$FAKE_KEYGEN_RC"; fi
 echo "PRIVATE $f" >"$f"
 echo "ssh-ed25519 AAAAfake $f" >"$f.pub"`)
 	logged("gh", `case "$1 $2" in
-"auth status") printf 'github.com\n  ✓ Logged in to github.com account alice (keyring)\n' ;;
+"auth status")
+  [ -n "$FAKE_GH_NOACCT" ] && exit 1
+  printf 'github.com\n  ✓ Logged in to github.com account alice (keyring)\n'
+  [ -f "$FAKE_LOGDIR/gh_login" ] && printf '  ✓ Logged in to github.com account bob (keyring)\n'
+  exit 0 ;;
+"auth login") echo "gh login ran"; : >"$FAKE_LOGDIR/gh_login"; exit "${FAKE_GH_LOGIN_RC:-0}" ;;
 "auth switch") echo "switched to $4"; echo "gh switch noise" >&2 ;;
 "ssh-key add") echo "key added"; echo "gh add noise" >&2; exit "${FAKE_GH_ADD_RC:-0}" ;;
 esac`)
+	// Cloud CLIs list accounts only with FAKE_CLOUD set (not logged).
+	for name, list := range map[string]string{"kubectl": "kctx-a\nkctx-b", "az": "Sub One\nSub Two", "gcloud": "proj-1"} {
+		body := "#!/bin/sh\n[ -n \"$FAKE_CLOUD\" ] && printf '" + list + "\\n'\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	logged("git", `exec '`+realGit+`' "$@"`)
 	logged("mise", `echo "mise output"`)
 	if err := os.WriteFile(filepath.Join(dir, "timeout"), []byte("#!/bin/sh\nshift; exec \"$@\"\n"), 0o755); err != nil {
@@ -81,11 +97,15 @@ esac`)
 type cloneCase struct {
 	name    string
 	dry     bool
-	args    []string // after `setup`; default --scope clone
+	gum     bool     // leave out --no-gum
+	pipe    bool     // stdin, stdout and stderr are pipes, not a pty
+	args    []string // after `setup` ({HOME} is replaced); nil means --scope clone
 	answers []string
 	env     []string
 	seed    func(t *testing.T, home string)
 	check   func(t *testing.T, r cloneRun)
+	// normalize, when set, rewrites both transcripts before they are compared.
+	normalize func(string) string
 }
 
 type cloneRun struct {
@@ -133,12 +153,18 @@ func runClone(t *testing.T, td, fakes, core string, c cloneCase) cloneRun {
 		c.seed(t, home)
 	}
 
-	args := []string{filepath.Join(repoRoot, "bin", "ctx"), "--no-gum"}
+	args := []string{filepath.Join(repoRoot, "bin", "ctx")}
+	if !c.gum {
+		args = append(args, "--no-gum")
+	}
 	if c.dry {
 		args = append(args, "--dry-run")
 	}
-	setupArgs := c.args
-	if setupArgs == nil {
+	var setupArgs []string
+	for _, a := range c.args {
+		setupArgs = append(setupArgs, strings.ReplaceAll(a, "{HOME}", home))
+	}
+	if c.args == nil {
 		setupArgs = []string{"--scope", "clone"}
 	}
 	cmd := exec.Command(filepath.Join(fakes, "bash"), append(append(args, "setup"), setupArgs...)...)
@@ -154,7 +180,13 @@ func runClone(t *testing.T, td, fakes, core string, c cloneCase) cloneRun {
 	} else {
 		cmd.Env = append(cmd.Env, "CTX_CORE_BIN="+core)
 	}
-	transcript, code := testutil.RunPTY(t, cmd, c.answers, 90*time.Second)
+	var transcript string
+	var code int
+	if c.pipe {
+		transcript, code = runPiped(t, cmd, c.answers)
+	} else {
+		transcript, code = testutil.RunPTY(t, cmd, c.answers, 120*time.Second)
+	}
 
 	tree := mergeBackupStamps(testutil.Snapshot(t, home))
 	for k, v := range tree {
@@ -165,6 +197,9 @@ func runClone(t *testing.T, td, fakes, core string, c cloneCase) cloneRun {
 		argv[name] = testutil.ReadArgv(t, filepath.Join(logs, name+".argv"))
 	}
 	transcript = couldNotRE.ReplaceAllString(transcript, "$1")
+	if c.normalize != nil {
+		transcript = c.normalize(transcript)
+	}
 	return cloneRun{transcript, code, tree, argv}
 }
 

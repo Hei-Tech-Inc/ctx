@@ -35,6 +35,9 @@ func newTestWizard(t *testing.T, home, answers string) *testWizard {
 			tw.ran = append(tw.ran, rec)
 			if name == "ssh-keygen" {
 				f := args[5]
+				if strings.Contains(f, "fail") {
+					return errors.New("exit status 1")
+				}
 				write(t, f, "PRIVATE")
 				write(t, f+".pub", "ssh-ed25519 AAAA "+f+"\n")
 			}
@@ -100,6 +103,17 @@ func TestGenKey(t *testing.T) {
 	}
 	if want := []string{"warn:Key exists at " + key + " — skipping generation."}; !reflect.DeepEqual(tw.out.lines, want) || tw.ran != nil {
 		t.Errorf("exists: %q ran %q", tw.out.lines, tw.ran)
+	}
+
+	// R25: a failing ssh-keygen stops with the batch's die text and the hint.
+	tw = newTestWizard(t, home, "n\n")
+	err := tw.GenKey(home+"/.ssh/fail", "c")
+	var de *DieError
+	if !errors.As(err, &de) || de.Msg != "ssh-keygen failed for "+home+"/.ssh/fail" || !de.Hint {
+		t.Errorf("keygen failure: %v", err)
+	}
+	if len(tw.out.lines) != 0 {
+		t.Errorf("keygen failure printed %q", tw.out.lines)
 	}
 
 	// EOF at the passphrase question cancels.

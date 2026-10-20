@@ -81,9 +81,9 @@ func TestUseImplementsAlways(t *testing.T) {
 	}
 }
 
-// TestImplementsSetup: setup (and its import/add aliases) is ctx-core's only
-// for --config FILE with --yes/-y or AUTO_CONFIRM in FILE; implements sees
-// every argument, not just the first.
+// TestImplementsSetup: setup (and its import/add aliases) is ctx-core's for
+// every shape but --extend NAME (still Bash); implements sees every argument,
+// not just the first.
 func TestImplementsSetup(t *testing.T) {
 	td := t.TempDir()
 	auto := filepath.Join(td, "auto.conf")
@@ -101,12 +101,14 @@ func TestImplementsSetup(t *testing.T) {
 		{[]string{"setup", "--config", plain, "--yes"}, 0},
 		{[]string{"import", "-y", "--config", plain}, 0},
 		{[]string{"add", "--config", auto}, 0},
-		{[]string{"setup", "--config", plain}, 1},
-		{[]string{"setup", "--config", plain, "--yes", "--help"}, 1},
-		{[]string{"setup", "--config", filepath.Join(td, "missing"), "--yes"}, 1},
-		{[]string{"setup"}, 1},
+		{[]string{"setup", "--config", plain}, 0},
+		{[]string{"setup", "--config", plain, "--yes", "--help"}, 0},
+		{[]string{"setup", "--config", filepath.Join(td, "missing"), "--yes"}, 0},
+		{[]string{"setup"}, 0},
+		{[]string{"import", "--help"}, 0},
 		{[]string{"setup", "--scope", "clone"}, 0},
-		{[]string{"add", "--scope", "full"}, 1},
+		{[]string{"add", "--scope", "full"}, 0},
+		{[]string{"setup", "--extend", "acme"}, 1},
 	} {
 		var out, errb bytes.Buffer
 		if rc := run(append([]string{"implements"}, c.args...), &out, &errb); rc != c.want {
