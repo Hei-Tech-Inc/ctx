@@ -1113,7 +1113,8 @@ _gen_ssh_key() {
   if ask_yn "Protect this SSH key with a passphrase?" "y"; then
     passphrase=$(ask_secret "Passphrase (leave blank to use none)")
   fi
-  ssh-keygen -t ed25519 -C "$comment" -f "$key_path" -N "$passphrase" -q
+  ssh-keygen -t ed25519 -C "$comment" -f "$key_path" -N "$passphrase" -q \
+    || _dsetup_die "ssh-keygen failed for $key_path"
   chmod 600 "$key_path"
   success "SSH key generated: $key_path"
   echo ""

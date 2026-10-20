@@ -1470,6 +1470,27 @@ test_setup_cancel_exits_130() {
   pass "setup EOF at a prompt prints one cancel line, exits 130, writes nothing"
 }
 
+# R25: a failing ssh-keygen in the wizard stops setup (doctor hint, exit 1).
+test_setup_keygen_failure_dies() {
+  (
+    set -euo pipefail
+    local td out rc=0
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    printf '#!/bin/sh\necho "ssh-keygen: boom" >&2\nexit 1\n' >"$td/fake/ssh-keygen"
+    cd "$td/w/acme"
+    # clone scope: name, generate, passphrase? n
+    out="$(printf '%s\n' acme 2 n '' '' 1 y | ctx --no-gum setup --scope clone 2>&1)" || rc=$?
+    [[ "$rc" == 1 ]] || { echo "rc=$rc: $out"; exit 1; }
+    grep -qF "ssh-keygen failed for $HOME/.ssh/ctx_acme" <<<"$out" || { echo "no die line: $out"; exit 1; }
+    grep -qF 'ctx doctor' <<<"$out" || { echo "no doctor hint: $out"; exit 1; }
+    ! grep -q 'SSH key generated' <<<"$out" || { echo "claims generated: $out"; exit 1; }
+    [[ ! -e "$CTX_DIR" ]] || { echo "wrote ~/.ctx"; exit 1; }
+    rm -rf "$td"
+  ) || fail "ssh-keygen failure in the wizard dies"
+  pass "setup wizard stops with a doctor hint when ssh-keygen fails"
+}
+
 # R17: a rejected --config leaves no WORK_DIR and no generated key behind.
 test_setup_batch_checks_before_side_effects() {
   (
@@ -1584,6 +1605,7 @@ test_setup_pick_existing_key_index
 test_setup_mise_toml_escaping
 test_setup_no_secrets_bash32
 test_setup_cancel_exits_130
+test_setup_keygen_failure_dies
 test_mise_hook_comment_no_injection
 test_setup_batch_checks_before_side_effects
 test_setup_cfg_quoted_bash32
