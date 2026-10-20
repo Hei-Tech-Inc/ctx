@@ -58,6 +58,10 @@ func Upgrade(t tui.Term, args []string) int {
 		cur := os.Getenv("CTX_VERSION")
 		u.bold("\n  ctx upgrade --check\n")
 		u.dim("  Installed: ctx version " + cur)
+		// From before the temp file exists until it is gone, SIGINT and
+		// SIGTERM wait (curl gets Ctrl+C itself), so they cannot leak it.
+		sigs := catchStop()
+		defer sigs.stop()
 		f, err := os.CreateTemp("", "ctx-upgrade.")
 		if err != nil {
 			return u.die("Could not create temp file")
@@ -66,18 +70,17 @@ func Upgrade(t tui.Term, args []string) int {
 		_ = f.Close()
 		defer func() { _ = os.Remove(tmp) }()
 		if tool := fetchTool(); tool != "" {
-			sigs := catchStop()
 			_ = fetch(t, tool, repo+"/lib/core.sh", tmp, true)
-			sigs.stop()
-			if c := sigs.caught(); c != 0 {
-				return c
-			}
 		}
 		remote := ""
 		if b, err := os.ReadFile(tmp); err == nil && len(b) > 0 {
 			remote = parseCtxVersion(b)
 		}
 		_ = os.Remove(tmp)
+		sigs.stop()
+		if c := sigs.caught(); c != 0 {
+			return c
+		}
 		if remote != "" {
 			u.dim("  Remote main: ctx version " + remote)
 			if cur == remote {
@@ -160,6 +163,9 @@ func Upgrade(t tui.Term, args []string) int {
 	}
 
 	cmd := exec.Command("bash", tmp)
+	if errors.Is(cmd.Err, exec.ErrDot) {
+		cmd.Err = nil // Bash runs a bash found through a relative PATH entry too
+	}
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = t.In, t.Out, t.Err
 	err = cmd.Run()
@@ -199,7 +205,7 @@ func fetch(t tui.Term, tool, src, dst string, quiet bool) bool {
 		cmd = exec.Command("wget", "-qO", dst, src)
 	}
 	if errors.Is(cmd.Err, exec.ErrDot) {
-		cmd.Err = nil
+		cmd.Err = nil // Bash runs a tool found through a relative PATH entry too
 	}
 	cmd.Stdin, cmd.Stdout = t.In, t.Out
 	if !quiet {

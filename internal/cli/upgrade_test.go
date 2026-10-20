@@ -84,13 +84,14 @@ type upEnv struct {
 	repoURL                        string // CTX_UPGRADE_REPO (the server's, unless a case overrides it)
 }
 
-// upPaths are SystemPath without curl and wget, and without perl; built once
+// upPaths: SystemPath has no curl or wget (testutil.ExternalTools), so it is
+// the "no downloader" PATH; noPerl is SystemPath without perl too. Built once
 // per top-level test.
 type upPaths struct{ noFetch, noPerl string }
 
 func newUpPaths(t *testing.T) upPaths {
 	t.Helper()
-	return upPaths{noFetch: pathWithout(t, "curl", "wget"), noPerl: pathWithout(t, "perl")}
+	return upPaths{noFetch: testutil.SystemPath(t), noPerl: pathWithout(t, "perl", "curl", "wget")}
 }
 
 // pathWithout is a dir of symlinks to every command of SystemPath but drop.
@@ -122,8 +123,8 @@ func newUpEnv(t *testing.T, paths upPaths) *upEnv {
 	_ = buildCore(t)
 	p := newPtest(t)
 	sys := testutil.SystemPath(t)
-	realCurl := filepath.Join(sys, "curl")
-	if _, err := os.Stat(realCurl); err != nil {
+	realCurl := testutil.SystemTool("curl")
+	if realCurl == "" {
 		t.Skip("curl is not installed")
 	}
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -296,13 +297,13 @@ func (e *upEnv) pathFor(kind, first string) string {
 	var parts []string
 	switch kind {
 	case "", "curl":
-		parts = []string{e.curlDir, e.wgetDir, e.sys}
+		parts = []string{e.curlDir, e.wgetDir, e.noFetch}
 	case "wget":
 		parts = []string{e.wgetDir, e.noFetch}
 	case "none":
 		parts = []string{e.noFetch}
 	case "noperl":
-		parts = []string{e.curlDir, e.noPerl}
+		parts = []string{e.curlDir, e.wgetDir, e.noPerl}
 	}
 	if first != "" {
 		parts = append([]string{first}, parts...)
