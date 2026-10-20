@@ -262,7 +262,8 @@ func setupWizard(t tui.Term, u ui, f setupFlags) int {
 // finishSetup is the tail cmd_import's batch, clone and full paths share:
 // the review (skipped under --dry-run; in.AutoYes prints the "Confirming
 // automatically" line instead), ~/.ctx (only after the review, R16), then
-// the dry-run report, or the backups, the writes (R4 secrets first) and the
+// the dry-run report, or the backups, the writes (R4: the secrets, stored
+// after the backups — Bash stores them before; parked ruling) and the
 // summary. A failed backup dies; a failed write exits 1 after its error line
 // (R23).
 func finishSetup(t tui.Term, u ui, w *setup.Wizard, in *setup.Inputs) int {
