@@ -931,7 +931,8 @@ cmd_clone() {
     url="${rest[0]}"
   fi
 
-  ctx_init_dirs
+  # --dry-run changes nothing, not even the ctx dirs.
+  [[ "${CTX_DRY_RUN:-0}" == "1" ]] || ctx_init_dirs
   if [[ -z "$prof" ]]; then
     prof="$(active_profile)"
   fi
@@ -966,22 +967,31 @@ cmd_clone() {
 
   # Do not pass the original <repo-url> to git again — a second arg is the target
   # directory, so we would create a folder named like the full URL.
+  local gargs=() _i
   if $seen_dd; then
-    local before=() after=() _i
     for ((_i = 0; _i < idx; _i++)); do
-      before+=("${rest[_i]}")
+      gargs+=("${rest[_i]}")
     done
+    gargs+=("$clone_url")
     for ((_i = idx + 1; _i < ${#rest[@]}; _i++)); do
-      after+=("${rest[_i]}")
+      gargs+=("${rest[_i]}")
     done
-    git clone ${before[@]+"${before[@]}"} "$clone_url" ${after[@]+"${after[@]}"}
   else
-    local after=()
+    gargs+=("$clone_url")
     for ((_i = 1; _i < ${#rest[@]}; _i++)); do
-      after+=("${rest[_i]}")
+      gargs+=("${rest[_i]}")
     done
-    git clone "$clone_url" ${after[@]+"${after[@]}"}
   fi
+
+  if [[ "${CTX_DRY_RUN:-0}" == "1" ]]; then
+    local shown="git clone" a
+    for a in "${gargs[@]}"; do
+      shown+=" $(printf '%q' "$a")"
+    done
+    dim "  [dry-run] would run: $shown"
+    return 0
+  fi
+  git clone "${gargs[@]}"
 }
 
 # ─── verify ───────────────────────────────────────────────────────────────────
