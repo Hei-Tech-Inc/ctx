@@ -1036,7 +1036,7 @@ ensure_ssh_include() {
   fi
 
   # Back up before touching
-  backup_file "$ssh_main"
+  backup_file "$ssh_main" || warn "Could not back up $ssh_main" >&2
 
   # Include must be FIRST line(s) in ssh/config to take effect
   local tmp; tmp=$(mktemp)
@@ -1097,7 +1097,7 @@ gitconfig_add_include() {
 
   grep -qF "$identity_file" "$gitconfig" 2>/dev/null && return 1  # already present
 
-  backup_file "$gitconfig"
+  backup_file "$gitconfig" || warn "Could not back up $gitconfig" >&2
   {
     echo ""
     echo "[includeIf \"gitdir:${work_dir}/\"]"
@@ -1131,7 +1131,7 @@ gitconfig_remove_include() {
   ' "$gitconfig" > "$tmp" || rc=$?
   # Rewrite in place (keeps a symlink and the file's mode) only if a line was dropped.
   if [[ $rc -eq 10 ]]; then
-    backup_file "$gitconfig"
+    backup_file "$gitconfig" || warn "Could not back up $gitconfig" >&2
     cat "$tmp" > "$gitconfig"
   fi
   rm -f "$tmp"

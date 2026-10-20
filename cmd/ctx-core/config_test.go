@@ -19,6 +19,8 @@ type cfgScenario struct {
 	args []string
 	env  map[string]string
 	seed func(t *testing.T, root string) // optional
+	// errHas, when set, are lines Bash's stderr must contain.
+	errHas []string
 }
 
 func writeFile(t *testing.T, path, body string, mode os.FileMode) {
@@ -113,6 +115,11 @@ func runBoth(t *testing.T, subcmd []string, sc cfgScenario) {
 	}
 	if d := testutil.DiffSnapshots(snaps[0], snaps[1]); d != "" {
 		t.Errorf("%s %q: trees differ (first = bash):\n%s", sc.name, sc.args, d)
+	}
+	for _, l := range sc.errHas {
+		if !strings.Contains(got[0].err, l+"\n") {
+			t.Errorf("%s: bash stderr lacks %q:\n%s", sc.name, l, got[0].err)
+		}
 	}
 }
 
@@ -286,6 +293,16 @@ func TestExportImportMatchesBash(t *testing.T) {
 			_ = os.RemoveAll(filepath.Join(root, "bundle", "git-identities"))
 			_ = os.Remove(filepath.Join(root, "bundle", "ctx_ssh_config"))
 		})},
+		// $CTX_DIR/backups is a file: every backup fails and is reported on
+		// stderr, and the import goes on.
+		{name: "import with backups failing", args: []string{"import", "~/bundle"}, seed: withBundle(func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, ".ctx", "config"), "old=1\n", 0o640)
+			writeFile(t, filepath.Join(root, ".ctx", "backups"), "not a dir\n", 0o644)
+			writeFile(t, filepath.Join(root, ".ssh", "ctx_config"), "old\n", 0o600)
+			writeFile(t, filepath.Join(root, ".ssh", "config"), "Host x\n  User y\n", 0o644)
+			writeFile(t, filepath.Join(root, ".gitconfig"), "[user]\n  name = me\n", 0o644)
+		}), errHas: []string{"! Could not back up <ROOT>/.ctx/config", "! Could not back up <ROOT>/.ssh/ctx_config",
+			"! Could not back up <ROOT>/.gitconfig", "! Could not back up <ROOT>/.ssh/config"}},
 		{name: "import dir is a file", args: []string{"import", "~/blocker"}, seed: func(t *testing.T, root string) {
 			writeFile(t, filepath.Join(root, "blocker"), "x", 0o644)
 		}},

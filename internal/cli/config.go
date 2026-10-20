@@ -61,6 +61,7 @@ func (u ui) success(msg string) { u.line(u.out, u.c(ansiGreen)+"✓"+u.c(ansiRes
 func (u ui) warn(msg string)    { u.line(u.out, u.c(ansiYellow)+"!"+u.c(ansiReset)+" "+msg) }
 func (u ui) bold(msg string)    { u.line(u.out, u.c(ansiBold)+msg+u.c(ansiReset)) }
 func (u ui) dim(msg string)     { u.line(u.out, u.c(ansiDim)+msg+u.c(ansiReset)) }
+func (u ui) warnErr(msg string) { u.line(u.err, u.c(ansiYellow)+"!"+u.c(ansiReset)+" "+msg) }
 func (u ui) error(msg string)   { u.line(u.err, u.c(ansiRed)+"✗"+u.c(ansiReset)+" "+msg) }
 func (u ui) say(s string)       { _, _ = io.WriteString(u.out, s+"\n") }
 
@@ -370,9 +371,11 @@ func configImport(u ui, indir string) int {
 		u.warn("No manifest found in import directory (continuing).")
 	}
 
-	_ = ctxconfig.BackupFile(ctxconfig.Path())
-	_ = ctxconfig.BackupFile(sshConfigPath())
-	_ = ctxconfig.BackupFile(filepath.Join(home, ".gitconfig"))
+	for _, f := range []string{ctxconfig.Path(), sshConfigPath(), filepath.Join(home, ".gitconfig")} {
+		if ctxconfig.BackupFile(f) != nil {
+			u.warnErr("Could not back up " + f)
+		}
+	}
 
 	if src := filepath.Join(indir, "config"); isRegular(src) {
 		err := ctxconfig.WithLock(func() error { return ctxconfig.CopyFile(src, ctxconfig.Path()) })
@@ -392,7 +395,7 @@ func configImport(u ui, indir string) int {
 		}
 	}
 
-	gitssh.EnsureInclude()
+	gitssh.EnsureInclude(u.warnErr)
 
 	ents, _ := os.ReadDir(profilesDir)
 	var confs []string
@@ -410,7 +413,7 @@ func configImport(u ui, indir string) int {
 		identity := filepath.Join(gitDir, "ctx-"+strings.TrimSuffix(n, ".conf"))
 		workDir := sourcedWorkDir(conf)
 		if workDir != "" && isRegular(identity) {
-			_, _ = gitssh.GitconfigAddInclude(workDir, identity) // Bash: >/dev/null 2>&1 || true
+			_, _ = gitssh.GitconfigAddInclude(workDir, identity, nil) // Bash: >/dev/null 2>&1 || true
 		}
 	}
 

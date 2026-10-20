@@ -19,9 +19,10 @@ import (
 
 // ANSI codes the full summary embeds in its success message (lib/core.sh).
 const (
-	ansiBold  = "\033[1m"
-	ansiReset = "\033[0m"
-	ansiGreen = "\033[0;32m"
+	ansiBold   = "\033[1m"
+	ansiReset  = "\033[0m"
+	ansiGreen  = "\033[0;32m"
+	ansiYellow = "\033[0;33m"
 )
 
 // ErrWriteFailed is Write's error when a step could not write its file. The
@@ -46,6 +47,18 @@ func errText(err error) string {
 // without the reason, which a shell cannot get).
 func couldNot(u Out, what string, err error) {
 	u.Error("Could not " + what + ": " + errText(err))
+}
+
+// warnErr is Bash's `warn "$msg" >&2` on u's stderr.
+func warnErr(u Out) gitssh.Warn {
+	return func(msg string) {
+		_, stderr := streams(u)
+		mark := "!"
+		if t, ok := u.(Terminal); ok && t.Colors() {
+			mark = ansiYellow + "!" + ansiReset
+		}
+		_, _ = io.WriteString(stderr, mark+" "+msg+"\n")
+	}
 }
 
 func streams(u Out) (stdout, stderr io.Writer) {
@@ -263,7 +276,7 @@ func Write(in Inputs, u Out) error {
 
 	// 3. ~/.gitconfig includeIf — one block, deduped.
 	if wd != "" {
-		switch added, err := gitssh.GitconfigAddInclude(wd, id); {
+		switch added, err := gitssh.GitconfigAddInclude(wd, id, warnErr(u)); {
 		case err != nil:
 			couldNot(u, "write "+home+"/.gitconfig", err)
 			failed = true
@@ -277,7 +290,7 @@ func Write(in Inputs, u Out) error {
 	// 4. SSH host block in ~/.ssh/ctx_config (never ~/.ssh/config).
 	if sshKey != "" && isFile(sshKey) {
 		host := "github-" + p
-		switch added, err := gitssh.AddHost(host, sshKey); {
+		switch added, err := gitssh.AddHost(host, sshKey, warnErr(u)); {
 		case err != nil:
 			couldNot(u, "write "+gitssh.SSHConfigPath(), err)
 			failed = true

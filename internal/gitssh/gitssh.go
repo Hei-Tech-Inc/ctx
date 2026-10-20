@@ -14,9 +14,20 @@ import (
 // SSHConfigPath is CTX_SSH_CONFIG: $HOME/.ssh/ctx_config.
 func SSHConfigPath() string { return filepath.Join(os.Getenv("HOME"), ".ssh", "ctx_config") }
 
+// Warn reports a problem the caller keeps going after (Bash's warn, sent to
+// stderr); nil drops it, like a Bash caller's 2>/dev/null.
+type Warn func(msg string)
+
+// backup is `backup_file "$path" || warn "Could not back up $path" >&2`.
+func backup(path string, warn Warn) {
+	if ctxconfig.BackupFile(path) != nil && warn != nil {
+		warn("Could not back up " + path)
+	}
+}
+
 // EnsureInclude mirrors ensure_ssh_include: make sure ~/.ssh/config starts
 // with an Include of the ctx-managed file, backing it up before the first edit.
-func EnsureInclude() {
+func EnsureInclude(warn Warn) {
 	home := os.Getenv("HOME")
 	sshMain := filepath.Join(home, ".ssh", "config")
 	ctxSSH := SSHConfigPath()
@@ -31,7 +42,7 @@ func EnsureInclude() {
 	if strings.Contains(string(existing), "Include "+ctxSSH) {
 		return
 	}
-	_ = ctxconfig.BackupFile(sshMain)
+	backup(sshMain, warn)
 	body := "# ctx managed hosts — added by ctx installer\nInclude " + ctxSSH + "\n\n" + string(existing)
 	tmp, err := os.CreateTemp(filepath.Dir(sshMain), "config.")
 	if err != nil {
@@ -53,12 +64,12 @@ func EnsureInclude() {
 // workDir to ~/.gitconfig unless identityFile is already mentioned there.
 // It reports whether it added the block; err is a failed append (Bash
 // returns 2 then).
-func GitconfigAddInclude(workDir, identityFile string) (added bool, err error) {
+func GitconfigAddInclude(workDir, identityFile string, warn Warn) (added bool, err error) {
 	gitconfig := filepath.Join(os.Getenv("HOME"), ".gitconfig")
 	if data, err := os.ReadFile(gitconfig); err == nil && strings.Contains(string(data), identityFile) {
 		return false, nil
 	}
-	_ = ctxconfig.BackupFile(gitconfig)
+	backup(gitconfig, warn)
 	f, err := os.OpenFile(gitconfig, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
 		return false, err
@@ -94,8 +105,8 @@ func HasHost(host string) bool {
 // for host using key to ctx_config (never ~/.ssh/config) and leave the file
 // at mode 0600. added is false when the host is already there or the append
 // failed (err; Bash returns 2 then, before the chmod and the log line).
-func AddHost(host, key string) (added bool, err error) {
-	EnsureInclude()
+func AddHost(host, key string, warn Warn) (added bool, err error) {
+	EnsureInclude(warn)
 	if HasHost(host) {
 		return false, nil
 	}

@@ -69,23 +69,25 @@ func CopyFile(src, dst string) error {
 
 // BackupFile mirrors backup_file: copy src into $CTX_DIR/backups/<stamp>/ and
 // record it in that directory's manifest.txt. A missing src is not an error.
+// When the directory or the copy fails it returns the error at once, with
+// nothing recorded or logged, as backup_file returns 1.
 func BackupFile(src string) error {
 	if st, err := os.Stat(src); err != nil || !st.Mode().IsRegular() {
 		return nil
 	}
 	bdir := filepath.Join(Dir(), "backups", Now().Format("20060102-150405"))
-	var first error
 	if err := os.MkdirAll(bdir, 0o777); err != nil {
-		first = err
+		return err
 	}
-	if err := CopyFile(src, filepath.Join(bdir, filepath.Base(src))); err != nil && first == nil {
-		first = err
+	if err := CopyFile(src, filepath.Join(bdir, filepath.Base(src))); err != nil {
+		return err
 	}
+	var first error
 	f, err := os.OpenFile(filepath.Join(bdir, "manifest.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err == nil {
 		fmt.Fprintln(f, src)
 		f.Close()
-	} else if first == nil {
+	} else {
 		first = err
 	}
 	Log("Backed up " + src + " → " + bdir)

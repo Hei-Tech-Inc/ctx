@@ -849,9 +849,9 @@ cmd_config() {
       [[ -d "$indir" ]] || die "Import directory not found: $indir"
       [[ -f "$indir/manifest.env" ]] || warn "No manifest found in import directory (continuing)."
 
-      backup_file "$CTX_CONFIG"
-      backup_file "$CTX_SSH_CONFIG"
-      backup_file "$HOME/.gitconfig"
+      backup_file "$CTX_CONFIG" || warn "Could not back up $CTX_CONFIG" >&2
+      backup_file "$CTX_SSH_CONFIG" || warn "Could not back up $CTX_SSH_CONFIG" >&2
+      backup_file "$HOME/.gitconfig" || warn "Could not back up $HOME/.gitconfig" >&2
 
       [[ -f "$indir/config" ]] && cp "$indir/config" "$CTX_CONFIG"
       mkdir -p "$CTX_PROFILES_DIR" "$HOME/.config/git"
@@ -1514,7 +1514,7 @@ cmd_install_hook() {
   fi
 
   # Backup first
-  backup_file "$shell_rc"
+  backup_file "$shell_rc" || warn "Could not back up $shell_rc" >&2
 
   # 1. mise activate
   if ! grep -q "mise activate" "$shell_rc" 2>/dev/null && has mise; then

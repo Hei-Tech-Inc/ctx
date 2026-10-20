@@ -275,7 +275,7 @@ func TestRemoveHelpers(t *testing.T) {
 	if err := sshRemoveHost("github-x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := gitconfigRemoveInclude(f.home + "/.config/git/ctx-x"); err != nil {
+	if err := gitconfigRemoveInclude(f.home+"/.config/git/ctx-x", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(sshConfigPath()); err == nil {
@@ -283,7 +283,7 @@ func TestRemoveHelpers(t *testing.T) {
 	}
 	// An exact path line not under an includeIf header is left alone.
 	f.writeHome(".gitconfig", "[include]\n  path = "+f.home+"/.config/git/ctx-x\n")
-	if err := gitconfigRemoveInclude(f.home + "/.config/git/ctx-x"); err != nil {
+	if err := gitconfigRemoveInclude(f.home+"/.config/git/ctx-x", nil); err != nil {
 		t.Fatal(err)
 	}
 	gc, _ := os.ReadFile(f.home + "/.gitconfig")

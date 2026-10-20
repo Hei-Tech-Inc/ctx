@@ -98,7 +98,7 @@ func awkLines(s string) []string {
 // line are kept. A path line not directly under an [includeIf header is left alone.
 // The file is only rewritten (after a backup) when a line is dropped, and a
 // symlinked ~/.gitconfig is written through with its mode kept.
-func gitconfigRemoveInclude(identityFile string) error {
+func gitconfigRemoveInclude(identityFile string, warn gitssh.Warn) error {
 	path := filepath.Join(os.Getenv("HOME"), ".gitconfig")
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -130,7 +130,9 @@ func gitconfigRemoveInclude(identityFile string) error {
 	if !dropped {
 		return nil
 	}
-	_ = ctxconfig.BackupFile(path)
+	if ctxconfig.BackupFile(path) != nil && warn != nil {
+		warn("Could not back up " + path)
+	}
 	return writeThrough(path, []byte(out.String()))
 }
 
