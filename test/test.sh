@@ -2048,6 +2048,92 @@ test_uninstall_refuses_unsafe_paths() {
   pass "uninstall refuses symlinks, checkouts, .., /, HOME and odd data dirs"
 }
 
+test_install_hook_keeps_rc() {
+  (
+    set -euo pipefail
+    local td out rc rule before want
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'chmod -R u+w "$td" 2>/dev/null; rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/bash
+    mkdir -p "$HOME/.ssh" "$HOME/dots" "$td/fake"
+    printf '#!/bin/sh\nexit 0\n' >"$td/fake/mise"; chmod +x "$td/fake/mise"
+    export PATH="$td/fake:$PATH"
+    rule='# ─────────────────────────────────────────────'
+    _hook() { "$ROOT_DIR/bin/ctx" --no-gum install-hook "$@" </dev/null 2>&1; }
+
+    # a legacy pasted block ends at its closing rule: what follows stays
+    printf 'top\n# ── ctx auto-switch ──────\n_ctx_auto_switch() { :; }\n%s\nafter=1\n\nlast=2\n' "$rule" >"$HOME/.zshrc"
+    out="$(_hook "$HOME/.zshrc")" || { echo "legacy rule: $out"; exit 1; }
+    grep -q '^after=1$' "$HOME/.zshrc" && grep -q '^last=2$' "$HOME/.zshrc" || { echo "lost the rest: $(cat "$HOME/.zshrc")"; exit 1; }
+    ! grep -q '_ctx_auto_switch()' "$HOME/.zshrc" || { echo "legacy kept: $(cat "$HOME/.zshrc")"; exit 1; }
+    # the mise line follows the rc file's shell (zsh), not $SHELL (bash)
+    grep -qx 'eval "$(mise activate zsh)"' "$HOME/.zshrc" || { echo "mise line: $(cat "$HOME/.zshrc")"; exit 1; }
+    [[ "$(grep -c '^# BEGIN ctx profile autoswitch$' "$HOME/.zshrc")" == 1 ]] || { echo "block count"; exit 1; }
+
+    # a legacy block without a closing rule ends at the next blank line
+    printf 'top\n# ctx profile autoswitch — old paste\nold=1\n\nkeep=1\n' >"$HOME/.bashrc"
+    out="$(_hook "$HOME/.bashrc")" || { echo "legacy blank: $out"; exit 1; }
+    grep -q '^keep=1$' "$HOME/.bashrc" && ! grep -q '^old=1$' "$HOME/.bashrc" || { echo "blank end: $(cat "$HOME/.bashrc")"; exit 1; }
+    grep -qx 'eval "$(mise activate bash)"' "$HOME/.bashrc" || { echo "bash mise line"; exit 1; }
+    # rerun: one block, the mise line once
+    out="$(_hook "$HOME/.bashrc")" || { echo "rerun: $out"; exit 1; }
+    [[ "$(grep -c '^# BEGIN ctx profile autoswitch$' "$HOME/.bashrc")" == 1 && "$(grep -c 'mise activate' "$HOME/.bashrc")" == 1 ]] \
+      || { echo "rerun: $(cat "$HOME/.bashrc")"; exit 1; }
+
+    # BEGIN without END: refused, nothing changed, no backup
+    printf 'a\n# BEGIN ctx profile autoswitch\nb\n' >"$HOME/.zshrc"
+    rm -rf "$CTX_DIR/backups"
+    rc=0; out="$(_hook "$HOME/.zshrc")" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Unterminated ctx block in $HOME/.zshrc"* ]] || { echo "unterminated: $rc $out"; exit 1; }
+    [[ "$(cat "$HOME/.zshrc")" == $'a\n# BEGIN ctx profile autoswitch\nb' && ! -d "$CTX_DIR/backups" ]] || { echo "unterminated changed"; exit 1; }
+
+    # symlinked rc: the link stays, the target is written, its mode kept; CRLF lines stay
+    printf 'one\r\n# BEGIN ctx profile autoswitch\r\nold\r\n# END ctx profile autoswitch\r\ntwo\r\n' >"$HOME/dots/zshrc"
+    chmod 640 "$HOME/dots/zshrc"
+    ln -sf dots/zshrc "$HOME/.zshrc"
+    out="$(_hook "$HOME/.zshrc")" || { echo "symlink: $out"; exit 1; }
+    [[ -L "$HOME/.zshrc" && "$(readlink "$HOME/.zshrc")" == dots/zshrc ]] || { echo "link replaced"; exit 1; }
+    [[ "$(_t_mode "$HOME/dots/zshrc")" == 640 ]] || { echo "mode $(_t_mode "$HOME/dots/zshrc")"; exit 1; }
+    [[ "$(head -1 "$HOME/dots/zshrc")" == $'one\r' && "$(grep -c $'\r$' "$HOME/dots/zshrc")" == 2 ]] && grep -q $'^two\r$' "$HOME/dots/zshrc" || { echo "crlf: $(od -c "$HOME/dots/zshrc" | head)"; exit 1; }
+    ! grep -q '^old' "$HOME/dots/zshrc" || { echo "old block kept"; exit 1; }
+
+    # read-only rc: refused, untouched
+    printf 'ro\n' >"$HOME/ro.zshrc"; chmod 444 "$HOME/ro.zshrc"
+    rc=0; out="$(_hook "$HOME/ro.zshrc")" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Cannot write $HOME/ro.zshrc"* && "$(cat "$HOME/ro.zshrc")" == ro ]] || { echo "read-only: $rc $out"; exit 1; }
+
+    # config.fish gets the fish mise line and the fish block
+    mkdir -p "$HOME/.config/fish"
+    out="$(_hook "$HOME/.config/fish/config.fish")" || { echo "fish: $out"; exit 1; }
+    grep -qx 'mise activate fish | source' "$HOME/.config/fish/config.fish" || { echo "fish mise"; exit 1; }
+    grep -q 'ctx_autoswitch.fish' "$HOME/.config/fish/config.fish" || { echo "fish block"; exit 1; }
+
+    # dry-run: says what it would do, changes nothing
+    printf 'x\n' >"$HOME/.zshrc.dry"
+    before="$(cd "$HOME" && find . -exec ls -ld {} + | LC_ALL=C sort; cat "$HOME/.zshrc.dry")"
+    out="$("$ROOT_DIR/bin/ctx" --no-gum --dry-run install-hook "$HOME/.zshrc.dry" </dev/null 2>&1)" || { echo "dry: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would add mise activation to $HOME/.zshrc.dry"* && "$out" == *"[dry-run] would refresh the ctx profile autoswitch hook in $HOME/.zshrc.dry"* ]] || { echo "dry out: $out"; exit 1; }
+    [[ "$(cd "$HOME" && find . -exec ls -ld {} + | LC_ALL=C sort; cat "$HOME/.zshrc.dry")" == "$before" ]] || { echo "dry-run changed files"; exit 1; }
+    # init --dry-run asks nothing and changes nothing
+    out="$("$ROOT_DIR/bin/ctx" --no-gum --dry-run init </dev/null 2>&1)" || { echo "init dry: $out"; exit 1; }
+    [[ "$out" != *"?"*"[Y/n]"* && "$out" == *"[dry-run] would"* ]] || { echo "init dry out: $out"; exit 1; }
+    [[ "$(cd "$HOME" && find . -exec ls -ld {} + | LC_ALL=C sort; cat "$HOME/.zshrc.dry")" == "$before" ]] || { echo "init dry-run changed files"; exit 1; }
+
+    # a missing autoswitch lib stops it before any edit
+    mkdir -p "$td/inst/bin"; cp "$ROOT_DIR/bin/ctx" "$td/inst/bin/"; cp -R "$ROOT_DIR/lib" "$td/inst/lib"
+    rm -f "$td/inst/lib/ctx_autoswitch.bash"
+    printf 'keep\n' >"$HOME/.nolib"; rm -rf "$CTX_DIR/backups"
+    # the copy has no ctx-core next to it: point it at the repo's (when that mode runs)
+    local core=()
+    [[ "${CTX_CORE:-}" != off && -x "$ROOT_DIR/bin/ctx-core" ]] && core=(CTX_CORE_BIN="$ROOT_DIR/bin/ctx-core")
+    rc=0; out="$(env "${core[@]+"${core[@]}"}" "$td/inst/bin/ctx" --no-gum install-hook "$HOME/.nolib" </dev/null 2>&1)" || rc=$?
+    want="Missing $td/inst/lib/ctx_autoswitch.bash — reinstall ctx."
+    [[ $rc -eq 1 && "$out" == *"$want"* && "$out" != *"mise activation added"* ]] || { echo "missing lib: $rc $out"; exit 1; }
+    [[ "$(cat "$HOME/.nolib")" == keep && ! -d "$CTX_DIR/backups" ]] || { echo "missing lib edited: $(cat "$HOME/.nolib")"; exit 1; }
+  ) || fail "install-hook keeps the rest of the rc file, its link and mode"
+  pass "install-hook keeps the rest of the rc file, its link and mode"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -2112,4 +2198,5 @@ test_undo_lists_backs_up_and_keeps_mode
 test_undo_ambiguous_and_same_second
 test_uninstall_removes_install_and_purges
 test_uninstall_refuses_unsafe_paths
+test_install_hook_keeps_rc
 echo "All tests passed."

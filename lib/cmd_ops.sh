@@ -1482,6 +1482,44 @@ _ctx_restore_file() {
   return 1
 }
 
+# The file FILE names after following its symlinks (also a dangling last
+# one: the file is then created where it points); at most 40 links.
+_ctx_link_target() {
+  local target="$1" dest n=0
+  while [[ -L "$target" && $n -lt 40 ]]; do
+    dest="$(readlink "$target")" || break
+    case "$dest" in /*) target="$dest" ;; *) target="$(dirname -- "$target")/$dest" ;; esac
+    n=$((n + 1))
+  done
+  printf '%s\n' "$target"
+}
+
+# Atomic write-through: put SRC's content at FILE. Symlinks are followed; the
+# result is built in a temp file next to the target (same filesystem, mode kept
+# via cp -p, or the umask default for a new file) and moved over it. A
+# read-only target is not replaced behind the user's back. Returns 1 on any
+# failure, and FILE is then as it was.
+_ctx_write_through() {
+  local src="$1" target d new
+  target="$(_ctx_link_target "$2")"
+  [[ ! -e "$target" || -w "$target" ]] || return 1
+  d="$(cd -P -- "$(dirname -- "$target")" 2>/dev/null && pwd)" || return 1
+  new="$(mktemp "$d/.ctx-write.XXXXXX" 2>/dev/null)" || return 1
+  if {
+    if [[ -e "$target" ]]; then
+      cp -p -- "$target" "$new"
+    else
+      chmod "$(printf '%03o' $((0666 & ~$(umask))))" "$new"
+    fi &&
+      cat "$src" >"$new" &&
+      mv -f -- "$new" "$d/$(basename -- "$target")"
+  } 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$new"
+  return 1
+}
+
 # ctx undo: restore the files of the latest backup. The backup keeps one copy
 # per basename, so when two manifest paths share a basename neither is
 # restored ("Ambiguous backup"); a path that is not absolute, has a . or ..
@@ -1801,8 +1839,17 @@ cmd_workdir_prompt() {
 }
 
 # ─── init ─────────────────────────────────────────────────────────────────────
+# ctx init: create the ctx dirs, offer to install missing tools (install.sh
+# next to the lib dir, else brew) and the shell hooks. --dry-run asks nothing
+# and only says what it would do.
 cmd_init() {
-  ctx_init_dirs
+  local dry=0
+  [[ "${CTX_DRY_RUN:-0}" == 1 ]] && dry=1
+  if [[ $dry -eq 0 ]]; then
+    ctx_init_dirs
+  elif [[ ! -d "$CTX_PROFILES_DIR" || ! -d "$CTX_DIR/backups" || ! -f "$CTX_CONFIG" ]]; then
+    dim "  [dry-run] would create $CTX_DIR"
+  fi
   ctx_header "Setup check"
 
   echo ""
@@ -1810,21 +1857,31 @@ cmd_init() {
   echo ""
 
   # Check for missing deps and offer to install
-  local missing_tools=()
+  local missing_tools=() t
   has mise || missing_tools+=("mise")
   has gum  || missing_tools+=("gum")
   has gh   || missing_tools+=("gh")
 
   if [[ ${#missing_tools[@]} -gt 0 ]]; then
     warn "Missing tools: ${missing_tools[*]}"
-    if ask_yn "Install missing tools now?" "y"; then
+    if [[ $dry -eq 1 ]] || ask_yn "Install missing tools now?" "y"; then
       local installer
       installer="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/install.sh"
       if [[ -f "$installer" ]]; then
-        bash "$installer"
+        if [[ $dry -eq 1 ]]; then
+          dim "  [dry-run] would run bash $installer"
+        else
+          bash "$installer"
+        fi
       else
         for t in "${missing_tools[@]}"; do
-          has brew && brew install "$t" &>/dev/null && success "$t installed" || warn "$t: install manually"
+          if [[ $dry -eq 1 ]] && has brew; then
+            dim "  [dry-run] would run brew install $t"
+          elif [[ $dry -eq 0 ]] && has brew && brew install "$t" &>/dev/null; then
+            success "$t installed"
+          else
+            warn "$t: install manually"
+          fi
         done
       fi
     fi
@@ -1832,17 +1889,21 @@ cmd_init() {
 
   # Shell hook check
   local shell_rc=""
-  [[ "$SHELL" == *"zsh"*  ]] && shell_rc="$HOME/.zshrc"
-  [[ "$SHELL" == *"bash"* ]] && shell_rc="$HOME/.bashrc"
-  [[ "$SHELL" == *"fish"* ]] && shell_rc="$HOME/.config/fish/config.fish"
+  [[ "${SHELL:-}" == *"zsh"*  ]] && shell_rc="$HOME/.zshrc"
+  [[ "${SHELL:-}" == *"bash"* ]] && shell_rc="$HOME/.bashrc"
+  [[ "${SHELL:-}" == *"fish"* ]] && shell_rc="$HOME/.config/fish/config.fish"
 
   if [[ -n "$shell_rc" ]]; then
     if ! grep -q "mise activate" "$shell_rc" 2>/dev/null || \
        { ! grep -q '_ctx_profile_autoswitch' "$shell_rc" 2>/dev/null \
          && ! grep -q '# BEGIN ctx profile autoswitch' "$shell_rc" 2>/dev/null; }; then
-      ask_yn "Install shell hooks (mise + ctx auto-switch) to $shell_rc?" "y" \
-        && cmd_install_hook "$shell_rc" \
-        || info "Skipped. Run: ctx install-hook"
+      if [[ $dry -eq 1 ]]; then
+        cmd_install_hook "$shell_rc"
+      elif ask_yn "Install shell hooks (mise + ctx auto-switch) to $shell_rc?" "y"; then
+        cmd_install_hook "$shell_rc"
+      else
+        info "Skipped. Run: ctx install-hook"
+      fi
     else
       success "Shell hooks already installed"
     fi
@@ -1860,76 +1921,82 @@ cmd_init() {
 }
 
 # ─── install-hook ─────────────────────────────────────────────────────────────
-# Strip embedded/legacy autoswitch blocks from a shell rc (BEGIN/END or old full paste).
-_ctx_rc_strip_autoswitch() {
-  local rc="$1" t
-  [[ -f "$rc" ]] || return 0
-  t="$(mktemp)" || return 1
-  awk '
-    /^# BEGIN ctx profile autoswitch/ { skip=1; next }
-    /^# END ctx profile autoswitch/ { skip=0; next }
-    skip { next }
-    /^# ctx profile autoswitch/ { skip=1; next }
-    /^# ── ctx auto-switch/ { skip=1; next }
-    skip && /^# ─{25,}$/ { skip=0; next }
-    skip { next }
-    { print }
-  ' "$rc" > "$t" && mv "$t" "$rc"
+# The shell an rc file is for, from its name: fish (config.fish), zsh (a name
+# with "zsh" in it) or bash.
+_ctx_rc_shell() {
+  case "$1" in
+    config.fish|*/config.fish) echo fish ;;
+    *)
+      case "$(basename -- "$1")" in
+        *zsh*) echo zsh ;;
+        *)     echo bash ;;
+      esac
+      ;;
+  esac
 }
 
-cmd_install_hook() {
-  local shell_rc="${1:-}"
-
-  if [[ -z "$shell_rc" ]]; then
-    case "$SHELL" in
-      */zsh)  shell_rc="$HOME/.zshrc" ;;
-      */bash) shell_rc="$HOME/.bashrc" ;;
-      */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
-      *)      die "Unknown shell. Pass rc file: ctx install-hook ~/.zshrc" ;;
+# Print rc file RC without its ctx autoswitch blocks:
+#   - "# BEGIN ctx profile autoswitch" .. "# END ctx profile autoswitch";
+#   - legacy pastes starting "# ctx profile autoswitch" or "# ── ctx auto-switch",
+#     which end at their closing "# ─────…" line (25 or more ─), or else just
+#     before the next blank line (kept); never at the end of the file.
+# A line ending in CR is matched without it and printed as it was. Returns 1
+# (output incomplete) when a BEGIN has no END.
+_ctx_rc_strip_autoswitch() {
+  local line l state=none
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    l="${line%$'\r'}"
+    case "$state" in
+      begin)
+        [[ "$l" == "# END ctx profile autoswitch"* ]] && state=none
+        continue
+        ;;
+      legacy)
+        case "$l" in
+          "# BEGIN ctx profile autoswitch"*) state=begin ;;
+          "# END ctx profile autoswitch"*) state=none ;;
+          "") state=none; printf '%s\n' "$line" ;;
+          *) _ctx_rc_is_rule "$l" && state=none ;;
+        esac
+        continue
+        ;;
     esac
-  fi
-
-  # Backup first
-  backup_file "$shell_rc" || warn "Could not back up $shell_rc" >&2
-
-  # 1. mise activate
-  if ! grep -q "mise activate" "$shell_rc" 2>/dev/null && has mise; then
-    local activate_line
-    case "$(basename "$SHELL")" in
-      zsh)  activate_line='eval "$(mise activate zsh)"' ;;
-      bash) activate_line='eval "$(mise activate bash)"' ;;
-      fish) activate_line='mise activate fish | source' ;;
-      *)    activate_line='eval "$(mise activate)"' ;;
+    case "$l" in
+      "# BEGIN ctx profile autoswitch"*) state=begin ;;
+      "# END ctx profile autoswitch"*) ;;
+      "# ctx profile autoswitch"*|"# ── ctx auto-switch"*) state=legacy ;;
+      *) printf '%s\n' "$line" ;;
     esac
-    { echo ""; echo "# mise-en-place — added by ctx"; echo "$activate_line"; } >> "$shell_rc"
-    success "mise activation added to $shell_rc"
-  fi
+  done <"$1"
+  [[ "$state" != begin ]]
+}
 
-  # 2. ctx profile autoswitch — source lib (upgrades refresh behavior without re-pasting)
-  local _as_lib
-  _as_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Whether line L is "# " and 25 or more ─ (a legacy block's closing rule).
+_ctx_rc_is_rule() {
+  local r="${1#\# }"
+  [[ "$1" == "# "* && "$r" == "─────────────────────────"* && -z "${r//─/}" ]]
+}
 
-  _ctx_rc_strip_autoswitch "$shell_rc"
-
-  {
-    echo ""
-    echo "# BEGIN ctx profile autoswitch"
-    echo "# Sourced from ctx lib so upgrades (notify mute, etc.) apply without editing this file."
-    if [[ "$shell_rc" == *"/config.fish" ]]; then
-      [[ -f "$_as_lib/ctx_autoswitch.fish" ]] || die "Missing $_as_lib/ctx_autoswitch.fish — reinstall ctx."
-      echo "set -l _ctx_as_lib ''"
-      echo "for _ctx_as_cand in '$_as_lib' \$HOME/.local/lib/ctx /usr/local/lib/ctx /opt/homebrew/lib/ctx"
-      echo "  if test -f \"\$_ctx_as_cand/ctx_autoswitch.fish\""
-      echo "    set _ctx_as_lib \$_ctx_as_cand"
-      echo "    break"
-      echo "  end"
-      echo "end"
-      echo "if test -n \"\$_ctx_as_lib\""
-      echo "  source \"\$_ctx_as_lib/ctx_autoswitch.fish\""
-      echo "end"
-    else
-      [[ -f "$_as_lib/ctx_autoswitch.bash" ]] || die "Missing $_as_lib/ctx_autoswitch.bash — reinstall ctx."
-      cat <<EOF
+# The autoswitch block install-hook appends for SHELL_KIND (fish|bash|zsh),
+# sourcing ctx_autoswitch.* from LIB (or a standard lib dir).
+_ctx_autoswitch_block() {
+  local kind="$1" _as_lib="$2"
+  echo ""
+  echo "# BEGIN ctx profile autoswitch"
+  echo "# Sourced from ctx lib so upgrades (notify mute, etc.) apply without editing this file."
+  if [[ "$kind" == fish ]]; then
+    echo "set -l _ctx_as_lib ''"
+    echo "for _ctx_as_cand in '$_as_lib' \$HOME/.local/lib/ctx /usr/local/lib/ctx /opt/homebrew/lib/ctx"
+    echo "  if test -f \"\$_ctx_as_cand/ctx_autoswitch.fish\""
+    echo "    set _ctx_as_lib \$_ctx_as_cand"
+    echo "    break"
+    echo "  end"
+    echo "end"
+    echo "if test -n \"\$_ctx_as_lib\""
+    echo "  source \"\$_ctx_as_lib/ctx_autoswitch.fish\""
+    echo "end"
+  else
+    cat <<EOF
 _ctx_as_lib=""
 for _ctx_as_cand in "$_as_lib" "\${HOME}/.local/lib/ctx" "/usr/local/lib/ctx" "/opt/homebrew/lib/ctx"; do
   [[ -f "\${_ctx_as_cand}/ctx_autoswitch.bash" ]] && { _ctx_as_lib="\${_ctx_as_cand}"; break; }
@@ -1940,9 +2007,86 @@ if [[ -n "\${_ctx_as_lib}" ]]; then
 fi
 unset _ctx_as_lib _ctx_as_cand 2>/dev/null || true
 EOF
-    fi
-    echo "# END ctx profile autoswitch"
-  } >> "$shell_rc"
+  fi
+  echo "# END ctx profile autoswitch"
+}
+
+# ctx install-hook [RC]: add the mise activation (when mise is installed and
+# RC has none) and the ctx autoswitch block to RC (default: by $SHELL), and the
+# SSH Include. Every check comes before any change: the autoswitch lib must
+# exist, RC must be a readable, writable file (or not exist yet, in an existing
+# dir) whose BEGIN lines all have an END. RC is rewritten in one atomic
+# write-through (symlinks and mode kept); lines it keeps keep their line
+# endings (CRLF too), the appended lines end in LF. --dry-run says what it
+# would do and changes nothing.
+cmd_install_hook() {
+  local shell_rc="${1:-}"
+
+  if [[ -z "$shell_rc" ]]; then
+    case "${SHELL:-}" in
+      */zsh)  shell_rc="$HOME/.zshrc" ;;
+      */bash) shell_rc="$HOME/.bashrc" ;;
+      */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
+      *)      die "Unknown shell. Pass rc file: ctx install-hook ~/.zshrc" ;;
+    esac
+  fi
+
+  local kind _as_lib libfile target tmp mise_add=0 activate_line
+  kind="$(_ctx_rc_shell "$shell_rc")"
+  # ctx's lib dir: the block sources ctx_autoswitch.* from it.
+  _as_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  libfile="ctx_autoswitch.bash"
+  [[ "$kind" == fish ]] && libfile="ctx_autoswitch.fish"
+  [[ -f "$_as_lib/$libfile" ]] || die "Missing $_as_lib/$libfile — reinstall ctx."
+
+  [[ -d "$shell_rc" ]] && die "$shell_rc is a directory"
+  if [[ -e "$shell_rc" ]]; then
+    [[ -f "$shell_rc" && -r "$shell_rc" ]] || die "Cannot read $shell_rc"
+  fi
+  target="$(_ctx_link_target "$shell_rc")"
+  if [[ -e "$target" ]]; then
+    [[ -w "$target" ]] || die "Cannot write $shell_rc"
+  else
+    [[ -d "$(dirname -- "$target")" ]] || die "Cannot write $shell_rc"
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-rc.XXXXXX")" || die "Cannot create a temporary file"
+  if [[ -f "$shell_rc" ]] && ! _ctx_rc_strip_autoswitch "$shell_rc" >"$tmp"; then
+    rm -f "$tmp"
+    die "Unterminated ctx block in $shell_rc; add the line '# END ctx profile autoswitch' or remove the '# BEGIN ctx profile autoswitch' line"
+  fi
+
+  if ! grep -q "mise activate" "$shell_rc" 2>/dev/null && has mise; then
+    mise_add=1
+    case "$kind" in
+      zsh)  activate_line='eval "$(mise activate zsh)"' ;;
+      fish) activate_line='mise activate fish | source' ;;
+      *)    activate_line='eval "$(mise activate bash)"' ;;
+    esac
+  fi
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    rm -f "$tmp"
+    [[ -f "$shell_rc" ]] && dim "  [dry-run] would back up $shell_rc"
+    [[ $mise_add -eq 1 ]] && dim "  [dry-run] would add mise activation to $shell_rc"
+    dim "  [dry-run] would refresh the ctx profile autoswitch hook in $shell_rc"
+    grep -qF "Include $CTX_SSH_CONFIG" "$HOME/.ssh/config" 2>/dev/null \
+      || dim "  [dry-run] would add Include $CTX_SSH_CONFIG to $HOME/.ssh/config"
+    return 0
+  fi
+
+  # Backup first
+  backup_file "$shell_rc" || warn "Could not back up $shell_rc" >&2
+
+  # 1. mise activate; 2. ctx profile autoswitch — sources the lib, so upgrades
+  # refresh behavior without re-pasting. One write: all or nothing.
+  if [[ $mise_add -eq 1 ]]; then
+    { echo ""; echo "# mise-en-place — added by ctx"; echo "$activate_line"; } >>"$tmp"
+  fi
+  _ctx_autoswitch_block "$kind" "$_as_lib" >>"$tmp"
+  _ctx_write_through "$tmp" "$shell_rc" || { rm -f "$tmp"; die "Cannot write $shell_rc"; }
+  rm -f "$tmp"
+  [[ $mise_add -eq 1 ]] && success "mise activation added to $shell_rc"
   success "ctx profile autoswitch hook refreshed in $shell_rc (sources lib)"
 
   # 3. Ensure SSH Include is wired up
@@ -2112,33 +2256,8 @@ cmd_agent_rules() {
     if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp"; fi
   fi
   _ctx_agent_rules_text >>"$tmp"
-  # Atomic write-through: follow symlinks, build the result in a temp file next
-  # to the target (same filesystem, mode kept via cp -p, or the umask default
-  # for a new file) and mv it over the target. A failure leaves the original as it was.
-  local target="$file" dest n=0 d new
-  while [[ -L "$target" && $n -lt 40 ]]; do
-    dest="$(readlink "$target")" || break
-    case "$dest" in /*) target="$dest" ;; *) target="$(dirname -- "$target")/$dest" ;; esac
-    n=$((n + 1))
-  done
-  # A file the user made read-only is not replaced behind their back.
-  [[ ! -e "$target" || -w "$target" ]] || { rm -f "$tmp"; die "Cannot write $file"; }
-  d="$(cd -P -- "$(dirname -- "$target")" 2>/dev/null && pwd)" || { rm -f "$tmp"; die "Cannot write $file"; }
-  new="$(mktemp "$d/.ctx-agent-rules.XXXXXX" 2>/dev/null)" || { rm -f "$tmp"; die "Cannot write $file"; }
-  if {
-    if [[ -e "$target" ]]; then
-      cp -p -- "$target" "$new"
-    else
-      chmod "$(printf '%03o' $((0666 & ~$(umask))))" "$new"
-    fi &&
-      cat "$tmp" >"$new" &&
-      mv -f -- "$new" "$d/$(basename -- "$target")"
-  } 2>/dev/null; then
-    rm -f "$tmp"
-  else
-    rm -f "$tmp" "$new"
-    die "Cannot write $file"
-  fi
+  _ctx_write_through "$tmp" "$file" || { rm -f "$tmp"; die "Cannot write $file"; }
+  rm -f "$tmp"
   success "ctx agent rules written to $file"
 }
 
