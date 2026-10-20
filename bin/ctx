@@ -570,7 +570,10 @@ main() {
       _ctx_core_forward install-hook "$@" # Go, like Bash, reads only the first
       cmd_install_hook "${1:-}"
       ;;
-    upgrade)          cmd_upgrade "$@" ;;
+    upgrade)
+      _ctx_core_forward upgrade "$@"
+      cmd_upgrade "$@"
+      ;;
     uninstall)
       _ctx_core_forward uninstall "$@"
       cmd_uninstall "$@"

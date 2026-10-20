@@ -27,7 +27,7 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor|install-hook|init> [args]\n"
+const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor|install-hook|init|upgrade> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry gets the arguments after the command and reports whether
@@ -69,6 +69,8 @@ var implemented = map[string]func(args []string) bool{
 	// its first argument; init ignores its arguments).
 	"install-hook": func([]string) bool { return true },
 	"init":         func([]string) bool { return true },
+	// upgrade: every shape (--check, the real run; other args are ignored).
+	"upgrade": func([]string) bool { return true },
 }
 
 // first is args[0], or "" when there are no arguments.
@@ -172,6 +174,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cli.InstallHook(osTerm(stdout, stderr), args[1:])
 	case "init":
 		return cli.Init(osTerm(stdout, stderr), args[1:])
+	case "upgrade":
+		return cli.Upgrade(osTerm(stdout, stderr), args[1:])
 	case "doctor":
 		cli.CoreVersion = version
 		return cli.Doctor(osTerm(stdout, stderr), args[1:])

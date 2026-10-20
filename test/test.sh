@@ -964,15 +964,17 @@ test_ctx_core_is_exercised() {
       || { echo "install-hook --dry-run failed"; exit 1; }
     env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" SHELL=/bin/zsh "$ROOT_DIR/bin/ctx" --no-gum --dry-run init </dev/null >/dev/null 2>&1 \
       || { echo "init --dry-run failed"; exit 1; }
+    # dry-run never downloads; the repo is a local path all the same
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" CTX_UPGRADE_REPO="file://$td/none" "$ROOT_DIR/bin/ctx" --no-gum --dry-run upgrade </dev/null >/dev/null 2>&1 || true
     local want
     for want in 'implements list --json' 'list --json' 'implements doctor' 'doctor' 'implements ctx-version' 'ctx-version' \
-      "implements install-hook $td/home/rc" "install-hook $td/home/rc" 'implements init' 'init'; do
+      "implements install-hook $td/home/rc" "install-hook $td/home/rc" 'implements init' 'init' 'implements upgrade' 'upgrade'; do
       grep -qx -- "$want" "$td/core-calls" || { echo "ctx-core was not asked '$want'; calls: $(cat "$td/core-calls")"; exit 1; }
     done
     [[ "$out" == *"ctx-core: "*"($td/core)"* || "$out" == *"ctx-core: "*"/ctx-core)"* ]] || { echo "doctor does not report ctx-core: $out"; exit 1; }
     [[ "$out" != *"ctx-core missing"* ]] || { echo "doctor says ctx-core is missing: $out"; exit 1; }
   ) || fail "ctx-core coverage guard"
-  pass "bin/ctx finds the repo's bin/ctx-core before PATH and forwards list, doctor, version, install-hook and init to it"
+  pass "bin/ctx finds the repo's bin/ctx-core before PATH and forwards list, doctor, version, install-hook, init and upgrade to it"
 }
 
 test_ctx_core_is_exercised
