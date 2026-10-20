@@ -18,6 +18,48 @@ _ctx_setup_secret_keys_to_array() {
   [[ -n "$_sk" ]] && read -ra SECRET_KEYS <<< "$_sk"
 }
 
+_ctx_setup_dry_run() {
+  [[ "${CTX_DRY_RUN:-0}" == "1" ]]
+}
+
+# --dry-run: one line for each action that is skipped.
+_ctx_setup_dry() {
+  dim "  [dry-run] would $*"
+}
+
+# The profile's public key exists, or would exist (generated under --dry-run).
+_ctx_setup_pub_key_ready() {
+  [[ -f "${SSH_KEY_PATH}.pub" ]] && return 0
+  _ctx_setup_dry_run && [[ "${SSH_KEY_GENERATED:-0}" == "1" ]]
+}
+
+# Secrets entered in the wizard wait in _setup_secret_keys/_setup_secret_vals
+# (locals of cmd_import) until the review is confirmed.
+_ctx_setup_queue_secret() {
+  _setup_secret_keys+=("$1")
+  _setup_secret_vals+=("$2")
+}
+
+# Store the queued secrets. SECRET_KEYS gets only the keys that were stored.
+# --dry-run lists them instead. Values are never printed.
+_ctx_setup_store_secrets() {
+  local n="${#_setup_secret_keys[@]}" i key where
+  [[ "$n" -gt 0 ]] || return 0
+  where="$(ctx_secret_store_label)"
+  for ((i = 0; i < n; i++)); do
+    key="${_setup_secret_keys[i]}"
+    if _ctx_setup_dry_run; then
+      _ctx_setup_dry "store secret $key"
+    elif keychain_set "$PROFILE_NAME" "$key" "${_setup_secret_vals[i]}"; then
+      success "$key → $where"
+      SECRET_KEYS+=("$key")
+    else
+      warn "Could not store $key ($where)"
+    fi
+  done
+  _setup_secret_vals=()
+}
+
 # ssh-keygen -C comment when git email is not configured yet
 _ctx_setup_ssh_key_comment() {
   local profile="$1"
@@ -112,15 +154,19 @@ _ctx_setup_interactive_clone() {
       ;;
   esac
 
-  if [[ -n "$GITHUB_USER" && "$SSH_KEY_GENERATED" == "1" && -f "${SSH_KEY_PATH}.pub" ]] \
+  if [[ -n "$GITHUB_USER" && "$SSH_KEY_GENERATED" == "1" ]] && _ctx_setup_pub_key_ready \
     && has gh && ask_yn "Upload this SSH key to GitHub ($GITHUB_USER) now?" "n"; then
-    gh auth switch -u "$GITHUB_USER" 2>/dev/null || true
-    local key_title
-    key_title="ctx-${PROFILE_NAME}-$(hostname)-$(date +%Y%m%d)"
-    if gh ssh-key add "${SSH_KEY_PATH}.pub" --title "$key_title" 2>/dev/null; then
-      success "SSH key uploaded to GitHub ($GITHUB_USER)"
+    if _ctx_setup_dry_run; then
+      _ctx_setup_dry "upload SSH key to GitHub ($GITHUB_USER)"
     else
-      warn "Could not upload key automatically. Add it at https://github.com/settings/keys"
+      gh auth switch -u "$GITHUB_USER" 2>/dev/null || true
+      local key_title
+      key_title="ctx-${PROFILE_NAME}-$(hostname)-$(date +%Y%m%d)"
+      if gh ssh-key add "${SSH_KEY_PATH}.pub" --title "$key_title" 2>/dev/null; then
+        success "SSH key uploaded to GitHub ($GITHUB_USER)"
+      else
+        warn "Could not upload key automatically. Add it at https://github.com/settings/keys"
+      fi
     fi
   fi
 
@@ -133,11 +179,17 @@ _ctx_setup_interactive_clone() {
 
 # Add git / folder / cloud / secrets to an existing profile
 _ctx_setup_interactive_extend() {
-  local profile="$1" work_root selected_loc existing_path secret_mode where
+  local profile="$1" work_root selected_loc existing_path secret_mode
 
   profile_exists "$profile" || die "setup --extend: profile '$profile' not found"
   load_profile "$profile"
   PROFILE_NAME="$profile"
+  # A hand-written or older .conf may leave keys out; treat them as empty (set -u).
+  GIT_NAME="${GIT_NAME:-}" GIT_EMAIL="${GIT_EMAIL:-}" WORK_DIR="${WORK_DIR:-}"
+  GITHUB_USER="${GITHUB_USER:-}" SSH_KEY_PATH="${SSH_KEY_PATH:-}"
+  AWS_PROFILE_NAME="${AWS_PROFILE_NAME:-}" AZURE_SUBSCRIPTION="${AZURE_SUBSCRIPTION:-}"
+  AZURE_TENANT="${AZURE_TENANT:-}" GCP_PROJECT="${GCP_PROJECT:-}" GCP_ACCOUNT="${GCP_ACCOUNT:-}"
+  KUBE_CONTEXT="${KUBE_CONTEXT:-}" SIGNING_FORMAT="${SIGNING_FORMAT:-}" SIGNING_KEY="${SIGNING_KEY:-}"
   _ctx_setup_secret_keys_to_array
   EXTRA_ENVS="${EXTRA_ENVS:-}"
   SSH_KEY_GENERATED=0
@@ -175,7 +227,13 @@ _ctx_setup_interactive_extend() {
       "Use an existing path")
         existing_path=$(ask "Existing project path" "$PWD")
         existing_path="${existing_path/#\~/$HOME}"
-        [[ -d "$existing_path" ]] || mkdir -p "$existing_path" || _dsetup_die "Could not create: $existing_path"
+        if [[ ! -d "$existing_path" ]]; then
+          if _ctx_setup_dry_run; then
+            _ctx_setup_dry "create directory $existing_path"
+          else
+            mkdir -p "$existing_path" || _dsetup_die "Could not create: $existing_path"
+          fi
+        fi
         WORK_DIR="$existing_path"
         ;;
       *)
@@ -230,14 +288,12 @@ _ctx_setup_interactive_extend() {
   if [[ "$secret_mode" == "Add selected secrets now (manual, one by one)" ]]; then
     _maybe_secret_extend() {
       local key="$1" prompt="$2"
-      where="$(ctx_secret_store_label)"
       is_valid_env_key "$key" || return 1
       if ask_yn "$prompt?" "n"; then
         local val
         val=$(ask_secret "Value for $key")
         if [[ -n "$val" ]]; then
-          keychain_set "$PROFILE_NAME" "$key" "$val" && success "$key → $where"
-          SECRET_KEYS+=("$key")
+          _ctx_setup_queue_secret "$key" "$val"
         fi
       fi
     }
@@ -249,8 +305,7 @@ _ctx_setup_interactive_extend() {
       is_valid_env_key "$ckey" || { warn "Invalid key '$ckey'"; continue; }
       cval=$(ask_secret "Value for $ckey")
       if [[ -n "$cval" ]]; then
-        keychain_set "$PROFILE_NAME" "$ckey" "$cval"
-        SECRET_KEYS+=("$ckey")
+        _ctx_setup_queue_secret "$ckey" "$cval"
       fi
     done
   fi
@@ -306,13 +361,18 @@ cmd_import() {
     esac
   done
 
-  [[ -z "$CTX_SETUP_EXTEND" || ! $CTX_SETUP_BATCH ]] \
-    || die "setup: --extend cannot be used with --config (use ctx edit or a full --config run)"
+  if [[ -n "$CTX_SETUP_EXTEND" ]] && $CTX_SETUP_BATCH; then
+    die "setup: --extend cannot be used with --config (use ctx edit or a full --config run)"
+  fi
 
   _ctx_setup_scope_clone && [[ -n "$CTX_SETUP_EXTEND" ]] \
     && die "setup: --extend cannot be combined with --scope clone"
 
-  ctx_init_dirs
+  if ! _ctx_setup_dry_run; then
+    ctx_init_dirs
+  elif [[ ! -d "$CTX_DIR" || ! -d "$CTX_PROFILES_DIR" || ! -d "${CTX_DIR}/backups" || ! -f "$CTX_CONFIG" ]]; then
+    _ctx_setup_dry "create $CTX_DIR"
+  fi
   ctx_header "Add a client profile"
 
   if $CTX_SETUP_BATCH; then
@@ -379,7 +439,8 @@ cmd_import() {
   local SSH_KEY_PATH="" SSH_KEY_GENERATED=0
   local GITHUB_USER="" AWS_PROFILE_NAME="" AZURE_SUBSCRIPTION="" AZURE_TENANT=""
   local GCP_PROJECT="" GCP_ACCOUNT="" KUBE_CONTEXT=""
-  local SECRET_KEYS=() EXTRA_ENVS="" secret_mode="" where
+  local SECRET_KEYS=() EXTRA_ENVS="" secret_mode=""
+  local _setup_secret_keys=() _setup_secret_vals=()
   local SIGNING_FORMAT="" SIGNING_KEY=""
 
   if $CTX_SETUP_BATCH; then
@@ -575,7 +636,11 @@ cmd_import() {
       [[ -z "$existing_path" ]] && die "Path required."
       if [[ ! -d "$existing_path" ]]; then
         ask_yn "Path does not exist. Create it now?" "y" || die "Aborted."
-        mkdir -p "$existing_path" || _dsetup_die "Could not create: $existing_path"
+        if _ctx_setup_dry_run; then
+          _ctx_setup_dry "create directory $existing_path"
+        else
+          mkdir -p "$existing_path" || _dsetup_die "Could not create: $existing_path"
+        fi
       fi
       WORK_DIR="$existing_path"
       success "Using path: $WORK_DIR"
@@ -634,7 +699,7 @@ cmd_import() {
     picked=""
     if [[ "$choice_label" != "Generate new key" && -n "$choice_label" ]]; then
       local picked_idx
-      picked_idx=$(echo "$choice_label" | sed -n 's/^\[\([0-9]\+\)\].*/\1/p')
+      picked_idx=$(echo "$choice_label" | sed -n 's/^\[\([0-9][0-9]*\)\].*/\1/p')
       if [[ "$picked_idx" =~ ^[0-9]+$ ]] && (( picked_idx >= 1 && picked_idx <= ${#ssh_keys[@]} )); then
         picked="${ssh_keys[$((picked_idx - 1))]}"
       fi
@@ -642,7 +707,7 @@ cmd_import() {
 
     if [[ "$picked" == "Generate new key" || -z "$picked" ]]; then
       SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
-      _gen_ssh_key "$SSH_KEY_PATH" "$GIT_EMAIL"
+      _gen_ssh_key "$SSH_KEY_PATH" "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")"
       SSH_KEY_GENERATED=1
     else
       SSH_KEY_PATH="$picked"
@@ -665,7 +730,7 @@ cmd_import() {
           ;;
         "Generate a new key for this profile")
           SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
-          _gen_ssh_key "$SSH_KEY_PATH" "$GIT_EMAIL"
+          _gen_ssh_key "$SSH_KEY_PATH" "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")"
           SSH_KEY_GENERATED=1
           ;;
         *)
@@ -674,7 +739,7 @@ cmd_import() {
       esac
     elif ask_yn "No SSH keys found. Generate one for this profile?" "y"; then
       SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
-      _gen_ssh_key "$SSH_KEY_PATH" "$GIT_EMAIL"
+      _gen_ssh_key "$SSH_KEY_PATH" "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")"
       SSH_KEY_GENERATED=1
     fi
   fi
@@ -682,11 +747,15 @@ cmd_import() {
   # ── GitHub account ──────────────────────────────────────────────────────
   GITHUB_USER=""
   if has gh && ask_yn "Need to login/switch GitHub account now?" "n"; then
-    info "Tip: choose 'Skip' for SSH key upload here; ctx manages per-profile keys."
-    gh auth login || warn "gh auth login did not complete; continuing setup."
-    gh auth switch 2>/dev/null || true
-    gh_accounts=()
-    while IFS= read -r a; do [[ -n "$a" ]] && gh_accounts+=("$a"); done < <(detect_gh_accounts)
+    if _ctx_setup_dry_run; then
+      _ctx_setup_dry "run gh auth login"
+    else
+      info "Tip: choose 'Skip' for SSH key upload here; ctx manages per-profile keys."
+      gh auth login || warn "gh auth login did not complete; continuing setup."
+      gh auth switch 2>/dev/null || true
+      gh_accounts=()
+      while IFS= read -r a; do [[ -n "$a" ]] && gh_accounts+=("$a"); done < <(detect_gh_accounts)
+    fi
   fi
 
   if $import_existing && [[ ${#gh_accounts[@]} -gt 0 ]]; then
@@ -698,15 +767,19 @@ cmd_import() {
   if [[ -z "$GITHUB_USER" ]]; then
     GITHUB_USER=$(ask "GitHub username for this client (leave blank to skip)")
   fi
-  if [[ -n "$GITHUB_USER" && "$SSH_KEY_GENERATED" == "1" && -f "${SSH_KEY_PATH}.pub" ]]; then
+  if [[ -n "$GITHUB_USER" && "$SSH_KEY_GENERATED" == "1" ]] && _ctx_setup_pub_key_ready; then
     if has gh && ask_yn "Upload this new SSH key to GitHub account '$GITHUB_USER' now?" "y"; then
-      gh auth switch -u "$GITHUB_USER" 2>/dev/null || true
-      local key_title
-      key_title="ctx-${PROFILE_NAME}-$(hostname)-$(date +%Y%m%d)"
-      if gh ssh-key add "${SSH_KEY_PATH}.pub" --title "$key_title" 2>/dev/null; then
-        success "SSH key uploaded to GitHub ($GITHUB_USER)"
+      if _ctx_setup_dry_run; then
+        _ctx_setup_dry "upload SSH key to GitHub ($GITHUB_USER)"
       else
-        warn "Could not upload key automatically. Add it manually at https://github.com/settings/keys"
+        gh auth switch -u "$GITHUB_USER" 2>/dev/null || true
+        local key_title
+        key_title="ctx-${PROFILE_NAME}-$(hostname)-$(date +%Y%m%d)"
+        if gh ssh-key add "${SSH_KEY_PATH}.pub" --title "$key_title" 2>/dev/null; then
+          success "SSH key uploaded to GitHub ($GITHUB_USER)"
+        else
+          warn "Could not upload key automatically. Add it manually at https://github.com/settings/keys"
+        fi
       fi
     fi
   fi
@@ -782,16 +855,12 @@ cmd_import() {
   if [[ "$secret_mode" == "Add selected secrets now (manual, one by one)" ]]; then
     _maybe_secret() {
       local key="$1" prompt="$2"
-      where="$(ctx_secret_store_label)"
       is_valid_env_key "$key" || { warn "Skipping invalid key '$key'"; return 1; }
       if ask_yn "$prompt?" "n"; then
         local val
         val=$(ask_secret "Value for $key")
         if [[ -n "$val" ]]; then
-        keychain_set "$PROFILE_NAME" "$key" "$val" \
-          && success "$key → $where" \
-          || warn "Could not store $key ($where)"
-          SECRET_KEYS+=("$key")
+          _ctx_setup_queue_secret "$key" "$val"
         fi
       fi
     }
@@ -811,10 +880,7 @@ cmd_import() {
       local cval
       cval=$(ask_secret "Value for $ckey")
       if [[ -n "$cval" ]]; then
-        where="$(ctx_secret_store_label)"
-        keychain_set "$PROFILE_NAME" "$ckey" "$cval" \
-          && success "$ckey → $where"
-        SECRET_KEYS+=("$ckey")
+        _ctx_setup_queue_secret "$ckey" "$cval"
       fi
     done
   else
@@ -850,7 +916,7 @@ cmd_import() {
       && _review_auto=1
   fi
 
-  if [[ "${CTX_DRY_RUN:-0}" != "1" ]]; then
+  if ! _ctx_setup_dry_run; then
     local _imp=0
     $import_existing && _imp=1
     ctx_setup_review_confirm "$_review_auto" "$PROFILE_NAME" "$GIT_NAME" "$GIT_EMAIL" "$WORK_DIR" \
@@ -859,15 +925,24 @@ cmd_import() {
       || die "Aborted before write."
   fi
 
+  # Secrets are stored only now, after the review (dry-run: listed only).
+  _ctx_setup_store_secrets
+
   # ── Dry-run preview ─────────────────────────────────────────────────────
-  if [[ "${CTX_DRY_RUN:-0}" == "1" ]]; then
+  if _ctx_setup_dry_run; then
     bold "  [DRY RUN] — nothing written\n"
     echo "  Would create:"
     dim "    $CTX_PROFILES_DIR/${PROFILE_NAME}.conf"
     dim "    $HOME/.config/git/ctx-${PROFILE_NAME}"
-    dim "    $WORK_DIR/mise.toml"
-    dim "    $CTX_SSH_CONFIG  (host block: github-${PROFILE_NAME})"
-    dim "    ~/.gitconfig  (includeIf block)"
+    if [[ -n "$WORK_DIR" && ! -f "$WORK_DIR/mise.toml" ]]; then
+      dim "    $WORK_DIR/mise.toml"
+    fi
+    if [[ -n "${SSH_KEY_PATH:-}" ]] && [[ -f "$SSH_KEY_PATH" || "$SSH_KEY_GENERATED" == "1" ]]; then
+      dim "    $CTX_SSH_CONFIG  (host block: github-${PROFILE_NAME})"
+    fi
+    if [[ -n "$WORK_DIR" ]]; then
+      dim "    ~/.gitconfig  (includeIf block)"
+    fi
     echo ""
     return 0
   fi
@@ -882,7 +957,7 @@ cmd_import() {
     "$GITHUB_USER"  "$SSH_KEY_PATH" \
     "$AWS_PROFILE_NAME" "$AZURE_SUBSCRIPTION" "$AZURE_TENANT" \
     "$GCP_PROJECT" "$GCP_ACCOUNT" "$KUBE_CONTEXT" \
-    "${SECRET_KEYS[*]}" "$EXTRA_ENVS" \
+    "${SECRET_KEYS[*]+"${SECRET_KEYS[*]}"}" "$EXTRA_ENVS" \
     "${SIGNING_FORMAT:-}" "${SIGNING_KEY:-}"
 
   # ── Final summary ────────────────────────────────────────────────────────
@@ -1014,10 +1089,14 @@ cmd_add() { cmd_import "$@"; }
 
 # ─── Generate SSH key, pause for GitHub ────────────────────────────────────
 _gen_ssh_key() {
-  local key_path="$1" email="$2"
+  local key_path="$1" comment="$2"
 
   if [[ -f "$key_path" ]]; then
     warn "Key exists at $key_path — skipping generation."
+    return 0
+  fi
+  if _ctx_setup_dry_run; then
+    _ctx_setup_dry "generate SSH key $key_path"
     return 0
   fi
 
@@ -1025,7 +1104,7 @@ _gen_ssh_key() {
   if ask_yn "Protect this SSH key with a passphrase?" "y"; then
     passphrase=$(ask_secret "Passphrase (leave blank to use none)")
   fi
-  ssh-keygen -t ed25519 -C "$email" -f "$key_path" -N "$passphrase" -q
+  ssh-keygen -t ed25519 -C "$comment" -f "$key_path" -N "$passphrase" -q
   chmod 600 "$key_path"
   success "SSH key generated: $key_path"
   echo ""
@@ -1125,12 +1204,16 @@ _write_all() {
   # 5. mise.toml in work dir
   if [[ -n "$work_dir" ]]; then
     mkdir -p "$work_dir"
-    if generate_mise_toml \
+    if [[ -f "$work_dir/mise.toml" ]]; then
+      dim "  mise.toml kept (already exists): $work_dir/mise.toml"
+    elif generate_mise_toml \
         "$profile" "$work_dir" "$git_name" "$git_email" \
         "$aws" "$azure_sub" "$gcp" "$kube" \
         "$secret_keys" "$extra_envs"
     then
       success "mise.toml generated: $work_dir/mise.toml"
+    fi
+    if [[ -f "$work_dir/mise.toml" ]]; then
       if command -v mise &>/dev/null; then
         info "  mise will auto-activate when you cd into $work_dir"
       else

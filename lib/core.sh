@@ -91,11 +91,7 @@ ask() {
       echo -e "${CYAN}?${RESET} $prompt: \c" >&2
     fi
     local var
-    if [[ -t 0 ]]; then
-      read -r var || user_cancelled
-    else
-      read -r var < /dev/tty 2>/dev/null || user_cancelled
-    fi
+    read -r var || user_cancelled
     echo "${var:-$default}"
   fi
 }
@@ -1133,6 +1129,40 @@ gitconfig_remove_include() {
 }
 
 # ─── mise.toml generation ─────────────────────────────────────────────────────
+# Body of a TOML basic string: \ → \\, " → \", control chars (0x00-0x1F, 0x7F) → \uXXXX.
+# Byte-wise under LC_ALL=C, so UTF-8 passes through unchanged.
+_ctx_toml_escape() {
+  local LC_ALL=C s="$1" out="" c i
+  if [[ "$s" != *[\\\"[:cntrl:]]* ]]; then
+    printf '%s' "$s"
+    return 0
+  fi
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\) out+='\\' ;;
+      \") out+='\"' ;;
+      [[:cntrl:]]) out+="$(printf '\\u%04X' "'$c")" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# A value for inside "…" in a hook script, which is itself inside a TOML """ string:
+# \ " $ ` get a shell backslash first, then the result is TOML-escaped.
+_ctx_toml_sh_dq() {
+  local LC_ALL=C s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\|\"|\$|\`) out+="\\$c" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  _ctx_toml_escape "$out"
+}
+
 generate_mise_toml() {
   local profile="$1"
   local work_dir="$2"
@@ -1158,17 +1188,17 @@ generate_mise_toml() {
 
     # Environment variables
     echo "[env]"
-    [[ -n "$aws_profile"  ]] && echo "AWS_PROFILE = \"$aws_profile\""
-    [[ -n "$azure_sub"    ]] && echo "AZURE_SUBSCRIPTION = \"$azure_sub\""
-    [[ -n "$gcp_project"  ]] && echo "GCLOUD_PROJECT = \"$gcp_project\""
-    [[ -n "$kube_ctx"     ]] && echo "CTX_KUBE_CONTEXT = \"$kube_ctx\""
+    [[ -n "$aws_profile"  ]] && echo "AWS_PROFILE = \"$(_ctx_toml_escape "$aws_profile")\""
+    [[ -n "$azure_sub"    ]] && echo "AZURE_SUBSCRIPTION = \"$(_ctx_toml_escape "$azure_sub")\""
+    [[ -n "$gcp_project"  ]] && echo "GCLOUD_PROJECT = \"$(_ctx_toml_escape "$gcp_project")\""
+    [[ -n "$kube_ctx"     ]] && echo "CTX_KUBE_CONTEXT = \"$(_ctx_toml_escape "$kube_ctx")\""
 
     if [[ -n "$extra_envs" ]]; then
       while IFS= read -r pair; do
         [[ -z "$pair" ]] && continue
         local k="${pair%%=*}" v="${pair#*=}"
         is_valid_env_key "$k" || continue
-        echo "$k = \"$v\""
+        echo "$k = \"$(_ctx_toml_escape "$v")\""
       done <<< "$extra_envs"
     fi
 
@@ -1186,18 +1216,18 @@ generate_mise_toml() {
     # Git identity
     echo "  # Set git identity for this directory"
     if is_sensible_git_email "$git_email"; then
-      echo "  git config user.name  \"$git_name\""
-      echo "  git config user.email \"$git_email\""
+      echo "  git config user.name  \"$(_ctx_toml_sh_dq "$git_name")\""
+      echo "  git config user.email \"$(_ctx_toml_sh_dq "$git_email")\""
     else
-      echo "  # Skipped invalid git email (looks like a username, not an address): \"$git_email\""
+      echo "  # Skipped invalid git email (looks like a username, not an address): \"$(_ctx_toml_escape "$git_email")\""
       echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/${profile}.conf and re-run setup, or edit mise.toml."
     fi
     echo ""
 
     # Cloud context switches
-    [[ -n "$azure_sub"  ]] && echo "  az account set --subscription \"$azure_sub\" 2>/dev/null || true"
-    [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$gcp_project\" --quiet 2>/dev/null || true"
-    [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$kube_ctx\" 2>/dev/null || true"
+    [[ -n "$azure_sub"  ]] && echo "  az account set --subscription \"$(_ctx_toml_sh_dq "$azure_sub")\" 2>/dev/null || true"
+    [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$(_ctx_toml_sh_dq "$gcp_project")\" --quiet 2>/dev/null || true"
+    [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$(_ctx_toml_sh_dq "$kube_ctx")\" 2>/dev/null || true"
 
     # Secret injection (provider-aware: keychain/file/pass)
     if [[ -n "$secret_keys" ]]; then
@@ -1263,9 +1293,14 @@ detect_ssh_keys() {
 
 detect_gh_accounts() {
   command -v gh &>/dev/null || return 0
+  # gh prints "Logged in to github.com account USER (…)" (newer) or "… as USER (…)" (older).
   run_with_timeout 8 gh auth status 2>&1 \
-    | grep "Logged in to github.com account" \
-    | awk '{print $NF}' | tr -d '()'
+    | awk '{
+        for (i = 1; i + 2 <= NF; i++)
+          if ($i == "github.com" && ($(i+1) == "account" || $(i+1) == "as") && $(i-1) == "to") {
+            print $(i+2); break
+          }
+      }'
 }
 
 detect_aws_profiles() {
