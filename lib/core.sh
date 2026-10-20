@@ -248,9 +248,9 @@ ctx_setup_cfg_get() {
   val="${val%"${val##*[![:space:]]}"}"
   val="${val%$'\r'}"
   if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
-    val="${val:1:-1}"
+    val="${val:1:${#val}-2}"
   elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
-    val="${val:1:-1}"
+    val="${val:1:${#val}-2}"
   fi
   printf '%s' "${val:-$default}"
 }

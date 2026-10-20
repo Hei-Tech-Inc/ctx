@@ -439,7 +439,7 @@ cmd_import() {
   local SIGNING_FORMAT="" SIGNING_KEY=""
 
   if $CTX_SETUP_BATCH; then
-    local f wm ep slug sm
+    local f wm ep slug sm _batch_keygen=0
     f="$CTX_SETUP_CONFIG_PATH"
     work_root="$(ctx_work_root)"
     PROFILE_NAME=$(ctx_setup_cfg_get "$f" PROFILE_NAME "")
@@ -487,11 +487,7 @@ cmd_import() {
       esac
       fi
     fi
-    if [[ -n "$WORK_DIR" ]]; then
-      if [[ "${CTX_DRY_RUN:-0}" != "1" ]]; then
-        mkdir -p "$WORK_DIR" || _dsetup_die "Could not create WORK_DIR: $WORK_DIR"
-      fi
-    elif ! _ctx_setup_scope_clone; then
+    if [[ -z "$WORK_DIR" ]] && ! _ctx_setup_scope_clone; then
       die "setup --config: could not resolve WORK_DIR (or use SETUP_SCOPE=clone without WORK_DIR)"
     fi
 
@@ -504,14 +500,11 @@ cmd_import() {
     case "$(ctx_setup_cfg_get "$f" SSH_MODE "generate")" in
       generate)
         SSH_KEY_PATH="$HOME/.ssh/ctx_${PROFILE_NAME}"
+        _batch_keygen=0
         if [[ "${CTX_DRY_RUN:-0}" == "1" ]]; then
           SSH_KEY_GENERATED=1
         elif [[ ! -f "$SSH_KEY_PATH" ]]; then
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh" 2>/dev/null || true
-          ssh-keygen -t ed25519 -C "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")" -f "$SSH_KEY_PATH" -N "" -q \
-            || _dsetup_die "ssh-keygen failed for $SSH_KEY_PATH"
-          chmod 600 "$SSH_KEY_PATH" 2>/dev/null || true
+          _batch_keygen=1
           SSH_KEY_GENERATED=1
         fi
         ;;
@@ -550,6 +543,19 @@ cmd_import() {
       skip|none|"") ;;
       *) die "setup --config: only SECRETS_MODE=skip — add secrets later with: ctx secret set $PROFILE_NAME <KEY>" ;;
     esac
+
+    # Side effects only after every check above passed: a rejected config
+    # leaves no folder and no key behind.
+    if [[ -n "$WORK_DIR" && "${CTX_DRY_RUN:-0}" != "1" ]]; then
+      mkdir -p "$WORK_DIR" || _dsetup_die "Could not create WORK_DIR: $WORK_DIR"
+    fi
+    if [[ "$_batch_keygen" == 1 ]]; then
+      mkdir -p "$HOME/.ssh"
+      chmod 700 "$HOME/.ssh" 2>/dev/null || true
+      ssh-keygen -t ed25519 -C "$(_ctx_setup_ssh_key_comment "$PROFILE_NAME")" -f "$SSH_KEY_PATH" -N "" -q \
+        || _dsetup_die "ssh-keygen failed for $SSH_KEY_PATH"
+      chmod 600 "$SSH_KEY_PATH" 2>/dev/null || true
+    fi
     SECRET_KEYS=()
     EXTRA_ENVS=""
   else

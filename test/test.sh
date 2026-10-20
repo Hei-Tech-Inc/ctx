@@ -1464,6 +1464,48 @@ test_setup_cancel_exits_130() {
   pass "setup EOF at a prompt prints one cancel line, exits 130, writes nothing"
 }
 
+# R17: a rejected --config leaves no WORK_DIR and no generated key behind.
+test_setup_batch_checks_before_side_effects() {
+  (
+    set -euo pipefail
+    local td cfg core="${CTX_CORE:-}" rc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    export CTX_CORE="$core"
+    cfg="$td/s.conf"
+    printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nWORK_DIR=%s\nSSH_MODE=generate\nSIGNING_FORMAT=zzz\n' "$td/w/new" >"$cfg"
+    set +e
+    ctx --no-gum setup --config "$cfg" --yes >/dev/null 2>"$td/err"
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "rc=$rc"; exit 1; }
+    grep -q 'SIGNING_FORMAT must be ssh|gpg|none' "$td/err" || { echo "err: $(cat "$td/err")"; exit 1; }
+    [[ ! -e "$td/w/new" ]] || { echo "WORK_DIR created"; exit 1; }
+    [[ ! -e "$HOME/.ssh/ctx_acme" ]] || { echo "key generated"; exit 1; }
+    ! grep -q ssh-keygen "$td/argv.log" || { echo "ssh-keygen ran"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup --config checks before side effects"
+  pass "setup --config validates the whole file before creating WORK_DIR or a key"
+}
+
+# R18: quoted --config values work on bash 3.2 (no negative substring length).
+test_setup_cfg_quoted_bash32() {
+  (
+    set -euo pipefail
+    local td cfg out
+    [[ -x /bin/bash ]] || { pass "quoted --config values (skipped: no /bin/bash)"; exit 0; }
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    cfg="$td/s.conf"
+    printf 'PROFILE_NAME='"'"'acme'"'"'\nGIT_NAME="Jane Doe"\nGIT_EMAIL="jane@acme.com"\nWORK_DIR="%s"\nSSH_MODE=skip\n' "$td/w/acme" >"$cfg"
+    out="$(/bin/bash "$ROOT_DIR/bin/ctx" --no-gum setup --config "$cfg" --yes 2>&1)" || { echo "setup failed: $out"; exit 1; }
+    grep -qx 'GIT_NAME=Jane\\ Doe' "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
+    grep -qx "WORK_DIR=$td/w/acme" "$CTX_DIR/profiles/acme.conf" || { echo "conf: $(cat "$CTX_DIR/profiles/acme.conf")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "quoted --config values on /bin/bash"
+  pass "quoted --config values work on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
+}
+
 test_mise_hook_comment_no_injection() {
   (
     set -euo pipefail
@@ -1537,4 +1579,6 @@ test_setup_mise_toml_escaping
 test_setup_no_secrets_bash32
 test_setup_cancel_exits_130
 test_mise_hook_comment_no_injection
+test_setup_batch_checks_before_side_effects
+test_setup_cfg_quoted_bash32
 echo "All tests passed."
