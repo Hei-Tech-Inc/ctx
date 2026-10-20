@@ -516,9 +516,18 @@ main() {
       ;;
     agent-rules)      cmd_agent_rules "$@" ;;
     mcp|knowledge)    _ctx_core_exec "$cmd" "$@" ;;
-    completion)       cmd_completion "${1:-zsh}" ;;
-    version|-v|--version) echo "ctx version $CTX_VERSION" ;;
-    help|-h|--help)   cmd_help "$@" ;;
+    completion)
+      _ctx_core_forward completion "$@"
+      cmd_completion "${1:-zsh}"
+      ;;
+    version|-v|--version)
+      _ctx_core_forward ctx-version # not "version": ctx-core's own prints "ctx-core X"
+      echo "ctx version $CTX_VERSION"
+      ;;
+    help|-h|--help)
+      _ctx_core_forward help "$@"
+      cmd_help "$@"
+      ;;
     *)
       error "Unknown command: $cmd"
       echo ""
