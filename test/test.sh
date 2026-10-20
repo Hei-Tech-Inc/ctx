@@ -864,6 +864,7 @@ test_install_builds_ctx_core() {
   pass "install.sh builds ctx-core next to the libs with the ctx version"
 }
 
+# The Bash doctor (CTX_CORE=off); the Go one is covered by internal/cli/doctor_test.go.
 test_doctor_reports_ctx_core() {
   (
     set -euo pipefail
@@ -873,9 +874,9 @@ test_doctor_reports_ctx_core() {
     mkdir -p "$td/home" "$td/ctx"
     printf '#!/usr/bin/env bash\necho "ctx-core 9.9.9"\n' >"$td/ctx-core"
     chmod +x "$td/ctx-core"
-    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
     [[ "$out" == *"ctx-core: 9.9.9 ($td/ctx-core)"* ]] || { echo "present: $out"; exit 1; }
-    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
     [[ "$out" == *"ctx-core missing"*"ctx mcp unavailable"* ]] || { echo "missing: $out"; exit 1; }
   ) || fail "doctor reports ctx-core"
   pass "ctx doctor reports ctx-core version/path or a warning"
@@ -940,9 +941,21 @@ test_ctx_core_is_exercised() {
     td="$(cd "$(mktemp -d)" && pwd -P)"
     trap 'rm -rf "$td"' EXIT
     mkdir -p "$td/home" "$td/ctx"
-    out="$(env -u CTX_CORE_BIN HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
-    [[ "$out" == *"($ROOT_DIR/bin/ctx-core)"* ]] || { echo "bin/ctx does not find the repo's bin/ctx-core: $out"; exit 1; }
+    # bin/ctx must find the repo's bin/ctx-core before any ctx-core on PATH and hand over to it:
+    # a ctx-core on PATH that records being asked would otherwise be consulted ("implements").
+    mkdir -p "$td/path"
+    printf '#!/bin/sh\necho asked >"%s/asked"\nexit 1\n' "$td" >"$td/path/ctx-core"
+    chmod +x "$td/path/ctx-core"
+    out="$(env -u CTX_CORE_BIN PATH="$td/path:$PATH" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" list --json 2>&1)" \
+      || { echo "ctx list --json failed: $out"; exit 1; }
+    [[ ! -e "$td/asked" ]] || { echo "bin/ctx consulted the ctx-core on PATH instead of $ROOT_DIR/bin/ctx-core"; exit 1; }
+    [[ "$("$ROOT_DIR/bin/ctx-core" version)" == "ctx-core "* ]] || { echo "bin/ctx-core version"; exit 1; }
     "$ROOT_DIR/bin/ctx-core" implements list --json >/dev/null || { echo "ctx-core implements list --json failed"; exit 1; }
+    "$ROOT_DIR/bin/ctx-core" implements doctor >/dev/null || { echo "ctx-core implements doctor failed"; exit 1; }
+    # doctor itself runs in Go: it reports the binary that is running
+    out="$(env -u CTX_CORE_BIN HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" --no-gum doctor 2>&1 || true)"
+    [[ "$out" == *"ctx-core: "*" ("*"/ctx-core)"* ]] || { echo "doctor does not report ctx-core: $out"; exit 1; }
+    [[ "$out" != *"ctx-core missing"* ]] || { echo "doctor says ctx-core is missing: $out"; exit 1; }
   ) || fail "ctx-core coverage guard"
   pass "bin/ctx finds the repo's bin/ctx-core and it implements the forwarded commands"
 }

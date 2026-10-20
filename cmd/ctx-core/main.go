@@ -27,7 +27,7 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone> [args]\n"
+const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry gets the arguments after the command and reports whether
@@ -64,6 +64,7 @@ var implemented = map[string]func(args []string) bool{
 	"uninstall":   func([]string) bool { return true },
 	"verify":      func([]string) bool { return true },
 	"clone":       func([]string) bool { return true },
+	"doctor":      func([]string) bool { return true },
 }
 
 // first is args[0], or "" when there are no arguments.
@@ -163,6 +164,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cli.Verify(osTerm(stdout, stderr), args[1:])
 	case "clone":
 		return cli.Clone(osTerm(stdout, stderr), args[1:])
+	case "doctor":
+		cli.CoreVersion = version
+		return cli.Doctor(osTerm(stdout, stderr), args[1:])
 	case "guard":
 		sub := ""
 		if len(args) > 1 {
