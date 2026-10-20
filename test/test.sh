@@ -881,6 +881,44 @@ test_doctor_reports_ctx_core() {
   pass "ctx doctor reports ctx-core version/path or a warning"
 }
 
+# R4: a profile warning must not be followed by "Everything looks good.". Everything else
+# is made healthy (fake tools, hooks, SSH, secret provider) so only the profile can warn.
+test_doctor_profile_warning_is_not_all_good() {
+  (
+    set -euo pipefail
+    local td out t
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    mkdir -p "$td/home/.ctx/profiles" "$td/home/.ssh" "$td/bin" "$td/work"
+    chmod 700 "$td/home/.ssh"
+    for t in git mise gum gh aws az gcloud kubectl; do
+      printf '#!/bin/sh\necho "%s 1.0"\n' "$t" >"$td/bin/$t"
+      chmod +x "$td/bin/$t"
+    done
+    # doctor probes versions with `bash -lc`; a login shell puts the machine's own tool dirs
+    # (path_helper) before the fakes, so this bash drops the -l.
+    printf '#!/bin/sh\nif [ "$1" = -lc ]; then exec /bin/bash -c "$2"; fi\nexec /bin/bash "$@"\n' >"$td/bin/bash"
+    chmod +x "$td/bin/bash"
+    printf '#!/bin/sh\necho "ctx-core 9.9.9"\n' >"$td/ctx-core"
+    chmod +x "$td/ctx-core"
+    printf 'eval "$(mise activate bash)"\n# BEGIN ctx profile autoswitch\n' >"$td/home/.bashrc"
+    printf 'Include %s\n' "$td/home/.ssh/ctx_config" >"$td/home/.ssh/config"
+    printf 'WORK_DIR=%s\n' "$td/work" >"$td/work.conf"
+    touch "$td/work/mise.toml"
+    local run='env HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/bash PATH="$td/bin:/usr/bin:/bin" CTX_CORE=off CTX_CORE_BIN="$td/ctx-core" CTX_SECRET_PROVIDER=file "$ROOT_DIR/bin/ctx" --no-gum doctor'
+    cp "$td/work.conf" "$td/home/.ctx/profiles/good.conf"
+    out="$(eval "$run" 2>&1 || true)"
+    [[ "$out" == *"Everything looks good."* ]] || { echo "healthy fixture is not all good: $out"; exit 1; }
+    printf 'WORK_DIR=%s\nSSH_KEY_PATH=%s\n' "$td/work" "$td/nokey" >"$td/home/.ctx/profiles/acme.conf"
+    out="$(eval "$run" 2>&1 || true)"
+    [[ "$out" == *"Profile 'acme': SSH key missing: $td/nokey"* ]] || { echo "no profile warning: $out"; exit 1; }
+    [[ "$out" != *"Everything looks good."* ]] || { echo "all good after a warning: $out"; exit 1; }
+    [[ "$out" == *"Fix the issues above."* ]] || { echo "no closing warning: $out"; exit 1; }
+  ) || fail "doctor profile warning is not all good"
+  pass "ctx doctor never says all good after a profile warning"
+}
+test_doctor_profile_warning_is_not_all_good
+
 # Coverage guard: with CTX_CORE enabled, make sure the suite really exercises the Go
 # path. Without it a missing or unfound bin/ctx-core silently turns the default-mode
 # run into a second Bash-only run. CTX_CORE_OPTIONAL=1 skips it for local runs without Go.

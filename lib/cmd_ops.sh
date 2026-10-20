@@ -1744,7 +1744,11 @@ cmd_doctor() {
     [[ -n "${SSH_KEY_PATH:-}" && ! -f "$SSH_KEY_PATH" ]] && {
       warn "Profile '$pname': SSH key missing: $SSH_KEY_PATH"; ok=false
     }
-    $ok && success "Profile '$pname': ok"
+    if $ok; then
+      success "Profile '$pname': ok"
+    else
+      all_ok=false
+    fi
   done
 
   [[ $pc -eq 0 ]] && info "No profiles yet. Run: ctx setup"
