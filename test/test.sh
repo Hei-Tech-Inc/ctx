@@ -952,12 +952,22 @@ test_ctx_core_is_exercised() {
     [[ "$("$ROOT_DIR/bin/ctx-core" version)" == "ctx-core "* ]] || { echo "bin/ctx-core version"; exit 1; }
     "$ROOT_DIR/bin/ctx-core" implements list --json >/dev/null || { echo "ctx-core implements list --json failed"; exit 1; }
     "$ROOT_DIR/bin/ctx-core" implements doctor >/dev/null || { echo "ctx-core implements doctor failed"; exit 1; }
-    # doctor itself runs in Go: it reports the binary that is running
-    out="$(env -u CTX_CORE_BIN HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" --no-gum doctor 2>&1 || true)"
-    [[ "$out" == *"ctx-core: "*" ("*"/ctx-core)"* ]] || { echo "doctor does not report ctx-core: $out"; exit 1; }
+    # bin/ctx must hand over to ctx-core: a wrapper around the real binary logs every call,
+    # and the forwarded commands must show up as "implements <cmd>" followed by "<cmd>".
+    printf '#!/bin/sh\necho "$*" >>"%s/core-calls"\nexec "%s" "$@"\n' "$td" "$ROOT_DIR/bin/ctx-core" >"$td/core"
+    chmod +x "$td/core"
+    : >"$td/core-calls"
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" list --json >/dev/null 2>&1 || { echo "list --json failed"; exit 1; }
+    out="$(env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" --no-gum doctor 2>&1 || true)"
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" version >/dev/null 2>&1 || { echo "version failed"; exit 1; }
+    local want
+    for want in 'implements list --json' 'list --json' 'implements doctor' 'doctor' 'implements ctx-version' 'ctx-version'; do
+      grep -qx -- "$want" "$td/core-calls" || { echo "ctx-core was not asked '$want'; calls: $(cat "$td/core-calls")"; exit 1; }
+    done
+    [[ "$out" == *"ctx-core: "*"($td/core)"* || "$out" == *"ctx-core: "*"/ctx-core)"* ]] || { echo "doctor does not report ctx-core: $out"; exit 1; }
     [[ "$out" != *"ctx-core missing"* ]] || { echo "doctor says ctx-core is missing: $out"; exit 1; }
   ) || fail "ctx-core coverage guard"
-  pass "bin/ctx finds the repo's bin/ctx-core and it implements the forwarded commands"
+  pass "bin/ctx finds the repo's bin/ctx-core before PATH and forwards list, doctor and version to it"
 }
 
 test_ctx_core_is_exercised
