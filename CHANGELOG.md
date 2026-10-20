@@ -18,7 +18,8 @@ All notable changes to this project will be documented in this file.
 - **Generated SSH keys** never get an empty comment. **Picking an existing SSH key** could silently generate a new one with BSD sed (macOS); it no longer does.
 - **`mise.toml` written by setup:** values are escaped, so quotes and backslashes no longer break the file, and comment lines can't inject commands. An existing `mise.toml` is reported as kept (Bash and Go).
 - **Plain `ask` prompts** read stdin, so scripted answers work. **bash 3.2** (macOS): setup no longer aborts with an unbound variable when no secrets are chosen, and quoted values in setup config files work.
-- **Ctrl+D or EOF at a setup prompt** cancels with exit 130 and writes nothing; it used to continue with an empty answer. Ctrl+C in Bash `ctx` exits 130 too.
+- **Ctrl+D or EOF at a setup prompt** cancels with exit 130 without writing the profile, git or SSH config (a folder you confirmed or a key already generated stays); it used to continue with an empty answer. Ctrl+C exits 130 too; in Go it also stops a running account scan and restores the terminal.
+- **Generating an SSH key in the setup wizard** on a machine without `~/.ssh` failed with "ssh-keygen failed"; the wizard now creates `~/.ssh` (mode 700) first, as `--config` does (Bash and Go).
 - **A rejected `--config` file** no longer leaves a generated key or folder behind.
 - **Profile files** quote values exactly like bash `printf %q` (a tilde after `=` or `:` stays literal).
 - **`ctx setup` write failures:** when it can't write the gitconfig include, SSH host, `mise.toml` or profile, it exits 1 and says which step failed instead of printing success. The wizard also stops if `ssh-keygen` fails instead of reporting a generated key (Bash and Go).

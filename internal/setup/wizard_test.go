@@ -156,7 +156,7 @@ func TestReview(t *testing.T) {
 	}
 	wantLines := []string{
 		"dim:" + strings.Repeat("─", 40), "bold:  Step 8 / 8 — Review",
-		"dim:  Nothing is written until you confirm. No = exit without changes.", "say:",
+		"dim:  Profile, git and SSH config are written only after you confirm. No = exit without writing them.", "say:",
 		"say:  Profile          acme\n" +
 			"  Git name         \n" +
 			"  Git email        —\n" +

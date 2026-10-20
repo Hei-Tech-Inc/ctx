@@ -306,7 +306,7 @@ ctx_setup_review_confirm() {
 
   hr
   bold "  Step 8 / 8 — Review"
-  dim "  Nothing is written until you confirm. No = exit without changes."
+  dim "  Profile, git and SSH config are written only after you confirm. No = exit without writing them."
   echo ""
 
   if $HAS_GUM; then

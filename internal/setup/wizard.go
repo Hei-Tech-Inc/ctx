@@ -292,7 +292,7 @@ func (w *Wizard) Review(in *Inputs) error {
 
 	w.hr()
 	w.U.Bold("  Step 8 / 8 — Review")
-	w.U.Dim("  Nothing is written until you confirm. No = exit without changes.")
+	w.U.Dim("  Profile, git and SSH config are written only after you confirm. No = exit without writing them.")
 	w.U.Say("")
 	w.block(tui.ReviewTable(w.T, rows))
 	w.U.Say("")
