@@ -1515,6 +1515,22 @@ test_setup_cancel_exits_130() {
   pass "setup EOF at a prompt prints one cancel line, exits 130, writes nothing"
 }
 
+# user_cancelled in $(…) when the main shell is already waiting for the
+# subshell (its stdout closed first): bash drops a SIGINT that arrives then if
+# the child exits normally, so the child must die by SIGINT for the trap to run.
+test_user_cancelled_while_main_waits() {
+  local rc out sh
+  for sh in bash /bin/bash; do
+    [[ "$sh" == bash || -x "$sh" ]] || continue
+    rc=0
+    out="$("$sh" -c 'source "$1/lib/core.sh"; trap "exit 130" INT
+      x="$(exec >&-; sleep 0.3; user_cancelled 2>/dev/null)"
+      echo "continued with x=[$x]"' _ "$ROOT_DIR" 2>&1)" || rc=$?
+    [[ "$rc" == 130 && -z "$out" ]] || fail "user_cancelled in \$(…) while main waits ($sh): rc=$rc out=$out"
+  done
+  pass "user_cancelled in \$(…) stops the main shell even when it is already waiting"
+}
+
 # R25: a failing ssh-keygen in the wizard stops setup (doctor hint, exit 1).
 test_setup_keygen_failure_dies() {
   (
@@ -1651,6 +1667,7 @@ test_setup_pick_existing_key_index
 test_setup_mise_toml_escaping
 test_setup_no_secrets_bash32
 test_setup_cancel_exits_130
+test_user_cancelled_while_main_waits
 test_setup_keygen_failure_dies
 test_mise_hook_comment_no_injection
 test_setup_batch_checks_before_side_effects

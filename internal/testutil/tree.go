@@ -126,8 +126,6 @@ func FixedStampDate(t *testing.T, stamp string) string {
 	script := "#!/bin/sh\n" +
 		"if [ \"$1\" = '+%Y%m%d-%H%M%S' ]; then printf '%s\\n' '" + stamp + "'; exit 0; fi\n" +
 		"exec '" + real + "' \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "date"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	Script(t, filepath.Join(dir, "date"), script)
 	return dir
 }

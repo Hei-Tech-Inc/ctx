@@ -22,6 +22,7 @@ import (
 // git wrapper that records argv and runs the real git. date prints a fixed
 // backup stamp.
 type batchEnv struct {
+	p                   *ptest
 	td, home, cwd, path string
 	bash5               string            // the bash on the caller's PATH
 	version             string            // CTX_VERSION from lib/core.sh
@@ -30,13 +31,15 @@ type batchEnv struct {
 
 const batchStamp = "20261020-120000"
 
+// newBatchEnv marks a subtest parallel (see ptest).
 func newBatchEnv(t *testing.T) *batchEnv {
 	t.Helper()
-	realGit, err := exec.LookPath("git")
+	p := newPtest(t)
+	realGit, err := lookPath("git")
 	if err != nil {
 		t.Skip("git not available")
 	}
-	realBash, err := exec.LookPath("bash")
+	realBash, err := lookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
 	}
@@ -48,9 +51,10 @@ func newBatchEnv(t *testing.T) *batchEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &batchEnv{td: td, home: filepath.Join(td, "home"), logs: map[string]string{}, bash5: realBash, version: ctxVersion(t)}
+	e := &batchEnv{p: p, td: td, home: filepath.Join(td, "home"), logs: map[string]string{}, bash5: realBash, version: ctxVersion(t)}
 	e.cwd = filepath.Join(e.home, "cur")
-	dirs := []string{testutil.FixedStampDate(t, batchStamp)}
+	var dirs []string
+	locked(func() { dirs = []string{testutil.FixedStampDate(t, batchStamp)} })
 	fake := func(name, body string) {
 		d, log := testutil.FakeBin(t, name, body)
 		dirs = append(dirs, d)
@@ -183,12 +187,12 @@ func (e *batchEnv) bash(t *testing.T, dry bool, stdin string, args ...string) ba
 func (e *batchEnv) goRun(t *testing.T, dry bool, stdin string, args ...string) batchRun {
 	t.Helper()
 	for k, v := range e.env(dry) {
-		t.Setenv(k, v)
+		e.p.Setenv(k, v)
 	}
-	t.Setenv("CTX_VERSION", e.version)
-	t.Chdir(e.cwd)
+	e.p.Setenv("CTX_VERSION", e.version)
 	var o, eb bytes.Buffer
-	code := SetupIn(tui.Term{In: strings.NewReader(stdin), Out: &o, Err: &eb}, args)
+	var code int
+	e.p.inProc(e.cwd, func() { code = SetupIn(tui.Term{In: strings.NewReader(stdin), Out: &o, Err: &eb}, args) })
 	return e.collect(t, o.String(), eb.String(), code)
 }
 
@@ -348,13 +352,13 @@ func TestBatchMatchesBash(t *testing.T) {
 		t.Skip("permission-based cases need a non-root user")
 	}
 	start := time.Now()
-	e := newBatchEnv(t)
 	stamp, _ := time.ParseInLocation("20060102-150405", batchStamp, time.Local)
 	old := ctxconfig.Now
 	ctxconfig.Now = func() time.Time { return stamp }
 	t.Cleanup(func() { ctxconfig.Now = old })
 	for _, c := range batchCases(t) {
 		t.Run(c.name, func(t *testing.T) {
+			e := newBatchEnv(t)
 			e.reset(t, c.seed)
 			want := e.bash(t, c.dry, c.stdin, e.confArgs(t, c)...)
 			if !strings.Contains(want.stdout+want.stderr, c.want) {

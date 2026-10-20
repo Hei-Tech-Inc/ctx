@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,11 +26,14 @@ const EOF = "EOF"
 // promptLike). When there is no output since then, or it does not look like
 // a prompt (a full-screen UI ending in escape codes or help text, or a
 // program that reads without prompting), the answer waits for slowGap of
-// quiet instead.
+// quiet instead. Both gaps are stretched by loadScale on a busy machine,
+// where a program can pause that long between its writes.
 const (
 	quietGap = 300 * time.Millisecond
 	slowGap  = time.Second
 	poll     = 10 * time.Millisecond
+	// maxScale caps loadScale.
+	maxScale = 4
 	// drainGap bounds how long output is read after the command exits, for
 	// background children that keep the terminal open.
 	drainGap = 2 * time.Second
@@ -45,7 +49,7 @@ const (
 // transcript so far.
 //
 // The timing is a heuristic: a program that pauses for more than slowGap
-// before printing its prompt can receive an answer early. Answers typed early
+// (times loadScale) before printing its prompt can receive an answer early. Answers typed early
 // still wait in the terminal's line buffer for a canonical-mode read, but a
 // program that flushes input when it switches to raw mode loses them.
 func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration) (transcript string, exit int) {
@@ -138,7 +142,7 @@ func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration
 		if ready {
 			gap = quietGap
 		}
-		if time.Since(since) < gap {
+		if time.Since(since) < scaled(gap) {
 			time.Sleep(poll)
 			continue
 		}
@@ -164,7 +168,7 @@ func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration
 	}
 	select {
 	case <-readDone:
-	case <-time.After(drainGap):
+	case <-time.After(scaled(drainGap)):
 	}
 
 	exit = 0
@@ -180,6 +184,22 @@ func RunPTY(t *testing.T, cmd *exec.Cmd, answers []string, timeout time.Duration
 		t.Fatalf("RunPTY: wait: %v", waitErr)
 	}
 	return snapshot(), exit
+}
+
+// loadScale is the one-minute load average per CPU, between 1 and maxScale:
+// how much busier than fully used the machine is. 1 where the load average
+// is not available.
+func loadScale() float64 {
+	l, ok := loadAvg()
+	if !ok {
+		return 1
+	}
+	return min(max(l/float64(runtime.NumCPU()), 1), maxScale)
+}
+
+// scaled stretches gap by the current loadScale.
+func scaled(gap time.Duration) time.Duration {
+	return time.Duration(float64(gap) * loadScale())
 }
 
 // promptLike reports whether output ends like a line prompt: after dropping

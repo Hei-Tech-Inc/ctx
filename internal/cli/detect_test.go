@@ -47,6 +47,9 @@ echo "  ✓ Logged in to github.com as bob (keyring)"`)
 	fake("kubectl", `printf 'ctx-b\nctx-a\n'`)
 	fake("az", `printf 'Sub One\nSub Two\n'`)
 	fake("gcloud", `printf 'proj-1\n'`)
+	// Bash's run_with_timeout polls with `sleep 1` when there is no timeout(1)
+	// (macOS); this one just runs the command.
+	fake("timeout", `shift; exec "$@"`)
 	path := strings.Join(append(dirs, "/usr/bin", "/bin"), ":")
 	t.Setenv("PATH", path)
 	// The production sort is whatever locale the user has; the test pins the

@@ -31,8 +31,14 @@ user_cancelled() {
   # If we're inside command substitution, exit only aborts the subshell.
   # Signal the main ctx shell ($$ is its PID even in a subshell; bin/ctx traps
   # INT and exits 130). $PPID would be ctx's caller.
+  # Then die by SIGINT instead of exiting 130: when the main shell takes the
+  # signal while it already waits for this subshell, bash runs its INT trap
+  # only if the child was killed by SIGINT (a normal exit means the child
+  # handled it), and ctx would go on with an empty answer. exec keeps this
+  # PID; exit 130 is the fallback where SIGINT is ignored.
   if [[ ${BASH_SUBSHELL:-0} -gt 0 ]]; then
     kill -INT "$$" 2>/dev/null || true
+    exec /bin/sh -c 'kill -INT $$; exit 130'
   fi
   exit 130
 }

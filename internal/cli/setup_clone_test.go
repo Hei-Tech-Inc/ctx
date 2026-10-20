@@ -48,9 +48,7 @@ func cloneFakes(t *testing.T) string {
 		script := "#!/bin/sh\n" +
 			"for a in \"$@\"; do printf '%s\\000' \"$a\" >> \"$FAKE_LOGDIR/" + name + ".argv\"; done\n" +
 			"printf '\\n' >> \"$FAKE_LOGDIR/" + name + ".argv\"\n" + body + "\n"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		testutil.Script(t, filepath.Join(dir, name), script)
 	}
 	logged("ssh-keygen", `f=""
 while [ $# -gt 0 ]; do
@@ -75,19 +73,12 @@ echo "ssh-ed25519 AAAAfake $f" >"$f.pub"`)
 esac`)
 	// Cloud CLIs list accounts only with FAKE_CLOUD set (not logged).
 	for name, list := range map[string]string{"kubectl": "kctx-a\nkctx-b", "az": "Sub One\nSub Two", "gcloud": "proj-1"} {
-		body := "#!/bin/sh\n[ -n \"$FAKE_CLOUD\" ] && printf '" + list + "\\n'\nexit 0\n"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		testutil.Script(t, filepath.Join(dir, name), "#!/bin/sh\n[ -n \"$FAKE_CLOUD\" ] && printf '"+list+"\\n'\nexit 0\n")
 	}
 	logged("git", `exec '`+realGit+`' "$@"`)
 	logged("mise", `echo "mise output"`)
-	if err := os.WriteFile(filepath.Join(dir, "timeout"), []byte("#!/bin/sh\nshift; exec \"$@\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "hostname"), []byte("#!/bin/sh\necho '"+host+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testutil.Script(t, filepath.Join(dir, "timeout"), "#!/bin/sh\nshift; exec \"$@\"\n")
+	testutil.Script(t, filepath.Join(dir, "hostname"), "#!/bin/sh\necho '"+host+"'\n")
 	if err := os.Symlink(realBash, filepath.Join(dir, "bash")); err != nil {
 		t.Fatal(err)
 	}
