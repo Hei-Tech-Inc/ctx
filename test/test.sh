@@ -2179,6 +2179,67 @@ test_rc_writes_checked() {
   pass "install-hook and agent-rules never replace a file after a short write"
 }
 
+# upgrade against a file:// repo (never the network): a fake curl logs every call and refuses
+# anything but file:// URLs; the stub installer records its env and exits CTX_TEST_INSTALL_EXIT.
+test_upgrade_dry_run_and_temp_cleanup() {
+  (
+    set -euo pipefail
+    local td out p real
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" TMPDIR="$td/tmp" PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+    unset CTX_NO_GUM CTX_CORE_BIN CTX_INSTALL_BIN CTX_INSTALL_LIB
+    mkdir -p "$HOME" "$TMPDIR" "$td/repo/lib" "$td/fake"
+    real="$(command -v curl)" || { echo "curl is needed for this test"; exit 1; }
+    p="$td/prefix"
+    _t_fake_install "$p"
+    cat >"$td/fake/curl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$td/curl.log"
+case "\$*" in *file://*) exec "$real" "\$@" ;; esac
+echo "test curl: refusing a non-file URL" >&2
+exit 99
+EOF
+    chmod 755 "$td/fake/curl"
+    # CRLF payloads: the installer only runs once normalized
+    printf '%s\r\n' 'printf "ran %s %s %s %s\n" "$CTX_REPO" "$CTX_UPGRADE_ONLY" "${CTX_INSTALL_BIN:-}" "${CTX_INSTALL_LIB:-}" >>"$CTX_TEST_RAN"' \
+      'exit "${CTX_TEST_INSTALL_EXIT:-0}"' >"$td/install.sh"
+    cp "$td/install.sh" "$td/repo/install.sh"
+    printf 'CTX_VERSION="9.9.9"\r\n' >"$td/repo/lib/core.sh"
+    export CTX_UPGRADE_REPO="file://$td/repo" CTX_TEST_RAN="$td/ran"
+    [[ "$CTX_UPGRADE_REPO" == file://* ]] || exit 1
+    export PATH="$td/fake:$p/bin:$PATH"
+    [[ "$(command -v ctx)" == "$p/bin/ctx" ]] || { echo "ctx on PATH: $(command -v ctx)"; exit 1; }
+
+    out="$(ctx --no-gum --dry-run upgrade </dev/null 2>&1)" || { echo "dry-run: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would download file://$td/repo/install.sh with curl"* ]] || { echo "dry-run download: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would run it with bash: CTX_REPO=file://$td/repo CTX_UPGRADE_ONLY=1 CTX_INSTALL_BIN=$p/bin CTX_INSTALL_LIB=$p/lib/ctx"* ]] \
+      || { echo "dry-run run: $out"; exit 1; }
+    [[ "$out" != *"Continue?"* && ! -e "$td/ran" && ! -e "$td/curl.log" ]] || { echo "dry-run did something: $out"; exit 1; }
+
+    out="$(printf 'y\n' | CTX_TEST_INSTALL_EXIT=3 ctx --no-gum upgrade 2>&1)" && { echo "installer failure should fail: $out"; exit 1; }
+    [[ "$out" == *"Upgrade installer failed"* ]] || { echo "installer failure: $out"; exit 1; }
+    [[ "$(cat "$td/ran")" == "ran file://$td/repo 1 $p/bin $p/lib/ctx" ]] || { echo "installer env: $(cat "$td/ran")"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp left after installer failure: $(ls -A "$TMPDIR")"; exit 1; }
+
+    rm "$td/repo/install.sh"
+    out="$(printf 'y\n' | ctx --no-gum upgrade 2>&1)" && { echo "download failure should fail: $out"; exit 1; }
+    [[ "$out" == *"Download failed: file://$td/repo/install.sh"* ]] || { echo "download failure: $out"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp left after download failure: $(ls -A "$TMPDIR")"; exit 1; }
+
+    cp "$td/install.sh" "$td/repo/install.sh"
+    rm -f "$td/ran"
+    out="$(printf 'y\n' | ctx --no-gum upgrade 2>&1)" || { echo "upgrade: $out"; exit 1; }
+    [[ "$out" == *"Upgrade finished."* && -s "$td/ran" && -z "$(ls -A "$TMPDIR")" ]] || { echo "upgrade: $out"; exit 1; }
+
+    out="$(ctx --no-gum upgrade --check </dev/null 2>&1)" || { echo "check: $out"; exit 1; }
+    [[ "$out" == *"Remote main: ctx version 9.9.9"* && "$out" == *"Update available"* && -z "$(ls -A "$TMPDIR")" ]] \
+      || { echo "check: $out"; exit 1; }
+    ! grep -v 'file://' "$td/curl.log" || { echo "curl reached for a non-file URL"; exit 1; }
+  ) || fail "upgrade honors --dry-run and removes its temp file"
+  pass "upgrade honors --dry-run and removes its temp file"
+}
+
 test_installer_runs_install_hook() {
   (
     set -euo pipefail
@@ -2298,4 +2359,5 @@ test_install_hook_keeps_rc
 test_rc_writes_checked
 test_installer_runs_install_hook
 test_temp_guard_restores_traps
+test_upgrade_dry_run_and_temp_cleanup
 echo "All tests passed."

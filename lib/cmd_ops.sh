@@ -1349,6 +1349,11 @@ cmd_uninstall() {
 }
 
 # ─── upgrade ──────────────────────────────────────────────────────────────────
+# Download install.sh from CTX_UPGRADE_REPO (default: main on GitHub) and run it
+# with bash (CTX_UPGRADE_ONLY=1), aimed at the ctx on PATH when its CTX_LIB line
+# is the installer's CTX_LIB="/abs" form. --check compares CTX_VERSION with the
+# remote lib/core.sh. --dry-run prints what would be downloaded and run. The
+# temp file is removed on every path (die, Ctrl+C, installer failure).
 cmd_upgrade() {
   local repo="${CTX_UPGRADE_REPO:-https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main}"
   local url="${repo}/install.sh"
@@ -1357,9 +1362,10 @@ cmd_upgrade() {
   ctx_bin="$(command -v ctx 2>/dev/null || true)"
   [[ -z "$ctx_bin" ]] && die "ctx not found in PATH — install first: curl -fsSL ${url} | bash"
 
+  # Only the line install.sh writes: a source checkout's CTX_LIB="$(cd …" is not a path.
   if [[ -f "$ctx_bin" ]]; then
     lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
-    if [[ "$lib_line" =~ CTX_LIB=\"([^\"]+)\" ]]; then
+    if [[ "$lib_line" =~ ^CTX_LIB=\"(/[^\"]*)\"$ ]]; then
       install_lib="${BASH_REMATCH[1]}"
       install_bin="$(dirname "$ctx_bin")"
     fi
@@ -1369,7 +1375,8 @@ cmd_upgrade() {
     bold "\n  ctx upgrade --check\n"
     dim "  Installed: ctx version $CTX_VERSION"
     local remote_ver="" rtmp
-    rtmp="$(mktemp)" || die "Could not create temp file"
+    rtmp="$(mktemp "${TMPDIR:-/tmp}/ctx-upgrade.XXXXXX")" || die "Could not create temp file"
+    _ctx_temp_guard "$rtmp"
     if command -v curl &>/dev/null; then
       curl -fsSL "${repo}/lib/core.sh" -o "$rtmp" 2>/dev/null || true
     elif command -v wget &>/dev/null; then
@@ -1378,7 +1385,7 @@ cmd_upgrade() {
     if [[ -s "$rtmp" ]]; then
       remote_ver="$(parse_ctx_version_from_core_sh_file "$rtmp")"
     fi
-    rm -f "$rtmp"
+    _ctx_temp_done
     if [[ -n "$remote_ver" ]]; then
       dim "  Remote main: ctx version $remote_ver"
       if [[ "$CTX_VERSION" == "$remote_ver" ]]; then
@@ -1400,17 +1407,36 @@ cmd_upgrade() {
     || dim "  Target: default install paths (see installer output)"
   echo ""
   info "Updates ctx binary + libraries only — ~/.ctx profiles, secrets, client dirs, and shell hooks are not modified."
+
+  local fetch=""
+  if command -v curl &>/dev/null; then
+    fetch=curl
+  elif command -v wget &>/dev/null; then
+    fetch=wget
+  fi
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    [[ -n "$fetch" ]] || die "Need curl or wget to download install.sh"
+    local env_desc
+    env_desc="CTX_REPO=$(printf '%q' "$repo") CTX_UPGRADE_ONLY=1"
+    [[ -n "${install_bin:-}" ]] && env_desc+=" CTX_INSTALL_BIN=$(printf '%q' "$install_bin")"
+    [[ -n "${install_lib:-}" ]] && env_desc+=" CTX_INSTALL_LIB=$(printf '%q' "$install_lib")"
+    dim "  [dry-run] would download $url with $fetch"
+    dim "  [dry-run] would run it with bash: $env_desc"
+    echo ""
+    return 0
+  fi
+
   ask_yn "Continue?" "y" || die "Aborted."
 
+  [[ -n "$fetch" ]] || die "Need curl or wget to download install.sh"
   local tmp
-  tmp="$(mktemp)" || die "Could not create temp file"
-  if command -v curl &>/dev/null; then
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-upgrade.XXXXXX")" || die "Could not create temp file"
+  _ctx_temp_guard "$tmp" # a die below, Ctrl+C or TERM removes it
+  if [[ "$fetch" == curl ]]; then
     curl -fsSL "$url" -o "$tmp" || die "Download failed: $url"
-  elif command -v wget &>/dev/null; then
-    wget -qO "$tmp" "$url" || die "Download failed: $url"
   else
-    rm -f "$tmp"
-    die "Need curl or wget to download install.sh"
+    wget -qO "$tmp" "$url" || die "Download failed: $url"
   fi
 
   # Normalise line endings — CRLF payloads make bash treat `\r` as part of tokens,
@@ -1419,8 +1445,9 @@ cmd_upgrade() {
     perl -0777 -pi -e 's/\r\n/\n/g; s/\r/\n/g' "$tmp" 2>/dev/null || true
   else
     local tmp2
-    tmp2="$(mktemp)" || die "Could not create temp file"
-    tr -d '\r' < "$tmp" > "$tmp2" && mv "$tmp2" "$tmp"
+    if tmp2="$(mktemp "${TMPDIR:-/tmp}/ctx-upgrade.XXXXXX")"; then
+      { tr -d '\r' <"$tmp" >"$tmp2" && mv -f "$tmp2" "$tmp"; } || rm -f "$tmp2"
+    fi
   fi
 
   export CTX_REPO="$repo"
@@ -1429,7 +1456,7 @@ cmd_upgrade() {
   [[ -n "${install_lib:-}" ]] && export CTX_INSTALL_LIB="$install_lib"
 
   bash "$tmp" || die "Upgrade installer failed"
-  rm -f "$tmp"
+  _ctx_temp_done
 
   unset CTX_UPGRADE_ONLY 2>/dev/null || true
 
