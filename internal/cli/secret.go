@@ -294,7 +294,8 @@ func secretMigrate(t tui.Term, prof, to, from string, die func(string) error, su
 		return die(fmt.Sprintf("No secrets found for '%s' in provider '%s'.", prof, from))
 	}
 	dst, dstErr := secret.OpenWith(to)
-	copied, missing := 0, 0
+	var copiedKeys []string
+	missing := 0
 	for _, k := range keys {
 		v, _ := src.Get(prof, k)
 		if v == "" {
@@ -302,9 +303,10 @@ func secretMigrate(t tui.Term, prof, to, from string, die func(string) error, su
 			continue
 		}
 		if dstErr == nil && dst.Set(prof, k, v) == nil {
-			copied++
+			copiedKeys = append(copiedKeys, k)
 		}
 	}
+	copied := len(copiedKeys)
 	if err := success(fmt.Sprintf("Migrated %d secret(s) for '%s' from %s to %s.", copied, prof, from, to)); err != nil {
 		return err
 	}
@@ -313,12 +315,15 @@ func secretMigrate(t tui.Term, prof, to, from string, die func(string) error, su
 			return err
 		}
 	}
+	if copied == 0 {
+		return nil // nothing was copied, so there is nothing to offer to delete
+	}
 	del, err := t.Prompter().AskYN(fmt.Sprintf("Delete migrated keys from source provider '%s'?", from), false)
 	if err != nil {
 		return errCancelled
 	}
 	if del {
-		for _, k := range keys {
+		for _, k := range copiedKeys {
 			_ = src.Delete(prof, k)
 		}
 		return success(fmt.Sprintf("Removed source keys from '%s'.", from))

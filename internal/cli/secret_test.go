@@ -77,6 +77,7 @@ type secretHarness struct {
 	state, store    string
 	passLog         string
 	passFail        bool
+	failKey         string
 	noProfile       bool
 	seed            map[string]string // "profile/KEY" -> file store content
 	passSeed        map[string]string // "KEY" -> pass content (profile p)
@@ -157,6 +158,7 @@ func (h *secretHarness) install() {
 	} else {
 		dir, log := testutil.FakeBin(t, "pass", `
 [ -z "$FAKE_PASS_FAIL" ] || exit 1
+[ -z "$FAKE_PASS_FAIL_KEY" ] || [ "$1" != insert ] || [ "$4" != "ctx/p/$FAKE_PASS_FAIL_KEY" ] || exit 1
 case "$1" in
 insert) mkdir -p "$FAKE_STATE/pass/$(dirname "$4")" "$PASSWORD_STORE_DIR/$(dirname "$4")"; cat > "$FAKE_STATE/pass/$4"; : > "$PASSWORD_STORE_DIR/$4.gpg" ;;
 show) f="$FAKE_STATE/pass/$2"; [ -f "$f" ] || exit 1; cat "$f" ;;
@@ -170,6 +172,7 @@ esac`)
 	t.Setenv("USER", "tester")
 	t.Setenv("CTX_SECRET_PROVIDER", h.provider)
 	t.Setenv("CTX_NO_GUM", "1")
+	t.Setenv("FAKE_PASS_FAIL_KEY", h.failKey)
 	if h.passFail {
 		t.Setenv("FAKE_PASS_FAIL", "1")
 	} else {
@@ -299,6 +302,7 @@ func TestSecretMigrateMatchesBash(t *testing.T) {
 		passSeed map[string]string
 		provider string
 		passFail bool
+		failKey  string
 		noProf   bool
 		noPass   bool
 		vacuous  string // substring the Bash run must print
@@ -310,6 +314,7 @@ func TestSecretMigrateMatchesBash(t *testing.T) {
 		{name: "pass to file", args: []string{"p", "file", "pass"}, stdin: "y\n", passSeed: map[string]string{"A": "pa\nsecond", "B": "pb"}, vacuous: "Removed source"},
 		{name: "pass to file, pass absent", args: []string{"p", "file", "pass"}, stdin: "n\n", noPass: true, vacuous: ""},
 		{name: "file to pass, pass absent", args: []string{"p", "pass"}, stdin: "y\n", seed: two, noPass: true, vacuous: "Migrated 0"},
+		{name: "one key fails to copy", args: []string{"p", "pass"}, stdin: "y\n", seed: two, failKey: "B", vacuous: "Migrated 1"},
 		{name: "pass failing", args: []string{"p", "pass"}, stdin: "n\n", seed: two, passFail: true, vacuous: "Migrated 0"},
 		{name: "same provider", args: []string{"p", "file", "file"}, stdin: "n\n", seed: two},
 		{name: "same provider by default", args: []string{"p", "file"}, stdin: "n\n", seed: two},
@@ -329,6 +334,7 @@ func TestSecretMigrateMatchesBash(t *testing.T) {
 			h := newSecretHarness(t)
 			h.seed, h.passSeed = c.seed, c.passSeed
 			h.noProfile, h.passFail, h.withoutFakePass = c.noProf, c.passFail, c.noPass
+			h.failKey = c.failKey
 			if c.provider != "" {
 				h.provider = c.provider
 			}
@@ -338,6 +344,16 @@ func TestSecretMigrateMatchesBash(t *testing.T) {
 			got := h.goRun(c.stdin, args)
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("Go and Bash differ\n go:   %+v\n bash: %+v", got, want)
+			}
+			switch c.name {
+			case "file to pass, pass absent", "pass failing":
+				if !strings.Contains(want.state, "secrets/p/A") || strings.Contains(want.stdout, "Delete migrated") || strings.Contains(want.stderr, "Delete migrated") {
+					t.Errorf("source keys must survive without a prompt: %+v", want)
+				}
+			case "one key fails to copy":
+				if strings.Contains(want.state, "secrets/p/A") || !strings.Contains(want.state, "secrets/p/B") {
+					t.Errorf("only the copied key may be deleted: %s", want.state)
+				}
 			}
 			if c.vacuous != "" && !strings.Contains(want.stdout, c.vacuous) {
 				t.Errorf("vacuous: bash stdout %q lacks %q", want.stdout, c.vacuous)

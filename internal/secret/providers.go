@@ -261,12 +261,20 @@ func (f File) Get(profile, key string) (string, error) {
 // file 0600, and the value is written without a trailing newline.
 func (f File) Set(profile, key, value string) error {
 	p := f.path(profile, key)
-	if err := os.MkdirAll(filepath.Dir(p), 0o777); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
 	_ = os.Chmod(ctxDir()+"/secrets", 0o700)
 	_ = os.Chmod(ctxDir()+"/secrets/"+profile, 0o700)
-	if err := os.WriteFile(p, []byte(value), 0o666); err != nil {
+	fh, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = fh.WriteString(value)
+	if cerr := fh.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
 	_ = os.Chmod(p, 0o600)

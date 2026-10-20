@@ -678,7 +678,7 @@ cmd_secret() {
       case "$from_provider" in keychain|file|pass) ;; *) die "Invalid from-provider: $from_provider" ;; esac
       [[ "$to_provider" == "$from_provider" ]] && die "Source and destination providers are the same: $to_provider"
 
-      local keys copied=0 missing=0
+      local keys copied=0 missing=0 copied_keys=""
       keys="$(secret_list_with_provider "$from_provider" "$profile")"
       [[ -z "$keys" ]] && die "No secrets found for '$profile' in provider '$from_provider'."
       while IFS= read -r mkey; do
@@ -691,14 +691,16 @@ cmd_secret() {
         fi
         if secret_set_with_provider "$to_provider" "$profile" "$mkey" "$mval"; then
           copied=$((copied+1))
+          copied_keys="${copied_keys}${mkey}"$'\n'
         fi
       done <<< "$keys"
       success "Migrated $copied secret(s) for '$profile' from $from_provider to $to_provider."
       [[ $missing -gt 0 ]] && warn "$missing key(s) were empty/unreadable and skipped."
-      if ask_yn "Delete migrated keys from source provider '$from_provider'?" "n"; then
+      # Only offer to delete keys that were actually copied.
+      if [[ $copied -gt 0 ]] && ask_yn "Delete migrated keys from source provider '$from_provider'?" "n"; then
         while IFS= read -r mkey; do
           [[ -n "$mkey" ]] && secret_delete_with_provider "$from_provider" "$profile" "$mkey" >/dev/null 2>&1 || true
-        done <<< "$keys"
+        done <<< "$copied_keys"
         success "Removed source keys from '$from_provider'."
       fi
       ;;

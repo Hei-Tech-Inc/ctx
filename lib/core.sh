@@ -753,9 +753,10 @@ _secret_file_set() {
   local profile="$1" key="$2" value="$3"
   local f
   f="$(_secret_file "$profile" "$key")"
-  mkdir -p "$(dirname "$f")" || return 1
+  # umask 077: dirs and the file are created private from the start.
+  ( umask 077; mkdir -p "$(dirname "$f")" ) || return 1
   chmod 700 "${CTX_DIR}/secrets" "${CTX_DIR}/secrets/${profile}" 2>/dev/null || true
-  printf '%s' "$value" > "$f" || return 1
+  ( umask 077; printf '%s' "$value" > "$f" ) || return 1
   chmod 600 "$f" 2>/dev/null || true
   return 0
 }
