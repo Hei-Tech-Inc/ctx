@@ -61,12 +61,17 @@ func FolderSlug(s string) string {
 	})
 }
 
-// emailRE is Bash's ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+ with
-// [:space:] as the platform's C library has it in a UTF-8 locale (localeSpace).
-var emailRE = regexp.MustCompile(`^[^` + localeSpace + `]+@[^` + localeSpace + `]+\.[^` + localeSpace + `]+`)
+// emailSpace is the whitespace SensibleEmail rejects on every platform
+// (Ruling R28): ASCII \t-\r and space, U+0085 and every Unicode space
+// separator, the no-break ones included. Bash's [:space:] depends on the C
+// library (glibc leaves out the no-break spaces; neither glibc nor macOS has
+// U+0085), so Bash can accept a few of these; Go stays strict.
+const emailSpace = `\t-\r\x{85}\p{Z}`
+
+var emailRE = regexp.MustCompile(`^[^` + emailSpace + `]+@[^` + emailSpace + `]+\.[^` + emailSpace + `]+`)
 
 // SensibleEmail is is_sensible_git_email: has '@', no "..", and looks like
-// user@host.tld (no whitespace, Unicode spaces included as in a UTF-8 locale).
+// user@host.tld with no whitespace (emailSpace: stricter than Bash on purpose).
 func SensibleEmail(s string) bool {
 	return strings.Contains(s, "@") && !strings.Contains(s, "..") && emailRE.MatchString(s)
 }

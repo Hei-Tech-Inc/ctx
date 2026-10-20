@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func repoRoot(t *testing.T) string {
@@ -42,7 +43,7 @@ var pureInputs = []string{
 	"", "acme", "Acme Corp", "ACME_corp-1", "Café", "日本語", "a/b/c", "..", "../x", "a..b",
 	"a@b", "x@y.z", "x@y.", "@y.z", "a b@c.d", "me@co.uk", "A.B@C.D", "-n", "-e", "-neE", "-x",
 	"a\\nb", "tab\there", "x@y..z", "ÀB", "ssh", "SSH", "Gpg", "OpenPGP", "pgp", "None", "OFF", "no", "yes", "a@b.c d",
-	"a@b\u00a0.c", "a@b\u2007.c", "a@b\u202f.c", "a@b\u2003.c", "a@b\u0085.c", "a@b\u3000.c", "_ok", "1abc", "A_1", "A-1", "k=v",
+	"a@b\u00a0.c", "a@b\u2007.c", "a@b\u202f.c", "a@b\u2003.c", "a@b\u0085.c", "a@b\u3000.c", "a@b\u1680.c", "_ok", "1abc", "A_1", "A-1", "k=v",
 }
 
 // bashEach runs body once per input inside a single bash process and returns
@@ -55,6 +56,12 @@ func bashEach(t *testing.T, body string, inputs ...string) []string {
 		t.Fatalf("bash returned %d records for %d inputs", len(recs)-1, len(inputs))
 	}
 	return recs[:len(inputs)]
+}
+
+// hasUnicodeSpace reports whether s holds non-ASCII whitespace that
+// SensibleEmail rejects (R28): U+0085 or a Unicode space separator.
+func hasUnicodeSpace(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r == 0x85 || r > 0x7f && unicode.In(r, unicode.Z) })
 }
 
 func TestPureMatchesBash(t *testing.T) {
@@ -77,7 +84,14 @@ func TestPureMatchesBash(t *testing.T) {
 		if g := FolderSlug(in); g != folder[i] {
 			t.Errorf("FolderSlug(%q) = %q, bash %q", in, g, folder[i])
 		}
-		if g := b(SensibleEmail(in)); g != email[i] {
+		if hasUnicodeSpace(in) {
+			// Ruling R28: Go rejects every Unicode space in an email, while
+			// Bash's [:space:] follows the C library (glibc accepts the
+			// no-break spaces, no libc has U+0085). Not diffed against Bash.
+			if SensibleEmail(in) {
+				t.Errorf("SensibleEmail(%q) = 1, want 0 (R28)", in)
+			}
+		} else if g := b(SensibleEmail(in)); g != email[i] {
 			t.Errorf("SensibleEmail(%q) = %s, bash %s", in, g, email[i])
 		}
 		if g := b(ValidEnvKey(in)); g != envkey[i] {
