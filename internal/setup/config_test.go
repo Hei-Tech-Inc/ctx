@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
 )
 
 type batchCase struct {
@@ -105,7 +107,7 @@ func TestBatchConfigErrorsMatchBash(t *testing.T) {
 			}
 			cmd := exec.Command(filepath.Join(repoRoot(t), "bin", "ctx"), args...)
 			cmd.Dir = home
-			cmd.Env = append(os.Environ(), "HOME="+home, "CTX_DIR="+ctxDir, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "CTX_CORE=off", "NO_COLOR=1", "LC_ALL=en_US.UTF-8")
+			cmd.Env = append(os.Environ(), "HOME="+home, "CTX_DIR="+ctxDir, "PATH="+testutil.SystemPath(t), "CTX_CORE=off", "NO_COLOR=1", "LC_ALL=en_US.UTF-8")
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			cmd.Stdin = nil

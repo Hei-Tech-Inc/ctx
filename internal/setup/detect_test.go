@@ -21,10 +21,11 @@ func (r *lineOut) Bold(m string)    { r.lines = append(r.lines, "bold:"+m) }
 func (r *lineOut) Say(m string)     { r.lines = append(r.lines, "say:"+m) }
 func (r *lineOut) Error(m string)   { r.lines = append(r.lines, "error:"+m) }
 
-// onlyPath points PATH at the given dirs plus the system's basics.
+// onlyPath points PATH at the given dirs plus the system's basics (without
+// the cloud CLIs a CI runner installs there).
 func onlyPath(t *testing.T, dirs ...string) {
 	t.Helper()
-	t.Setenv("PATH", strings.Join(append(dirs, "/usr/bin", "/bin"), ":"))
+	t.Setenv("PATH", strings.Join(append(dirs, testutil.SystemPath(t)), ":"))
 }
 
 func write(t *testing.T, path, body string) {

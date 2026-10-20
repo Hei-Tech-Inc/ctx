@@ -76,7 +76,7 @@ echo "ssh-ed25519 AAAAfake $f" >"$f.pub"`)
 	if err := os.Symlink(realBash, filepath.Join(dirs[1], "bash")); err != nil {
 		t.Fatal(err)
 	}
-	e.path = strings.Join(append(dirs, "/usr/bin", "/bin", "/usr/sbin", "/sbin"), ":")
+	e.path = strings.Join(append(dirs, testutil.SystemPath(t)), ":")
 	return e
 }
 

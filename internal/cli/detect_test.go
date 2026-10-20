@@ -50,7 +50,7 @@ echo "  ✓ Logged in to github.com as bob (keyring)"`)
 	// Bash's run_with_timeout polls with `sleep 1` when there is no timeout(1)
 	// (macOS); this one just runs the command.
 	fake("timeout", `shift; exec "$@"`)
-	path := strings.Join(append(dirs, "/usr/bin", "/bin"), ":")
+	path := strings.Join(append(dirs, testutil.SystemPath(t)), ":")
 	t.Setenv("PATH", path)
 	// The production sort is whatever locale the user has; the test pins the
 	// byte order (C locale) on both sides.

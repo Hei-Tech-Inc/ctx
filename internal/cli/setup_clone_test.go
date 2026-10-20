@@ -168,7 +168,7 @@ func runClone(t *testing.T, td, fakes, core string, c cloneCase) cloneRun {
 	stamp := testutil.FixedStampDate(t, batchStamp)
 	cmd.Env = append([]string{
 		"HOME=" + home, "CTX_DIR=" + filepath.Join(home, ".ctx"), "PWD=" + cwd, "TERM=xterm",
-		"PATH=" + stamp + ":" + fakes + ":/usr/bin:/bin:/usr/sbin:/sbin",
+		"PATH=" + stamp + ":" + fakes + ":" + testutil.SystemPath(t),
 		"LC_ALL=en_US.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "CTX_SECRET_PROVIDER=file", "FAKE_LOGDIR=" + logs,
 	}, c.env...)
 	if core == "" {
