@@ -214,6 +214,22 @@ func TestWriteStoresPendingSecrets(t *testing.T) {
 	}
 }
 
+// TestStoreSecretsKeepsKeysOnce (R26): a stored key already in SecretKeys, or
+// queued twice, is listed once; new keys are appended in order.
+func TestStoreSecretsKeepsKeysOnce(t *testing.T) {
+	writeHome(t)
+	in := Inputs{Profile: "acme", SecretKeys: []string{"GH_TOKEN", "OLD"},
+		PendingSecrets: []Secret{{"GH_TOKEN", "a"}, {"NEW", "b"}, {"NEW", "c"}, {"OLD", "d"}}}
+	var u lineOut
+	storeSecrets(&in, &u)
+	if want := []string{"GH_TOKEN", "OLD", "NEW"}; !reflect.DeepEqual(in.SecretKeys, want) {
+		t.Errorf("SecretKeys = %q, want %q", in.SecretKeys, want)
+	}
+	if len(u.lines) != 4 {
+		t.Errorf("want one line per stored secret, got %q", u.lines)
+	}
+}
+
 func TestDryRunReportAndSummary(t *testing.T) {
 	home := writeHome(t)
 	key := filepath.Join(home, ".ssh", "ctx_acme")

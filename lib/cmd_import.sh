@@ -40,8 +40,17 @@ _ctx_setup_queue_secret() {
   _setup_secret_vals+=("$2")
 }
 
-# Store the queued secrets. SECRET_KEYS gets only the keys that were stored.
-# --dry-run lists them instead. Values are never printed.
+# SECRET_KEYS lists KEY already (R26: a key is listed once).
+_ctx_setup_has_secret_key() {
+  local k
+  for k in ${SECRET_KEYS[@]+"${SECRET_KEYS[@]}"}; do
+    [[ "$k" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+# Store the queued secrets. SECRET_KEYS gets only the keys that were stored,
+# each once (R26). --dry-run lists them instead. Values are never printed.
 _ctx_setup_store_secrets() {
   local n="${#_setup_secret_keys[@]}" i key where
   [[ "$n" -gt 0 ]] || return 0
@@ -52,7 +61,7 @@ _ctx_setup_store_secrets() {
       _ctx_setup_dry "store secret $key"
     elif keychain_set "$PROFILE_NAME" "$key" "${_setup_secret_vals[i]}"; then
       success "$key → $where"
-      SECRET_KEYS+=("$key")
+      _ctx_setup_has_secret_key "$key" || SECRET_KEYS+=("$key")
     else
       warn "Could not store $key ($where)"
     fi

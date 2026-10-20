@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
@@ -88,7 +89,7 @@ func git(stdout, stderr io.Writer, args ...string) error {
 // storeSecrets is _ctx_setup_store_secrets (R4): each queued secret is stored
 // with the effective provider (keychain_set: an unavailable provider fails),
 // followed by its success or warn line. Only stored keys are added to
-// SecretKeys. The values are dropped and never printed.
+// SecretKeys, each once (R26). The values are dropped and never printed.
 func storeSecrets(in *Inputs, u Out) {
 	if len(in.PendingSecrets) == 0 {
 		return
@@ -99,7 +100,9 @@ func storeSecrets(in *Inputs, u Out) {
 	for _, s := range in.PendingSecrets {
 		if openErr == nil && st.Set(in.Profile, s.Key, s.Value) == nil {
 			u.Success(s.Key + " → " + where)
-			keys = append(keys, s.Key)
+			if !slices.Contains(keys, s.Key) {
+				keys = append(keys, s.Key)
+			}
 		} else {
 			u.Warn("Could not store " + s.Key + " (" + where + ")")
 		}

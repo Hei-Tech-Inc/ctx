@@ -1284,6 +1284,33 @@ test_setup_extend_reaches_flow() {
   pass "setup --extend works on an existing profile (and keeps mise.toml)"
 }
 
+# R26: extend never duplicates SECRET_KEYS: a key already listed (or entered
+# twice) is kept once; new keys are appended.
+test_setup_extend_secret_keys_once() {
+  (
+    set -euo pipefail
+    local td out conf
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    _wizard_sandbox "$td"
+    mkdir -p "$CTX_DIR/profiles"
+    echo key >"$HOME/.ssh/id_acme"
+    {
+      printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=dev@acme.com\nWORK_DIR=%s\n' "$td/w/acme"
+      printf 'SSH_KEY_PATH=%s\nGITHUB_USER=octo\nAWS_PROFILE_NAME=dev\nSECRET_KEYS=GH_TOKEN\n' "$HOME/.ssh/id_acme"
+    } >"$CTX_DIR/profiles/acme.conf"
+    cd "$td/w/acme"
+    # identity? n, secrets? y, GH_TOKEN? y + value, another? y NEW_KEY + value,
+    # another? y GH_TOKEN + value, another? n, env vars? n, write? y
+    out="$(printf '%s\n' n y y tok1 y NEW_KEY v2 y GH_TOKEN tok3 n n y | ctx --no-gum setup --extend acme 2>&1)" \
+      || { echo "extend failed: $out"; exit 1; }
+    conf="$(cat "$CTX_DIR/profiles/acme.conf")"
+    grep -qxF 'SECRET_KEYS=GH_TOKEN\ NEW_KEY' <<<"$conf" || { echo "SECRET_KEYS wrong: $conf"; exit 1; }
+    [[ "$(cat "$CTX_DIR/secrets/acme/GH_TOKEN")" == tok3 ]] || { echo "GH_TOKEN not updated"; exit 1; }
+    rm -rf "$td"
+  ) || fail "setup --extend keeps each SECRET_KEYS entry once (R26)"
+  pass "setup --extend keeps each SECRET_KEYS entry once (R26)"
+}
+
 test_setup_dry_run_changes_nothing() {
   (
     set -euo pipefail
@@ -1613,6 +1640,7 @@ test_plain_prompts_use_stderr
 test_remove_only_own_include
 test_remove_gitconfig_symlink_and_nomatch
 test_setup_extend_reaches_flow
+test_setup_extend_secret_keys_once
 test_setup_dry_run_changes_nothing
 test_setup_gh_accounts_both_formats
 test_setup_secrets_wait_for_confirm
