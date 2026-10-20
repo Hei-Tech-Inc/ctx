@@ -1,0 +1,109 @@
+// Package gitssh edits ~/.ssh/config, ~/.ssh/ctx_config and ~/.gitconfig the
+// way lib/core.sh does (ensure_ssh_include, ctx_ssh_add_host,
+// gitconfig_add_include). Both internal/cli and internal/setup use it.
+package gitssh
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
+)
+
+// SSHConfigPath is CTX_SSH_CONFIG: $HOME/.ssh/ctx_config.
+func SSHConfigPath() string { return filepath.Join(os.Getenv("HOME"), ".ssh", "ctx_config") }
+
+// EnsureInclude mirrors ensure_ssh_include: make sure ~/.ssh/config starts
+// with an Include of the ctx-managed file, backing it up before the first edit.
+func EnsureInclude() {
+	home := os.Getenv("HOME")
+	sshMain := filepath.Join(home, ".ssh", "config")
+	ctxSSH := SSHConfigPath()
+	_ = os.MkdirAll(filepath.Join(home, ".ssh"), 0o777)
+	_ = os.Chmod(filepath.Join(home, ".ssh"), 0o700)
+	if f, err := os.OpenFile(ctxSSH, os.O_CREATE|os.O_WRONLY, 0o666); err == nil {
+		f.Close()
+	}
+	_ = os.Chmod(ctxSSH, 0o600)
+
+	existing, _ := os.ReadFile(sshMain)
+	if strings.Contains(string(existing), "Include "+ctxSSH) {
+		return
+	}
+	_ = ctxconfig.BackupFile(sshMain)
+	body := "# ctx managed hosts — added by ctx installer\nInclude " + ctxSSH + "\n\n" + string(existing)
+	tmp, err := os.CreateTemp(filepath.Dir(sshMain), "config.")
+	if err != nil {
+		return
+	}
+	_, werr := tmp.WriteString(body)
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil || os.Rename(tmp.Name(), sshMain) != nil {
+		os.Remove(tmp.Name())
+		return
+	}
+	_ = os.Chmod(sshMain, 0o600)
+	ctxconfig.Log("Added Include " + ctxSSH + " to " + sshMain)
+}
+
+// GitconfigAddInclude mirrors gitconfig_add_include: append an includeIf for
+// workDir to ~/.gitconfig unless identityFile is already mentioned there.
+// It reports whether it added the block.
+func GitconfigAddInclude(workDir, identityFile string) bool {
+	gitconfig := filepath.Join(os.Getenv("HOME"), ".gitconfig")
+	if data, err := os.ReadFile(gitconfig); err == nil && strings.Contains(string(data), identityFile) {
+		return false
+	}
+	_ = ctxconfig.BackupFile(gitconfig)
+	f, err := os.OpenFile(gitconfig, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\n[includeIf \"gitdir:" + workDir + "/\"]\n  path = " + identityFile + "\n"); err != nil {
+		return false
+	}
+	ctxconfig.Log("Added includeIf for " + workDir + " to ~/.gitconfig")
+	return true
+}
+
+// HasHost reports whether ctx_config has the line "Host <host>" (grep
+// "^Host $host$"; hosts are github-<profile slug>, which holds no regex
+// metacharacters).
+func HasHost(host string) bool {
+	data, err := os.ReadFile(SSHConfigPath())
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "Host "+host {
+			return true
+		}
+	}
+	return false
+}
+
+// AddHost mirrors ctx_ssh_add_host: after EnsureInclude, append a host block
+// for host using key to ctx_config (never ~/.ssh/config) and leave the file
+// at mode 0600. added is false when the host is already there. err reports a
+// failed append; Bash prints the shell's redirect error and goes on.
+func AddHost(host, key string) (added bool, err error) {
+	EnsureInclude()
+	if HasHost(host) {
+		return false, nil
+	}
+	path := SSHConfigPath()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	if err == nil {
+		_, err = f.WriteString("\nHost " + host + "\n  HostName github.com\n  User git\n  IdentityFile " + key + "\n  IdentitiesOnly yes\n")
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	_ = os.Chmod(path, 0o600)
+	ctxconfig.Log("Added SSH host " + host + " to " + path)
+	return true, err
+}

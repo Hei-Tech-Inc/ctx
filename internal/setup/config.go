@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -86,22 +87,16 @@ func (e *DieError) Error() string { return e.Msg }
 
 func die(format string, a ...any) error { return &DieError{Msg: fmt.Sprintf(format, a...)} }
 
-// BatchOpts is the environment FromConfig needs, injected so it stays pure.
+// BatchOpts is the environment Preconditions and Resolve need, injected so
+// they stay pure.
 type BatchOpts struct {
-	ScopeFlag string // --scope; ignored in batch mode (Bash overrides it with SETUP_SCOPE, default full)
-	AutoYes   bool   // --yes
-	DryRun    bool   // CTX_DRY_RUN=1
-	PWD, Home string
-	// Added for purity:
-	ConfigPath string                    // shown in the "Non-interactive setup from:" line
+	AutoYes    bool // --yes
+	DryRun     bool // CTX_DRY_RUN=1
+	PWD, Home  string
 	WorkRoot   string                    // ctxconfig.WorkRoot()
 	StdinIsTTY bool                      // the "needs --yes" check
-	Exists     func(profile string) bool // profile_exists
-	FileExists func(path string) bool    // [[ -f path ]]
-	Out        Out                       // optional; receives the Info line
-	// AfterPreconditions, if set, runs after the preconditions and the Info
-	// line and before resolution; Bash scans accounts/keys there.
-	AfterPreconditions func()
+	Exists     func(profile string) bool // profile_exists; required by Resolve
+	FileExists func(path string) bool    // [[ -f path ]]; required by Resolve
 }
 
 func expandTilde(v, home string) string {
@@ -111,37 +106,47 @@ func expandTilde(v, home string) string {
 	return v
 }
 
-// FromConfig ports the batch block of cmd_import (lib/cmd_import.sh): it
-// validates c and resolves Inputs without touching the filesystem. Side
-// effects Bash does inline are reported instead: Inputs.NeedsMkdirWorkDir
-// (mkdir -p WorkDir) and Inputs.NeedsKeygen (ssh-keygen for SSHKeyPath).
-// Errors are *DieError carrying the verbatim Bash text.
-func FromConfig(c ConfigFile, o BatchOpts) (Inputs, error) {
-	var in Inputs
-	scope := c.Get("SETUP_SCOPE", "full")
+// Preconditions ports the start of cmd_import's batch block: the SETUP_SCOPE
+// check and the "needs --yes" check. Bash prints the "Non-interactive setup
+// from: F (scope: S)" line between the two, so scope is returned whenever
+// SETUP_SCOPE is valid, even together with the needs-yes error: the caller
+// prints that line when scope != "" and then reports err. autoYes is --yes or
+// AUTO_CONFIRM. Errors are *DieError with the verbatim Bash text.
+func Preconditions(c ConfigFile, o BatchOpts) (scope string, autoYes bool, err error) {
+	scope = c.Get("SETUP_SCOPE", "full")
 	if scope != "clone" && scope != "full" {
-		return in, die("setup --config: SETUP_SCOPE must be clone or full")
+		return "", false, die("setup --config: SETUP_SCOPE must be clone or full")
 	}
+	autoYes = o.AutoYes || Truthy(c.Get("AUTO_CONFIRM", "false"))
+	if !autoYes && !o.StdinIsTTY {
+		return scope, false, die("setup --config on non-interactive stdin needs --yes or AUTO_CONFIRM=true")
+	}
+	return scope, autoYes, nil
+}
+
+// Resolve ports the rest of the batch block (after the scan): it validates c
+// and resolves Inputs without touching the filesystem. Side effects Bash
+// performs once every check has passed (R17) are reported instead:
+// Inputs.NeedsMkdirWorkDir (mkdir -p WorkDir) and Inputs.NeedsKeygen
+// (ssh-keygen for SSHKeyPath); the caller performs them in that order.
+// It assumes Preconditions passed. o.Exists and o.FileExists are required.
+// Errors are *DieError carrying the verbatim Bash text.
+func Resolve(c ConfigFile, o BatchOpts) (Inputs, error) {
+	var in Inputs
+	if o.Exists == nil || o.FileExists == nil {
+		return in, errors.New("setup: BatchOpts.Exists and BatchOpts.FileExists are required")
+	}
+	scope := c.Get("SETUP_SCOPE", "full")
 	clone := scope == "clone"
 	in.Scope = scope
-	if o.Out != nil {
-		o.Out.Info("Non-interactive setup from: " + o.ConfigPath + " (scope: " + scope + ")")
-	}
-	acFile := Truthy(c.Get("AUTO_CONFIRM", "false"))
-	if !o.AutoYes && !acFile && !o.StdinIsTTY {
-		return in, die("setup --config on non-interactive stdin needs --yes or AUTO_CONFIRM=true")
-	}
-	in.AutoYes = o.AutoYes || acFile
-	if o.AfterPreconditions != nil {
-		o.AfterPreconditions()
-	}
+	in.AutoYes = o.AutoYes || Truthy(c.Get("AUTO_CONFIRM", "false"))
 
 	name := c.Get("PROFILE_NAME", "")
 	if name == "" {
 		return in, die("setup --config: PROFILE_NAME is required")
 	}
 	in.Profile = Slug(name)
-	if o.Exists != nil && o.Exists(in.Profile) {
+	if o.Exists(in.Profile) {
 		if !Truthy(c.Get("OVERWRITE", "false")) {
 			return in, die("setup --config: profile '%s' exists — set OVERWRITE=true to replace", in.Profile)
 		}
@@ -194,9 +199,6 @@ func FromConfig(c ConfigFile, o BatchOpts) (Inputs, error) {
 	in.ImportExisting = c.Get("IMPORT_MODE", "auto") != "manual"
 
 	fileExists := o.FileExists
-	if fileExists == nil {
-		fileExists = func(string) bool { return false }
-	}
 	switch c.Get("SSH_MODE", "generate") {
 	case "generate":
 		in.SSHKeyPath = o.Home + "/.ssh/ctx_" + in.Profile

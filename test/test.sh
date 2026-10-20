@@ -770,7 +770,13 @@ EOS
     rm -f "$td/calls"
     out="$(CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" deactivate --eval bash 2>"$td/err")"
     [[ -z "$out" && "$(cat "$td/err")" == "No active profile." ]] || { echo "deactivate fallback: $out / $(cat "$td/err")"; exit 1; }
-    [[ "$(cat "$td/calls")" == "implements deactivate --eval" ]] || { echo "deactivate calls: $(cat "$td/calls")"; exit 1; }
+    [[ "$(cat "$td/calls")" == "implements deactivate --eval bash" ]] || { echo "deactivate calls: $(cat "$td/calls")"; exit 1; }
+    # setup and its aliases forward as setup, with every argument
+    rm -f "$td/calls"
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" --dry-run import --config "$td/s conf" -y 2>/dev/null)"
+    [[ "$out" == "GO setup --config $td/s conf -y" ]] || { echo "go setup: $out"; exit 1; }
+    CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --no-gum add --config "$td/missing" --yes >/dev/null 2>&1 || true
+    [[ "$(head -1 "$td/calls")" == "implements setup --config $td/missing --yes" ]] || { echo "setup calls: $(cat "$td/calls")"; exit 1; }
     # implements 0 but the command exits 127: that is the answer, Bash must not run
     cat >"$td/fake127" <<'EOS'
 #!/usr/bin/env bash

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -74,6 +77,39 @@ func TestUseImplementsAlways(t *testing.T) {
 			if rc := run(append([]string{"implements"}, sub...), &out, &errb); rc != 0 {
 				t.Errorf("CTX_QUIET=%q implements %v: rc=%d, want 0", quiet, sub, rc)
 			}
+		}
+	}
+}
+
+// TestImplementsSetup: setup (and its import/add aliases) is ctx-core's only
+// for --config FILE with --yes/-y or AUTO_CONFIRM in FILE; implements sees
+// every argument, not just the first.
+func TestImplementsSetup(t *testing.T) {
+	td := t.TempDir()
+	auto := filepath.Join(td, "auto.conf")
+	plain := filepath.Join(td, "plain.conf")
+	if err := os.WriteFile(auto, []byte("AUTO_CONFIRM=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plain, []byte("PROFILE_NAME=a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args []string
+		want int
+	}{
+		{[]string{"setup", "--config", plain, "--yes"}, 0},
+		{[]string{"import", "-y", "--config", plain}, 0},
+		{[]string{"add", "--config", auto}, 0},
+		{[]string{"setup", "--config", plain}, 1},
+		{[]string{"setup", "--config", plain, "--yes", "--help"}, 1},
+		{[]string{"setup", "--config", filepath.Join(td, "missing"), "--yes"}, 1},
+		{[]string{"setup"}, 1},
+		{[]string{"setup", "--scope", "clone"}, 1},
+	} {
+		var out, errb bytes.Buffer
+		if rc := run(append([]string{"implements"}, c.args...), &out, &errb); rc != c.want {
+			t.Errorf("implements %q: rc=%d, want %d", c.args, rc, c.want)
 		}
 	}
 }

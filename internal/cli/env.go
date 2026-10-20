@@ -16,6 +16,7 @@ import (
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
 	"github.com/Hei-Tech-Inc/ctx/internal/resolve"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
+	"github.com/Hei-Tech-Inc/ctx/internal/shquote"
 )
 
 // ExitError is a failure that carries its own exit code and complete message
@@ -45,49 +46,8 @@ func isValidEnvKey(k string) bool {
 	return true
 }
 
-// bashQuote is printf %q for the value of GIT_SSH_COMMAND's key path.
-func bashQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	ctrl := false
-	for _, c := range []byte(s) {
-		if c < 0x20 || c == 0x7f {
-			ctrl = true
-		}
-	}
-	var b strings.Builder
-	if ctrl {
-		b.WriteString("$'")
-		for _, c := range []byte(s) {
-			switch {
-			case c == '\n':
-				b.WriteString(`\n`)
-			case c == '\t':
-				b.WriteString(`\t`)
-			case c == '\r':
-				b.WriteString(`\r`)
-			case c == '\\' || c == '\'':
-				b.WriteByte('\\')
-				b.WriteByte(c)
-			case c < 0x20 || c == 0x7f:
-				fmt.Fprintf(&b, `\%03o`, c)
-			default:
-				b.WriteByte(c)
-			}
-		}
-		b.WriteByte('\'')
-		return b.String()
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c >= 0x80 || strings.IndexByte("_@%+=:,./-", c) >= 0) {
-			b.WriteByte('\\')
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
-}
+// bashQuote is Bash's printf %q (see shquote.Quote).
+func bashQuote(s string) string { return shquote.Quote(s) }
 
 // GHToken runs `gh auth token -u user` (5 s limit). Any failure, or gh not
 // being on PATH, means no token.

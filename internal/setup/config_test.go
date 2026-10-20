@@ -54,7 +54,15 @@ func (bc batchCase) setup(t *testing.T) (home, ctxDir, conf string) {
 	return
 }
 
-func TestFromConfigErrors(t *testing.T) {
+// fromConfig runs Preconditions then Resolve, as the batch command does.
+func fromConfig(c ConfigFile, o BatchOpts) (Inputs, error) {
+	if _, _, err := Preconditions(c, o); err != nil {
+		return Inputs{}, err
+	}
+	return Resolve(c, o)
+}
+
+func TestBatchConfigErrors(t *testing.T) {
 	for _, bc := range batchCases {
 		bc := bc
 		t.Run(bc.name, func(t *testing.T) {
@@ -63,8 +71,8 @@ func TestFromConfigErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = FromConfig(c, BatchOpts{
-				ConfigPath: conf, AutoYes: !bc.noYes, DryRun: bc.dryRun, PWD: "/pwd", Home: home, WorkRoot: home + "/clients",
+			_, err = fromConfig(c, BatchOpts{
+				AutoYes: !bc.noYes, DryRun: bc.dryRun, PWD: "/pwd", Home: home, WorkRoot: home + "/clients",
 				Exists:     func(p string) bool { return bc.existing && p == "acme" },
 				FileExists: func(p string) bool { _, e := os.Stat(p); return e == nil },
 			})
@@ -76,9 +84,9 @@ func TestFromConfigErrors(t *testing.T) {
 	}
 }
 
-// TestFromConfigErrorsMatchBash runs the real Bash batch path and checks that
-// it dies with the same text FromConfig returns.
-func TestFromConfigErrorsMatchBash(t *testing.T) {
+// TestBatchConfigErrorsMatchBash runs the real Bash batch path and checks that
+// it dies with the same text Preconditions/Resolve return.
+func TestBatchConfigErrorsMatchBash(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
 	}
@@ -110,11 +118,11 @@ func TestFromConfigErrorsMatchBash(t *testing.T) {
 	}
 }
 
-func TestFromConfigResolves(t *testing.T) {
+func TestResolve(t *testing.T) {
 	home := "/h"
 	opts := BatchOpts{AutoYes: true, DryRun: true, PWD: "/pwd", Home: home, WorkRoot: "/h/clients",
 		Exists: func(string) bool { return false }, FileExists: func(string) bool { return false }}
-	in, err := FromConfig(ConfigFile{"PROFILE_NAME": "Acme Corp", "GIT_NAME": "J", "GIT_EMAIL": " j@c.io ", "WORK_SLUG": "A/b c", "AUTO_CONFIRM": "yes", "KUBE_CONTEXT": "k", "SIGNING_FORMAT": "GPG", "SIGNING_KEY": "~/k"}, opts)
+	in, err := fromConfig(ConfigFile{"PROFILE_NAME": "Acme Corp", "GIT_NAME": "J", "GIT_EMAIL": " j@c.io ", "WORK_SLUG": "A/b c", "AUTO_CONFIRM": "yes", "KUBE_CONTEXT": "k", "SIGNING_FORMAT": "GPG", "SIGNING_KEY": "~/k"}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,29 +132,50 @@ func TestFromConfigResolves(t *testing.T) {
 		t.Errorf("unexpected inputs: %+v", in)
 	}
 	opts.DryRun = false
-	in, err = FromConfig(ConfigFile{"PROFILE_NAME": "a", "GIT_NAME": "J", "IMPORT_MODE": "manual", "WORK_MODE": "current"}, opts)
+	in, err = fromConfig(ConfigFile{"PROFILE_NAME": "a", "GIT_NAME": "J", "IMPORT_MODE": "manual", "WORK_MODE": "current"}, opts)
 	if err != nil || !in.NeedsKeygen || !in.SSHKeyGenerated || in.WorkDir != "/pwd" || !in.NeedsMkdirWorkDir || in.ImportExisting {
 		t.Errorf("non-dry inputs: %+v %v", in, err)
 	}
 	opts.FileExists = func(string) bool { return true }
-	in, _ = FromConfig(ConfigFile{"PROFILE_NAME": "a", "GIT_NAME": "J"}, opts)
+	in, _ = fromConfig(ConfigFile{"PROFILE_NAME": "a", "GIT_NAME": "J"}, opts)
 	if in.NeedsKeygen || in.SSHKeyGenerated {
 		t.Errorf("existing key must not be regenerated: %+v", in)
 	}
-	in, err = FromConfig(ConfigFile{"SETUP_SCOPE": "clone", "PROFILE_NAME": "a"}, opts)
+	in, err = fromConfig(ConfigFile{"SETUP_SCOPE": "clone", "PROFILE_NAME": "a"}, opts)
 	if err != nil || in.WorkDir != "" || in.Scope != "clone" || in.NeedsMkdirWorkDir {
 		t.Errorf("clone inputs: %+v %v", in, err)
 	}
-	if _, err = FromConfig(ConfigFile{"PROFILE_NAME": "a", "GIT_NAME": "J", "WORK_MODE": "current"}, BatchOpts{AutoYes: true, DryRun: true}); err == nil || err.Error() != "setup --config: could not resolve WORK_DIR (or use SETUP_SCOPE=clone without WORK_DIR)" {
+	noPWD := BatchOpts{AutoYes: true, DryRun: true, Exists: opts.Exists, FileExists: opts.FileExists}
+	if _, err = fromConfig(ConfigFile{"PROFILE_NAME": "a", "GIT_NAME": "J", "WORK_MODE": "current"}, noPWD); err == nil || err.Error() != "setup --config: could not resolve WORK_DIR (or use SETUP_SCOPE=clone without WORK_DIR)" {
 		t.Errorf("empty PWD: %v", err)
 	}
-	var calls []string
-	opts.Out = recOut{&calls}
-	opts.AfterPreconditions = func() { calls = append(calls, "hook") }
-	opts.ConfigPath = "/x.conf"
-	_, _ = FromConfig(ConfigFile{"PROFILE_NAME": "a", "GIT_NAME": "J"}, opts)
-	if len(calls) != 2 || calls[0] != "info:Non-interactive setup from: /x.conf (scope: full)" || calls[1] != "hook" {
-		t.Errorf("calls = %q", calls)
+	if _, err := Resolve(ConfigFile{"PROFILE_NAME": "a"}, BatchOpts{}); err == nil {
+		t.Error("Resolve without Exists/FileExists must fail")
+	}
+}
+
+func TestPreconditions(t *testing.T) {
+	for _, tc := range []struct {
+		c         ConfigFile
+		o         BatchOpts
+		scope     string
+		autoYes   bool
+		wantError string
+	}{
+		{ConfigFile{}, BatchOpts{AutoYes: true}, "full", true, ""},
+		{ConfigFile{"SETUP_SCOPE": "clone", "AUTO_CONFIRM": "Yes"}, BatchOpts{}, "clone", true, ""},
+		{ConfigFile{}, BatchOpts{StdinIsTTY: true}, "full", false, ""},
+		{ConfigFile{"AUTO_CONFIRM": "0"}, BatchOpts{}, "full", false, "setup --config on non-interactive stdin needs --yes or AUTO_CONFIRM=true"},
+		{ConfigFile{"SETUP_SCOPE": "x"}, BatchOpts{AutoYes: true}, "", false, "setup --config: SETUP_SCOPE must be clone or full"},
+	} {
+		scope, ay, err := Preconditions(tc.c, tc.o)
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if scope != tc.scope || ay != tc.autoYes || msg != tc.wantError {
+			t.Errorf("Preconditions(%v, %+v) = %q %v %q", tc.c, tc.o, scope, ay, msg)
+		}
 	}
 }
 
@@ -157,3 +186,4 @@ func (r recOut) Success(s string) {}
 func (r recOut) Warn(s string)    {}
 func (r recOut) Dim(s string)     {}
 func (r recOut) Bold(s string)    {}
+func (r recOut) Say(s string)     {}

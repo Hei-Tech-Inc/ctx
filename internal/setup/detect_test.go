@@ -18,6 +18,7 @@ func (r *lineOut) Success(m string) { r.lines = append(r.lines, "success:"+m) }
 func (r *lineOut) Warn(m string)    { r.lines = append(r.lines, "warn:"+m) }
 func (r *lineOut) Dim(m string)     { r.lines = append(r.lines, "dim:"+m) }
 func (r *lineOut) Bold(m string)    { r.lines = append(r.lines, "bold:"+m) }
+func (r *lineOut) Say(m string)     { r.lines = append(r.lines, "say:"+m) }
 
 // onlyPath points PATH at the given dirs plus the system's basics.
 func onlyPath(t *testing.T, dirs ...string) {

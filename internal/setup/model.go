@@ -2,6 +2,8 @@
 // data model, the validators ported from lib/core.sh and the --config reader.
 package setup
 
+import "io"
+
 // Secret is a key/value queued during the wizard and stored only after the
 // review is confirmed.
 type Secret struct{ Key, Value string }
@@ -16,8 +18,8 @@ type Inputs struct {
 	ImportExisting                      bool
 	SSHKeyPath                          string
 	SSHKeyGenerated                     bool // a key was (or, in dry-run, would be) generated
-	NeedsKeygen                         bool // FromConfig only: ssh-keygen must run for SSHKeyPath
-	NeedsMkdirWorkDir                   bool // FromConfig only: mkdir -p WorkDir must run
+	NeedsKeygen                         bool // Resolve only (wizards leave it false): ssh-keygen must run for SSHKeyPath
+	NeedsMkdirWorkDir                   bool // Resolve only (wizards leave it false): mkdir -p WorkDir must run
 	GitHubUser, AWSProfile              string
 	AzureSub, AzureTenant               string
 	GCPProject, GCPAccount, KubeContext string
@@ -36,4 +38,15 @@ type Out interface {
 	Warn(string)
 	Dim(string)
 	Bold(string)
+	Say(string) // plain echo "$s"
+}
+
+// Terminal is optionally implemented by an Out. Colors reports whether ANSI
+// colors are on (Bash's [[ -t 1 ]]; the full summary embeds BOLD/RESET/GREEN
+// in its message). Streams is where external tools (git) write their own
+// output, as they inherit the Bash process's stdout and stderr. Without it
+// there are no colors and tools write to os.Stdout and os.Stderr.
+type Terminal interface {
+	Colors() bool
+	Streams() (stdout, stderr io.Writer)
 }

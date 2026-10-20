@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
+	"github.com/Hei-Tech-Inc/ctx/internal/gitssh"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
 	"github.com/Hei-Tech-Inc/ctx/internal/setup"
 )
@@ -30,6 +31,12 @@ func (o setupOut) Success(m string) { o.u.success(m) }
 func (o setupOut) Warn(m string)    { o.u.warn(m) }
 func (o setupOut) Dim(m string)     { o.u.dim(m) }
 func (o setupOut) Bold(m string)    { o.u.bold(m) }
+func (o setupOut) Say(m string)     { o.u.say(m) }
+func (o setupOut) Colors() bool     { return o.u.colors }
+
+// Streams is where git and other tools run by setup write: the raw streams,
+// as a Bash child process inherits them.
+func (o setupOut) Streams() (io.Writer, io.Writer) { return o.u.out, o.u.err }
 
 // setupOut returns u as a setup.Out.
 func (u ui) setupOut() setup.Out { return setupOut{u} }
@@ -384,7 +391,7 @@ func configImport(u ui, indir string) int {
 		}
 	}
 
-	ensureSSHInclude()
+	gitssh.EnsureInclude()
 
 	ents, _ := os.ReadDir(profilesDir)
 	var confs []string
@@ -402,7 +409,7 @@ func configImport(u ui, indir string) int {
 		identity := filepath.Join(gitDir, "ctx-"+strings.TrimSuffix(n, ".conf"))
 		workDir := sourcedWorkDir(conf)
 		if workDir != "" && isRegular(identity) {
-			gitconfigAddInclude(workDir, identity)
+			gitssh.GitconfigAddInclude(workDir, identity)
 		}
 	}
 

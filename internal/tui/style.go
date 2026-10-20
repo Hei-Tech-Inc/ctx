@@ -38,3 +38,18 @@ func Box(lines []string) string {
 func Accent(fg int, s string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(strconv.Itoa(fg))).Render(s)
 }
+
+// Card renders lines in a rounded border of ANSI-256 color fg, like gum style
+// --border rounded --border-foreground <fg> --padding "0 2" --margin "1 0"
+// with one argument per line. It is not newline-terminated.
+func Card(fg int, lines []string) string {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(strconv.Itoa(fg))).
+		Padding(0, 2).
+		Margin(1, 0).
+		Render(strings.Join(lines, "\n"))
+}
+
+// Faint renders s dimmed, like Bash's dim inside a gum argument.
+func Faint(s string) string { return lipgloss.NewStyle().Faint(true).Render(s) }

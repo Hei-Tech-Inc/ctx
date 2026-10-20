@@ -412,7 +412,8 @@ _ctx_core_exec() {
 }
 
 # Run a command in ctx-core when it is installed, CTX_CORE is not "off", and the
-# binary says it implements the command (`ctx-core implements <cmd> [sub]`).
+# binary says it implements the command (`ctx-core implements <cmd> [args…]`;
+# it sees every argument, e.g. setup decides from --config FILE and --yes).
 # Once handed over there is no fallback: ctx-core's exit code is final.
 # Returns 1 (caller runs Bash) otherwise.
 _ctx_core_forward() {
@@ -423,7 +424,7 @@ _ctx_core_forward() {
   export CTX_VERSION CTX_DIR
   CTX_BIN_PATH="$CTX_BIN/ctx"
   export CTX_BIN_PATH
-  "$bin" implements "$1" "${2:-}" >/dev/null 2>&1 || return 1
+  "$bin" implements "$@" >/dev/null 2>&1 || return 1
   exec "$bin" "$@"
 }
 
@@ -434,7 +435,10 @@ main() {
 
   case "$cmd" in
     init)             cmd_init ;;
-    setup|import|add) cmd_import "$@" ;;
+    setup|import|add)
+      _ctx_core_forward setup "$@" # --config FILE with --yes or AUTO_CONFIRM
+      cmd_import "$@"
+      ;;
     use)
       _ctx_core_forward use "$@" # always (quiet and non-quiet)
       cmd_use "$@"

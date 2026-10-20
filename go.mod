@@ -7,6 +7,7 @@ toolchain go1.27.2
 require (
 	charm.land/huh/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.5
+	github.com/BurntSushi/toml v1.2.1
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/sys v0.49.0
