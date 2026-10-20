@@ -23,8 +23,9 @@ func ctxDirRaw() string {
 // in the latest backup's manifest.txt:
 //   - The backup holds one copy per basename, so when two manifest paths share
 //     a basename (or the basename is manifest.txt) neither is restored
-//     ("Ambiguous backup"). A path that is not absolute, not in the backup, or
-//     whose directory no longer exists is skipped too. A repeated line counts once.
+//     ("Ambiguous backup"). A path that is not absolute, has a . or ..
+//     component, is not in the backup, or whose directory no longer exists is
+//     skipped too. A repeated line counts once.
 //   - The restorable files are listed before the prompt; with none it dies.
 //   - The current versions go into a new backup dir first (never the one being
 //     restored, even in the same second), so `ctx undo` again undoes the undo.
@@ -78,6 +79,9 @@ func Undo(t tui.Term, args []string) int {
 		case !strings.HasPrefix(o, "/"):
 			u.warn("Cannot restore " + o + ": not an absolute path; skipped")
 			failed = true
+		case hasDotComponent(o):
+			u.warn("Cannot restore " + o + ": it has a . or .. component; skipped")
+			failed = true
 		case !isRegular(bdir + "/" + name):
 			u.warn("Not in backup: " + o)
 			failed = true
@@ -114,14 +118,18 @@ func Undo(t tui.Term, args []string) int {
 		return u.die("Aborted.")
 	}
 
+	// The backup dir is made before anything is restored.
 	nb := ""
 	for _, o := range todo {
 		if isRegular(o) {
-			if nb == "" {
-				if nb, err = ctxconfig.NewBackupDir(); err != nil {
-					return u.die("Could not create a backup directory; nothing restored.")
-				}
+			if nb, err = ctxconfig.NewBackupDir(); err != nil {
+				return u.die("Could not create a backup directory; nothing restored.")
 			}
+			break
+		}
+	}
+	for _, o := range todo {
+		if isRegular(o) {
 			if ctxconfig.BackupFileIn(nb, o) != nil {
 				u.error("Could not back up the current " + o + "; not restored")
 				failed = true
@@ -213,20 +221,35 @@ func physFile(p string) (string, bool) {
 	return strings.TrimRight(d, "/") + "/" + bashBasename(p), true
 }
 
-// physDir mirrors _ctx_phys_dir: (cd DIR && pwd -P).
+// physDir mirrors _ctx_phys_dir, (cd -P DIR && pwd -P): symlinks are
+// resolved before any .. that follows them, as the kernel does (the path is
+// not cleaned lexically first).
 func physDir(p string) (string, bool) {
-	if !isDir(p) {
+	if p == "" || !isDir(p) {
 		return "", false
 	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", false
+	if !strings.HasPrefix(p, "/") {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", false
+		}
+		p = wd + "/" + p
 	}
-	d, err := filepath.EvalSymlinks(abs)
+	d, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		return "", false
 	}
 	return d, true
+}
+
+// hasDotComponent mirrors _ctx_has_dot_component: p has a . or .. component.
+func hasDotComponent(p string) bool {
+	for _, c := range strings.Split(p, "/") {
+		if c == "." || c == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreFile mirrors _ctx_restore_file: src's content and permission bits at

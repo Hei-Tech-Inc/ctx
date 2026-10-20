@@ -327,6 +327,20 @@ func TestUndoEdge(t *testing.T) {
 					t.Error("gone/ was created")
 				}
 			}},
+		{name: "dot component skipped", current: map[string]string{"sub/x": "", "f.txt": "now\n", ".gitconfig": "git now\n"}, backups: []backup{{stamp: "20200101-000000", files: map[string]string{".gitconfig": "git old\n", "f.txt": "old\n"}, manifest: "$HOME/sub/../f.txt\n$HOME/.gitconfig\n"}},
+			stdin: "y\n", wantCode: 1, vacuous: "it has a . or .. component; skipped",
+			check: func(t *testing.T, home string, r undoRun) {
+				if got := readHome(t, home, "f.txt"); got != "now\n" {
+					t.Errorf("f.txt = %q", got)
+				}
+			}},
+		{name: "backup dir cannot be made", current: map[string]string{".gitconfig": "git now\n"}, backups: []backup{{stamp: "20200101-000000", files: map[string]string{".gitconfig": "git old\n", "new.txt": "new\n"}, manifest: "$HOME/new.txt\n$HOME/.gitconfig\n"}},
+			tweak: func(home string) { _ = os.Chmod(filepath.Join(home, ".ctx", "backups"), 0o555) }, stdin: "y\n", wantCode: 1, vacuous: "Could not create a backup directory; nothing restored.",
+			check: func(t *testing.T, home string, r undoRun) {
+				if _, err := os.Stat(filepath.Join(home, "new.txt")); err == nil {
+					t.Error("new.txt was restored before the backup dir failed")
+				}
+			}},
 		{name: "restore fails", current: map[string]string{"ro/f.txt": "now\n", ".gitconfig": "git now\n"}, backups: []backup{{stamp: "20200101-000000", files: map[string]string{".gitconfig": "git old\n", "f.txt": "old\n"}, manifest: "$HOME/ro/f.txt\n$HOME/.gitconfig\n"}},
 			tweak: func(home string) { _ = os.Chmod(filepath.Join(home, "ro"), 0o555) }, stdin: "y\n", wantCode: 1, vacuous: "Could not restore ",
 			check: func(t *testing.T, home string, r undoRun) {

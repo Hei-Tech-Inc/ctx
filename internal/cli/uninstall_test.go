@@ -27,6 +27,7 @@ import (
 const keychainFake = `case "$1" in
 dump-keychain) cat "$KEYCHAIN" 2>/dev/null ;;
 delete-generic-password)
+  [ -n "$KEYCHAIN_RO" ] && exit 44
   svc=""; while [ $# -gt 0 ]; do [ "$1" = -s ] && svc="$2"; shift; done
   grep -v "\"$svc\"" "$KEYCHAIN" > "$KEYCHAIN.tmp"; mv "$KEYCHAIN.tmp" "$KEYCHAIN" ;;
 esac`
@@ -291,11 +292,23 @@ type unCase struct {
 	vacuous  string
 	changes  bool // a failing or dry run that is expected to change files
 	check    func(t *testing.T, e *unEnv, r unRun)
+	// refusals: the manual-removal list names the ctx on PATH (default the
+	// fake install's) and the lib dir (default prefix/lib/ctx; libUnknown
+	// when refused before the CTX_LIB line is read). outside marks a CTX_DIR
+	// outside the sandbox: that case answers No instead of Yes.
+	onPath     func(e *unEnv) string
+	lib        func(e *unEnv) string
+	libUnknown bool
+	outside    bool
+	darwinOnly bool
 }
 
 func runUnCases(t *testing.T, cases []unCase) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.darwinOnly && runtime.GOOS != "darwin" {
+				t.Skip("the Keychain exists only on darwin")
+			}
 			e := newUnEnv(t)
 			var bin string
 			var extra []string
@@ -375,12 +388,28 @@ func TestUninstallMatchesBash(t *testing.T) {
 	runUnCases(t, []unCase{
 		{name: "plain", stdin: "y\n", vacuous: "# BEGIN ctx profile autoswitch", check: removed(false)},
 		{name: "purge file store", stdin: "y\n", args: []string{"--purge"}, vacuous: "Deleted 2 secret(s) of acme from the file store", check: removed(true)},
-		{name: "purge keychain", stdin: "y\n", args: []string{"--purge"}, tweak: keychain, env: func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=keychain"} },
+		{name: "purge keychain delete fails", darwinOnly: true, stdin: "y\n", args: []string{"--purge"}, tweak: keychain,
+			env:      func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=keychain", "KEYCHAIN_RO=1"} },
+			wantCode: 1, vacuous: "Could not delete from the Keychain for acme: API_KEY"},
+		{name: "purge file store delete fails", stdin: "y\n", args: []string{"--purge"}, changes: true,
+			tweak:    func(e *unEnv) { _ = os.Chmod(filepath.Join(e.ctxDir, "secrets", "acme"), 0o500) },
+			wantCode: 1, vacuous: "Could not delete from the file store for acme: API_KEY DB_PASS",
+			check: func(t *testing.T, e *unEnv, r unRun) {
+				for _, p := range []string{filepath.Join(e.prefix, "bin", "ctx"), filepath.Join(e.prefix, "lib", "ctx"), filepath.Join(e.ctxDir, "secrets", "acme", "API_KEY")} {
+					if !exists(p) {
+						t.Errorf("%s removed although a secret was left", p)
+					}
+				}
+				if exists(filepath.Join(e.ctxDir, "secrets", "beta", "TOKEN")) {
+					t.Error("beta's secret not deleted")
+				}
+				if !strings.Contains(r.stdout, "Delete them with: ctx secret delete <profile> <KEY>") {
+					t.Errorf("no hint: %q", r.stdout)
+				}
+			}},
+		{name: "purge keychain", darwinOnly: true, stdin: "y\n", args: []string{"--purge"}, tweak: keychain, env: func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=keychain"} },
 			vacuous: "Removed ", check: func(t *testing.T, e *unEnv, r unRun) {
 				removed(true)(t, e, r)
-				if runtime.GOOS != "darwin" {
-					return
-				}
 				kc, _ := os.ReadFile(filepath.Join(e.root, "keychain.txt"))
 				if string(kc) != "    \"svce\"<blob>=\"other\"\n" {
 					t.Errorf("keychain left %q", kc)
@@ -426,8 +455,10 @@ func TestUninstallMatchesBash(t *testing.T) {
 }
 
 // TestUninstallSafety is Review Focus 1: unusual installs are refused before
-// the prompt with nothing deleted. Every case answers No, so a guard that
-// failed to refuse stops at the prompt rather than deleting.
+// the prompt with nothing deleted, and the user is told what to remove by
+// hand. Cases inside the sandbox answer Yes (typed ahead), proving the
+// refusal comes before any deletion; a CTX_DIR outside it (/, relative)
+// answers No, so a guard that failed would stop at the prompt.
 func TestUninstallSafety(t *testing.T) {
 	lineTo := func(lib string, withScripts bool) func(e *unEnv) {
 		return func(e *unEnv) {
@@ -444,7 +475,8 @@ func TestUninstallSafety(t *testing.T) {
 			_ = os.MkdirAll(filepath.Join(e.root, "links"), 0o755)
 			_ = os.Symlink(filepath.Join(e.prefix, "bin", "ctx"), filepath.Join(e.root, "links", "ctx"))
 		}, bin: func(e *unEnv) string { return filepath.Join(e.root, "links", "ctx") },
-			path: func(e *unEnv) string { return e.pathWith(filepath.Join(e.root, "links")) }, vacuous: "is a symlink (to "},
+			path: func(e *unEnv) string { return e.pathWith(filepath.Join(e.root, "links")) }, vacuous: "is a symlink (to ",
+			onPath: func(e *unEnv) string { return filepath.Join(e.root, "links", "ctx") }, libUnknown: true},
 		{name: "dev checkout on PATH", tweak: func(e *unEnv) {
 			co := filepath.Join(e.root, "checkout")
 			_ = os.MkdirAll(filepath.Join(co, "bin"), 0o755)
@@ -453,16 +485,19 @@ func TestUninstallSafety(t *testing.T) {
 			_ = os.WriteFile(filepath.Join(co, "bin", "ctx"), b, 0o755)
 			copyLib(e.p.t, filepath.Join(co, "lib"))
 		}, bin: func(e *unEnv) string { return filepath.Join(e.root, "checkout", "bin", "ctx") },
-			path: func(e *unEnv) string { return e.pathWith(filepath.Join(e.root, "checkout", "bin")) }, vacuous: "has no installer CTX_LIB line"},
+			path: func(e *unEnv) string { return e.pathWith(filepath.Join(e.root, "checkout", "bin")) }, vacuous: "has no installer CTX_LIB line",
+			onPath: func(e *unEnv) string { return filepath.Join(e.root, "checkout", "bin", "ctx") }, libUnknown: true},
 		{name: "running ctx is not the one on PATH", tweak: func(e *unEnv) {
 			other := filepath.Join(e.root, "other")
 			_ = os.MkdirAll(filepath.Join(other, "bin"), 0o755)
 			writeInstalledCtx(e.p.t, filepath.Join(other, "bin", "ctx"), filepath.Join(other, "lib", "ctx"))
 			copyLib(e.p.t, filepath.Join(other, "lib", "ctx"))
-		}, bin: func(e *unEnv) string { return filepath.Join(e.root, "other", "bin", "ctx") }, vacuous: "is not the one running"},
-		{name: "CTX_LIB is HOME", tweak: func(e *unEnv) { lineTo(e.home, true)(e) }, vacuous: "it is your home directory or holds it"},
-		{name: "CTX_LIB not named ctx", tweak: func(e *unEnv) { lineTo(filepath.Join(e.prefix, "lib", "notctx"), true)(e) }, vacuous: "its name is not 'ctx'"},
+		}, bin: func(e *unEnv) string { return filepath.Join(e.root, "other", "bin", "ctx") }, vacuous: "is not the one running", libUnknown: true},
+		{name: "CTX_LIB is HOME", tweak: func(e *unEnv) { lineTo(e.home, true)(e) }, lib: func(e *unEnv) string { return e.home }, vacuous: "it is your home directory or holds it"},
+		{name: "CTX_LIB not named ctx", tweak: func(e *unEnv) { lineTo(filepath.Join(e.prefix, "lib", "notctx"), true)(e) },
+			lib: func(e *unEnv) string { return filepath.Join(e.prefix, "lib", "notctx") }, vacuous: "its name is not 'ctx'"},
 		{name: "CTX_LIB is CTX_DIR's parent", tweak: func(e *unEnv) { lineTo(filepath.Join(e.root, "ctx"), true)(e) },
+			lib: func(e *unEnv) string { return filepath.Join(e.root, "ctx") },
 			env: func(e *unEnv) []string { return []string{"CTX_DIR=" + filepath.Join(e.root, "ctx", ".ctx")} }, vacuous: "it is the parent of CTX_DIR"},
 		{name: "CTX_LIB holds CTX_DIR", env: func(e *unEnv) []string {
 			return []string{"CTX_DIR=" + filepath.Join(e.prefix, "lib", "ctx", "a", ".ctx")}
@@ -472,31 +507,83 @@ func TestUninstallSafety(t *testing.T) {
 			_ = os.MkdirAll(filepath.Join(e.root, "ln"), 0o755)
 			_ = os.Symlink(filepath.Join(e.prefix, "lib", "ctx"), filepath.Join(e.root, "ln", "ctx"))
 			lineTo(filepath.Join(e.root, "ln", "ctx"), false)(e)
-		}, vacuous: "it is a symlink"},
+		}, lib: func(e *unEnv) string { return filepath.Join(e.root, "ln", "ctx") }, vacuous: "it is a symlink"},
 		{name: "CTX_LIB missing", tweak: func(e *unEnv) {
 			lineTo(filepath.Join(e.root, "gone", "ctx"), false)(e)
 			copyLib(e.p.t, filepath.Join(e.prefix, "bin")) // bin/ctx falls back to its own dir
-		}, vacuous: "but this ctx runs from"},
-		{name: "purge CTX_DIR is /", args: []string{"--purge"}, env: func(*unEnv) []string { return []string{"CTX_DIR=/"} }, vacuous: "Refusing to remove /: it is /."},
+		}, lib: func(e *unEnv) string { return filepath.Join(e.root, "gone", "ctx") }, vacuous: "but this ctx runs from"},
+		{name: "CTX_LIB has a .. component", tweak: func(e *unEnv) {
+			_ = os.MkdirAll(filepath.Join(e.prefix, "lib", "x"), 0o755)
+			lineTo(filepath.Join(e.prefix, "lib")+"/x/../ctx", false)(e) // not Join: it would clean the ..
+		}, lib: func(e *unEnv) string { return filepath.Join(e.prefix, "lib") + "/x/../ctx" }, vacuous: "it has a . or .. component"},
+		{name: "purge CTX_DIR .. after a symlink", args: []string{"--purge"}, tweak: func(e *unEnv) {
+			// Lexically z/l/../home is z/home (a ctx dir); the kernel follows l
+			// to x first, so it is x/../home: HOME.
+			_ = os.MkdirAll(filepath.Join(e.root, "x"), 0o755)
+			_ = os.MkdirAll(filepath.Join(e.root, "z", "home"), 0o755)
+			_ = os.WriteFile(filepath.Join(e.root, "z", "home", "config"), nil, 0o644)
+			_ = os.Symlink(filepath.Join(e.root, "x"), filepath.Join(e.root, "z", "l"))
+		}, env: func(e *unEnv) []string { return []string{"CTX_DIR=" + e.root + "/z/l/../home"} }, vacuous: "it has a . or .. component"},
+		{name: "purge CTX_DIR symlink with //", args: []string{"--purge"}, tweak: func(e *unEnv) { _ = os.Symlink(e.ctxDir, filepath.Join(e.home, "link.ctx")) },
+			env: func(e *unEnv) []string { return []string{"CTX_DIR=" + filepath.Join(e.home, "link.ctx") + "//"} }, vacuous: "it is a symlink"},
+		{name: "purge pass not installed", args: []string{"--purge"}, env: func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=pass"} },
+			vacuous: "Refusing to purge: the pass password store (pass) is not available here"},
+		{name: "purge CTX_DIR is /", args: []string{"--purge"}, outside: true, env: func(*unEnv) []string { return []string{"CTX_DIR=/"} }, vacuous: "Refusing to remove /: it is /."},
 		{name: "purge CTX_DIR is HOME", args: []string{"--purge"}, env: func(e *unEnv) []string { return []string{"CTX_DIR=" + e.home} }, vacuous: "it is your home directory or holds it"},
 		{name: "purge CTX_DIR holds HOME", args: []string{"--purge"}, env: func(e *unEnv) []string { return []string{"CTX_DIR=" + e.root} }, vacuous: "it is your home directory or holds it"},
 		{name: "purge CTX_DIR odd name", args: []string{"--purge"}, tweak: func(e *unEnv) { _ = os.MkdirAll(filepath.Join(e.root, "docs", "x"), 0o755) },
 			env: func(e *unEnv) []string { return []string{"CTX_DIR=" + filepath.Join(e.root, "docs")} }, vacuous: "does not look like a ctx data directory"},
 		{name: "purge CTX_DIR symlink", args: []string{"--purge"}, tweak: func(e *unEnv) { _ = os.Symlink(e.ctxDir, filepath.Join(e.home, "link.ctx")) },
 			env: func(e *unEnv) []string { return []string{"CTX_DIR=" + filepath.Join(e.home, "link.ctx")} }, vacuous: "it is a symlink"},
-		{name: "purge CTX_DIR relative", args: []string{"--purge"}, tweak: func(e *unEnv) { _ = os.MkdirAll(filepath.Join(e.root, "rel", ".ctx"), 0o755) },
+		{name: "purge CTX_DIR relative", args: []string{"--purge"}, outside: true, tweak: func(e *unEnv) { _ = os.MkdirAll(filepath.Join(e.root, "rel", ".ctx"), 0o755) },
 			env: func(*unEnv) []string { return []string{"CTX_DIR=rel/.ctx"} }, vacuous: "it is not an absolute path"},
 	}
 	for i := range cases {
-		cases[i].stdin = "n\n"
-		cases[i].wantCode = 1
-		v := cases[i].vacuous
-		cases[i].check = func(t *testing.T, e *unEnv, r unRun) {
+		c := &cases[i]
+		c.stdin = "y\n"
+		if c.outside {
+			c.stdin = "n\n"
+		}
+		c.wantCode = 1
+		v, cc := c.vacuous, *c
+		c.check = func(t *testing.T, e *unEnv, r unRun) {
 			if !strings.Contains(r.stderr, "Refusing") || !strings.Contains(r.stderr, v) {
 				t.Errorf("want a refusal with %q, stderr %q", v, r.stderr)
 			}
 			if strings.Contains(r.stderr, "Continue?") {
 				t.Errorf("prompted before refusing: %q", r.stderr)
+			}
+			onPath := filepath.Join(e.prefix, "bin", "ctx")
+			if cc.onPath != nil {
+				onPath = cc.onPath(e)
+			}
+			want := "→ To uninstall by hand, remove:\n  " + onPath + "\n"
+			if exists(bashDirname(onPath) + "/ctx-core") {
+				want += "  " + bashDirname(onPath) + "/ctx-core\n"
+			}
+			switch {
+			case cc.libUnknown:
+				want += "  its lib dir (the CTX_LIB= line in " + onPath + ", if any)\n"
+			case cc.lib != nil:
+				want += "  " + cc.lib(e) + "\n"
+			default:
+				want += "  " + filepath.Join(e.prefix, "lib", "ctx") + "\n"
+			}
+			if len(cc.args) > 0 {
+				dir := e.ctxDir
+				var env []string
+				if cc.env != nil {
+					env = cc.env(e)
+				}
+				for _, kv := range env {
+					if v, ok := strings.CutPrefix(kv, "CTX_DIR="); ok {
+						dir = v
+					}
+				}
+				want += "  " + dir + "\n  Delete each profile's secrets first: ctx secret list <profile>, then ctx secret delete <profile> <KEY>.\n"
+			}
+			if !strings.HasSuffix(r.stdout, want) {
+				t.Errorf("manual list: stdout %q\nwant suffix %q", r.stdout, want)
 			}
 		}
 	}

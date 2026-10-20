@@ -1833,6 +1833,13 @@ test_uninstall_removes_install_and_purges() {
     out="$(printf 'n\n' | ctx --no-gum uninstall 2>&1)" && { echo "No should fail: $out"; exit 1; }
     [[ -f "$p/bin/ctx" ]] || { echo "No removed files"; exit 1; }
 
+    # a secret that cannot be deleted stops everything
+    chmod 500 "$CTX_DIR/secrets/acme"
+    out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" && { echo "left secret should fail: $out"; exit 1; }
+    [[ "$out" == *"Could not delete from the file store for acme: API_KEY"* && -f "$p/bin/ctx" && -d "$CTX_DIR" ]] \
+      || { echo "secret failure: $out"; exit 1; }
+    chmod 700 "$CTX_DIR/secrets/acme"
+
     out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" || { echo "uninstall: $out"; exit 1; }
     [[ ! -e "$p/bin/ctx" && ! -e "$p/bin/ctx-core" && ! -e "$p/lib/ctx" && ! -e "$CTX_DIR" ]] || { echo "left behind: $(find "$td" | head -20)"; exit 1; }
     [[ -d "$p/lib" && -d "$HOME" ]] || { echo "removed too much"; exit 1; }
@@ -1849,37 +1856,48 @@ test_uninstall_refuses_unsafe_paths() {
     td="$(cd "$(mktemp -d)" && pwd -P)"
     trap 'rm -rf "$td"' EXIT
     export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_GLOBAL="$td/home/.gitconfig" GIT_CONFIG_NOSYSTEM=1
-    export PATH="/usr/bin:/bin:/usr/sbin:/sbin" # never the real install
+    export PATH="/usr/bin:/bin:/usr/sbin:/sbin" CTX_SECRET_PROVIDER=file # never the real install
     unset CTX_NO_GUM CTX_CORE_BIN
     p="$td/prefix"
     _t_fake_install "$p"
-    mkdir -p "$CTX_DIR/profiles" "$td/links" "$td/checkout/bin" "$td/checkout/.git"
+    mkdir -p "$CTX_DIR/profiles" "$td/links" "$td/checkout/bin" "$td/checkout/.git" "$td/x" "$td/z/home"
     ln -s "$p/bin/ctx" "$td/links/ctx"
     cp "$ROOT_DIR/bin/ctx" "$td/checkout/bin/ctx"; cp -R "$ROOT_DIR/lib" "$td/checkout/lib"
+    # z/l/../home is z/home (a ctx dir) lexically, but HOME for the kernel (l -> x).
+    ln -s "$td/x" "$td/z/l"; : >"$td/z/home/config"
+    ln -s "$CTX_DIR" "$HOME/link.ctx"
     before="$(cd "$td" && find . | LC_ALL=C sort)"
-    # _refuse WANT CTX PATH-DIR [VAR=value...]: a refusal before any prompt and no
-    # change. It answers No, so a missing guard aborts at the prompt instead of
-    # deleting (CTX_DIR=/ below).
+    # _refuse ANSWER WANT CTX PATH-DIR [VAR=value...]: a refusal before any
+    # prompt, the list of what to remove by hand, and no change. Inside the
+    # sandbox it answers y (typed ahead: the refusal must come before any
+    # deletion); a CTX_DIR outside it answers n, so a missing guard would stop
+    # at the prompt instead of deleting (CTX_DIR=/).
     _refuse() {
-      local want="$1" bin="$2" pre="$3"; shift 3
-      rc=0; out="$(printf 'n\n' | env PATH="$pre:$PATH" "$@" "$bin" --no-gum uninstall --purge 2>&1)" || rc=$?
+      local answer="$1" want="$2" bin="$3" pre="$4"; shift 4
+      rc=0; out="$(printf '%s\n' "$answer" | env PATH="$pre:$PATH" "$@" "$bin" --no-gum uninstall --purge 2>&1)" || rc=$?
       [[ $rc -eq 1 && "$out" == *"$want"* ]] || { echo "want refusal '$want', exit $rc: $out"; exit 1; }
       [[ "$out" != *"Continue?"* ]] || { echo "asked before refusing: $out"; exit 1; }
+      local on_path; on_path="$(PATH="$pre:$PATH" command -v ctx)"
+      [[ "$out" == *"To uninstall by hand, remove:"$'\n'"  $on_path"$'\n'*"ctx secret delete <profile> <KEY>"* ]] \
+        || { echo "manual list: $out"; exit 1; }
       [[ "$(cd "$td" && find . | LC_ALL=C sort)" == "$before" ]] || { echo "files changed after: $want"; exit 1; }
     }
-    _refuse "is a symlink" "$td/links/ctx" "$td/links"
-    _refuse "no installer CTX_LIB line" "$td/checkout/bin/ctx" "$td/checkout/bin"
-    _refuse "is not the one running" "$td/checkout/bin/ctx" "$p/bin"
-    _refuse "Refusing to remove /: it is /" "$p/bin/ctx" "$p/bin" CTX_DIR=/
-    _refuse "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME"
-    _refuse "does not look like a ctx data directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/checkout"
+    _refuse y "is a symlink" "$td/links/ctx" "$td/links"
+    _refuse y "no installer CTX_LIB line" "$td/checkout/bin/ctx" "$td/checkout/bin"
+    _refuse y "is not the one running" "$td/checkout/bin/ctx" "$p/bin"
+    _refuse n "Refusing to remove /: it is /" "$p/bin/ctx" "$p/bin" CTX_DIR=/
+    _refuse y "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME"
+    _refuse y "does not look like a ctx data directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/checkout"
+    _refuse y "it has a . or .. component" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/z/l/../home"
+    _refuse y "it is a symlink" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME/link.ctx//"
+    _refuse y "the pass password store (pass) is not available here" "$p/bin/ctx" "$p/bin" CTX_SECRET_PROVIDER=pass
     # a hand-edited CTX_LIB pointing at HOME (with the scripts in it, so ctx runs)
     cp "$ROOT_DIR"/lib/*.sh "$HOME/"
     sed -i.bak "9s|^CTX_LIB=.*|CTX_LIB=\"$HOME\"|" "$p/bin/ctx" && rm -f "$p/bin/ctx.bak"
     before="$(cd "$td" && find . | LC_ALL=C sort)"
-    _refuse "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin"
-  ) || fail "uninstall refuses symlinks, checkouts, /, HOME and odd data dirs"
-  pass "uninstall refuses symlinks, checkouts, /, HOME and odd data dirs"
+    _refuse y "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin"
+  ) || fail "uninstall refuses symlinks, checkouts, .., /, HOME and odd data dirs"
+  pass "uninstall refuses symlinks, checkouts, .., /, HOME and odd data dirs"
 }
 
 test_valid_env_keys
