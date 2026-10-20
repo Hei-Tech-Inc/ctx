@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -21,6 +22,30 @@ const (
 	ansiReset = "\033[0m"
 	ansiGreen = "\033[0;32m"
 )
+
+// ErrWriteFailed is Write's error when a step could not write its file. The
+// step has printed its own error line; the caller exits 1 without more output.
+var ErrWriteFailed = errors.New("setup: a file could not be written")
+
+// errText is the OS reason in err ("permission denied"), without the path the
+// message already names.
+func errText(err error) string {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Err.Error()
+	}
+	return err.Error()
+}
+
+// couldNot prints "✗ Could not <what>: <reason>" (Bash prints the same
+// without the reason, which a shell cannot get).
+func couldNot(u Out, what string, err error) {
+	u.Error("Could not " + what + ": " + errText(err))
+}
 
 func streams(u Out) (stdout, stderr io.Writer) {
 	if t, ok := u.(Terminal); ok {
@@ -151,20 +176,21 @@ func setSigning(stdout, stderr io.Writer, file, format, key string) {
 
 // Backups is the three backup_file calls cmd_import makes before _write_all:
 // ~/.gitconfig, the profile's git identity file and ~/.ssh/ctx_config.
-// Missing files are skipped. ctxconfig.InitDirs must have run.
+// Missing files are skipped. ctxconfig.InitDirs must have run. The first
+// failure stops it with the error "Could not back up <path>: <reason>"; Bash
+// dies with that text (without the reason) before writing anything.
 func Backups(in Inputs) error {
 	home := os.Getenv("HOME")
-	var first error
 	for _, f := range []string{
-		filepath.Join(home, ".gitconfig"),
-		filepath.Join(home, ".config", "git", "ctx-"+in.Profile),
+		home + "/.gitconfig",
+		home + "/.config/git/ctx-" + in.Profile,
 		gitssh.SSHConfigPath(),
 	} {
-		if err := ctxconfig.BackupFile(f); err != nil && first == nil {
-			first = err
+		if err := ctxconfig.BackupFile(f); err != nil {
+			return errors.New("Could not back up " + f + ": " + errText(err))
 		}
 	}
-	return first
+	return nil
 }
 
 // Write ports _write_all, preceded by the storage of in.PendingSecrets (R4;
@@ -176,8 +202,10 @@ func Backups(in Inputs) error {
 //  4. the SSH host block (AddHost) and, with WorkDir, the insteadOf rewrite;
 //  5. WorkDir/mise.toml (kept when it exists) and `mise trust`.
 //
-// git writes its own output to u's Streams. The only error returned is a
-// failure to write the .conf; other failures are ignored as in Bash.
+// git writes its own output to u's Streams. A step that cannot write its file
+// prints "✗ Could not write <path>: <reason>" instead of its success line;
+// the .conf stops Write at once, the other steps let the rest run. Either way
+// Write returns ErrWriteFailed (Bash: exit 1).
 func Write(in Inputs, u Out) error {
 	storeSecrets(&in, u)
 	stdout, stderr := streams(u)
@@ -197,8 +225,10 @@ func Write(in Inputs, u Out) error {
 	profDir := ctxDir() + "/profiles"
 	_ = os.MkdirAll(profDir, 0o777)
 	if err := writePrivate(profDir+"/"+p+".conf", []byte(confBody(in, sf, sk))); err != nil {
-		return err
+		couldNot(u, "write "+profDir+"/"+p+".conf", err)
+		return ErrWriteFailed
 	}
+	failed := false
 	u.Success("Profile config written")
 
 	// 2. Git identity file (used by includeIf).
@@ -227,9 +257,13 @@ func Write(in Inputs, u Out) error {
 
 	// 3. ~/.gitconfig includeIf — one block, deduped.
 	if wd != "" {
-		if gitssh.GitconfigAddInclude(wd, id) {
+		switch added, err := gitssh.GitconfigAddInclude(wd, id); {
+		case err != nil:
+			couldNot(u, "write "+home+"/.gitconfig", err)
+			failed = true
+		case added:
 			u.Success("gitconfig includeIf added for " + wd)
-		} else {
+		default:
 			u.Dim("  gitconfig includeIf already present")
 		}
 	}
@@ -237,9 +271,13 @@ func Write(in Inputs, u Out) error {
 	// 4. SSH host block in ~/.ssh/ctx_config (never ~/.ssh/config).
 	if sshKey != "" && isFile(sshKey) {
 		host := "github-" + p
-		if added, _ := gitssh.AddHost(host, sshKey); added {
+		switch added, err := gitssh.AddHost(host, sshKey); {
+		case err != nil:
+			couldNot(u, "write "+gitssh.SSHConfigPath(), err)
+			failed = true
+		case added:
 			u.Success("SSH host '" + host + "' → ~/.ssh/ctx_config")
-		} else {
+		default:
 			u.Dim("  SSH host '" + host + "' already in ctx_config")
 		}
 		if wd != "" {
@@ -256,8 +294,10 @@ func Write(in Inputs, u Out) error {
 		toml := wd + "/mise.toml"
 		if isFile(toml) {
 			u.Dim("  mise.toml kept (already exists): " + toml)
+		} else if err := generateMise(in, toml); err != nil {
+			couldNot(u, "write "+toml, err)
+			failed = true
 		} else {
-			generateMise(in, toml)
 			u.Success("mise.toml generated: " + toml)
 		}
 		if isFile(toml) {
@@ -268,19 +308,26 @@ func Write(in Inputs, u Out) error {
 			}
 		}
 	}
+	if failed {
+		return ErrWriteFailed
+	}
 	return nil
 }
 
 // generateMise is generate_mise_toml for a missing file: write it, run
-// `mise trust` (output discarded) when mise is installed, and log.
-func generateMise(in Inputs, toml string) {
+// `mise trust` (output discarded) when mise is installed, and log. A failed
+// write returns before trust and log, as Bash does.
+func generateMise(in Inputs, toml string) error {
 	body := MiseTOML(in.Profile, in.GitName, in.GitEmail, in.AWSProfile, in.AzureSub, in.GCPProject,
 		in.KubeContext, strings.Join(in.SecretKeys, " "), extraEnvsText(in.ExtraEnvs))
-	_ = os.WriteFile(toml, []byte(body), 0o666)
+	if err := os.WriteFile(toml, []byte(body), 0o666); err != nil {
+		return err
+	}
 	if hasTool("mise") {
 		_ = exec.Command("mise", "trust", toml).Run()
 	}
 	ctxconfig.Log("Generated mise.toml at " + toml)
+	return nil
 }
 
 // DryRunReport prints what a --dry-run setup shows once the review is skipped:

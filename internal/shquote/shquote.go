@@ -32,10 +32,12 @@ func utf8Locale() bool {
 //     >= 0x80 otherwise) is $'…' with C escapes (\a \b \t \n \v \f \r \E,
 //     \\ and \', other bytes as \ooo);
 //   - otherwise shell metacharacters get a backslash: space, tab, newline,
-//     ' " \ | & ; ( ) < > ! { } * [ ? ] ^ $ ` and comma anywhere, # and ~ only
-//     as the first character.
+//     ' " \ | & ; ( ) < > ! { } * [ ? ] ^ $ ` and comma anywhere, # only as
+//     the first character, ~ as the first character or after = or :.
 //
-// bash 3.2 differs only in leaving a leading ~ unquoted.
+// The result is eval-safe in assignments (no tilde expansion). Older bash
+// differs only in quoting fewer tildes: 3.2 none, bash before 5.3 possibly
+// not the ones after = or : (R21).
 func Quote(s string) string {
 	if s == "" {
 		return "''"
@@ -51,8 +53,14 @@ func Quote(s string) string {
 		case ' ', '\t', '\n', '\'', '"', '\\', '|', '&', ';', '(', ')', '<', '>',
 			'!', '{', '}', '*', '[', '?', ']', '^', '$', '`', ',':
 			b.WriteByte('\\')
-		case '#', '~':
+		case '#':
 			if i == 0 {
+				b.WriteByte('\\')
+			}
+		case '~':
+			// bash 5.3 also quotes a tilde after = or :, where an assignment
+			// would tilde-expand it (bash; zsh with MAGIC_EQUAL_SUBST).
+			if i == 0 || s[i-1] == '=' || s[i-1] == ':' {
 				b.WriteByte('\\')
 			}
 		}

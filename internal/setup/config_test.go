@@ -187,3 +187,4 @@ func (r recOut) Warn(s string)    {}
 func (r recOut) Dim(s string)     {}
 func (r recOut) Bold(s string)    {}
 func (r recOut) Say(s string)     {}
+func (r recOut) Error(s string)   {}

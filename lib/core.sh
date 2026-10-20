@@ -700,13 +700,13 @@ ctx_secret_provider_available() {
 }
 
 # ─── Backup ────────────────────────────────────────────────────────────────────
+# Returns 1 when the copy could not be made (a missing src is not an error).
 backup_file() {
   local src="$1"
   [[ -f "$src" ]] || return 0
   local stamp; stamp=$(date '+%Y%m%d-%H%M%S')
   local bdir="${CTX_DIR}/backups/$stamp"
-  mkdir -p "$bdir"
-  cp "$src" "$bdir/$(basename "$src")"
+  { mkdir -p "$bdir" && cp -f "$src" "$bdir/$(basename "$src")"; } 2>/dev/null || return 1
   echo "$src" >> "$bdir/manifest.txt"
   log "Backed up $src → $bdir"
 }
@@ -1045,7 +1045,8 @@ ensure_ssh_include() {
   log "Added Include $CTX_SSH_CONFIG to $ssh_main"
 }
 
-# Write a host block to our ctx_config file, never to ~/.ssh/config
+# Write a host block to our ctx_config file, never to ~/.ssh/config.
+# Returns 0 added, 1 already present, 2 the file could not be written.
 ctx_ssh_add_host() {
   local host="$1" key_path="$2"
 
@@ -1062,7 +1063,7 @@ ctx_ssh_add_host() {
     echo "  User git"
     echo "  IdentityFile $key_path"
     echo "  IdentitiesOnly yes"
-  } >> "$CTX_SSH_CONFIG"
+  } 2>/dev/null >>"$CTX_SSH_CONFIG" || return 2
   chmod 600 "$CTX_SSH_CONFIG"
   log "Added SSH host $host to $CTX_SSH_CONFIG"
   return 0
@@ -1083,6 +1084,7 @@ ctx_ssh_remove_host() {
 }
 
 # ─── Safe .gitconfig (writes includeIf, deduped) ─────────────────────────────
+# Returns 0 added, 1 already present, 2 ~/.gitconfig could not be written.
 gitconfig_add_include() {
   local work_dir="$1" identity_file="$2"
   local gitconfig="$HOME/.gitconfig"
@@ -1094,7 +1096,7 @@ gitconfig_add_include() {
     echo ""
     echo "[includeIf \"gitdir:${work_dir}/\"]"
     echo "  path = ${identity_file}"
-  } >> "$gitconfig"
+  } 2>/dev/null >>"$gitconfig" || return 2
   log "Added includeIf for $work_dir to ~/.gitconfig"
   return 0
 }
@@ -1171,6 +1173,7 @@ _ctx_toml_sh_dq() {
   _ctx_toml_escape "$out"
 }
 
+# Returns 2 when the file could not be written.
 generate_mise_toml() {
   local profile="$1"
   local work_dir="$2"
@@ -1280,7 +1283,7 @@ generate_mise_toml() {
     fi
     echo "\"\"\""
 
-  } > "$toml_file"
+  } 2>/dev/null >"$toml_file" || return 2
 
   # Trust the file so mise doesn't prompt
   if command -v mise &>/dev/null; then

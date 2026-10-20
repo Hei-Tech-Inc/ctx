@@ -209,9 +209,11 @@ func SetupIn(t tui.Term, args []string) int {
 		setup.DryRunReport(in, so)
 		return 0
 	}
-	_ = setup.Backups(in)
-	if err := setup.Write(in, so); err != nil {
+	if err := setup.Backups(in); err != nil {
 		return u.die(err.Error())
+	}
+	if err := setup.Write(in, so); err != nil {
+		return 1 // Write printed the failing step's error line
 	}
 	setup.Summary(in, so, t.Rich)
 	return 0

@@ -31,14 +31,16 @@ type Inputs struct {
 }
 
 // Out is the styled output the setup code needs. internal/cli adapts it to
-// its Bash-identical ui helpers; errors are printed by the caller.
+// its Bash-identical ui helpers. Error is Bash's error (stderr); dies are
+// returned as *DieError for the caller to print.
 type Out interface {
 	Info(string)
 	Success(string)
 	Warn(string)
 	Dim(string)
 	Bold(string)
-	Say(string) // plain echo "$s"
+	Say(string)   // plain echo "$s"
+	Error(string) // ✗ line on stderr
 }
 
 // Terminal is optionally implemented by an Out. Colors reports whether ANSI

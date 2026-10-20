@@ -51,23 +51,27 @@ func EnsureInclude() {
 
 // GitconfigAddInclude mirrors gitconfig_add_include: append an includeIf for
 // workDir to ~/.gitconfig unless identityFile is already mentioned there.
-// It reports whether it added the block.
-func GitconfigAddInclude(workDir, identityFile string) bool {
+// It reports whether it added the block; err is a failed append (Bash
+// returns 2 then).
+func GitconfigAddInclude(workDir, identityFile string) (added bool, err error) {
 	gitconfig := filepath.Join(os.Getenv("HOME"), ".gitconfig")
 	if data, err := os.ReadFile(gitconfig); err == nil && strings.Contains(string(data), identityFile) {
-		return false
+		return false, nil
 	}
 	_ = ctxconfig.BackupFile(gitconfig)
 	f, err := os.OpenFile(gitconfig, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
-		return false
+		return false, err
 	}
-	defer f.Close()
-	if _, err := f.WriteString("\n[includeIf \"gitdir:" + workDir + "/\"]\n  path = " + identityFile + "\n"); err != nil {
-		return false
+	_, err = f.WriteString("\n[includeIf \"gitdir:" + workDir + "/\"]\n  path = " + identityFile + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return false, err
 	}
 	ctxconfig.Log("Added includeIf for " + workDir + " to ~/.gitconfig")
-	return true
+	return true, nil
 }
 
 // HasHost reports whether ctx_config has the line "Host <host>" (grep
@@ -88,8 +92,8 @@ func HasHost(host string) bool {
 
 // AddHost mirrors ctx_ssh_add_host: after EnsureInclude, append a host block
 // for host using key to ctx_config (never ~/.ssh/config) and leave the file
-// at mode 0600. added is false when the host is already there. err reports a
-// failed append; Bash prints the shell's redirect error and goes on.
+// at mode 0600. added is false when the host is already there or the append
+// failed (err; Bash returns 2 then, before the chmod and the log line).
 func AddHost(host, key string) (added bool, err error) {
 	EnsureInclude()
 	if HasHost(host) {
@@ -103,7 +107,10 @@ func AddHost(host, key string) (added bool, err error) {
 			err = cerr
 		}
 	}
+	if err != nil {
+		return false, err
+	}
 	_ = os.Chmod(path, 0o600)
 	ctxconfig.Log("Added SSH host " + host + " to " + path)
-	return true, err
+	return true, nil
 }

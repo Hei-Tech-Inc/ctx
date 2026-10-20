@@ -40,6 +40,10 @@ func newBatchEnv(t *testing.T) *batchEnv {
 	if err != nil {
 		t.Skip("bash not available")
 	}
+	// The fixtures' quoting (é, %q) follows bash 4+; macOS /bin/bash 3.2 differs.
+	if v, err := exec.Command(realBash, "-c", `echo "${BASH_VERSINFO[0]}"`).Output(); err != nil || strings.TrimSpace(string(v)) < "4" {
+		t.Skipf("bash on PATH is older than 4 (%s)", v)
+	}
 	td, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +129,11 @@ type batchRun struct {
 	argv           map[string][][]string
 }
 
-var generatedRE = regexp.MustCompile(`# Generated: [^\n]*`)
+var (
+	generatedRE = regexp.MustCompile(`# Generated: [^\n]*`)
+	// Go adds the OS reason to a failed write; a shell cannot get it.
+	couldNotRE = regexp.MustCompile(`(Could not (?:write|back up) \S+): [^\n]*`)
+)
 
 func (e *batchEnv) collect(t *testing.T, stdout, stderr string, code int) batchRun {
 	t.Helper()
@@ -139,6 +147,7 @@ func (e *batchEnv) collect(t *testing.T, stdout, stderr string, code int) batchR
 			argv[name] = testutil.ReadArgv(t, log)
 		}
 	}
+	stderr = couldNotRE.ReplaceAllString(stderr, "$1")
 	return batchRun{stdout, stderr, code, tree, argv}
 }
 
@@ -234,6 +243,33 @@ func seedAcme(e *batchEnv) {
 	}
 }
 
+// seedUnwritable makes ~/.gitconfig read-only, ~/.ssh/ctx_config a directory
+// and ~/ro a read-only folder, so the includeIf, host block and mise.toml
+// writes fail.
+func seedUnwritable(e *batchEnv) {
+	_ = os.Chmod(filepath.Join(e.home, ".gitconfig"), 0o444)
+	_ = os.MkdirAll(filepath.Join(e.home, ".ssh", "ctx_config"), 0o755)
+	_ = os.MkdirAll(filepath.Join(e.home, "ro"), 0o555)
+	_ = os.Chmod(filepath.Join(e.home, "ro"), 0o555)
+}
+
+// checkUnwritable: each failed step prints its error instead of its success
+// line, the other steps still run, and setup exits 1 without a summary.
+func checkUnwritable(t *testing.T, r batchRun) {
+	t.Helper()
+	if r.code != 1 || strings.Count(r.stderr, "✗ Could not write ") != 3 {
+		t.Errorf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	for _, s := range []string{"includeIf added", "→ ~/.ssh/ctx_config", "mise.toml generated", "created."} {
+		if strings.Contains(r.stdout, s) {
+			t.Errorf("stdout has %q:\n%s", s, r.stdout)
+		}
+	}
+	if !strings.Contains(r.stdout, "Git identity file") {
+		t.Errorf("the identity step should still run:\n%s", r.stdout)
+	}
+}
+
 type batchCase struct {
 	name  string
 	conf  string // @HOME@ is replaced
@@ -242,6 +278,7 @@ type batchCase struct {
 	seed  func(e *batchEnv)
 	stdin string
 	want  string // a substring Bash must print (stdout+stderr), so a case cannot pass vacuously
+	check func(t *testing.T, r batchRun)
 }
 
 func batchCases(t *testing.T) []batchCase {
@@ -272,6 +309,8 @@ func batchCases(t *testing.T) []batchCase {
 			conf: "PROFILE_NAME=acme\nGIT_NAME=A\nGIT_EMAIL=a@acme.com\nOVERWRITE=true\nWORK_SLUG=acme\n"},
 		{name: "OVERWRITE=true dry-run", args: []string{"--yes"}, seed: seedAcme, dry: true, want: "Would create:",
 			conf: "PROFILE_NAME=acme\nGIT_NAME=A\nOVERWRITE=true\n"},
+		{name: "unwritable gitconfig, ctx_config and folder", args: []string{"--yes"}, seed: seedUnwritable,
+			want: "Could not write ", check: checkUnwritable, conf: "PROFILE_NAME=ro\nGIT_NAME=R\nGIT_EMAIL=r@x.io\nWORK_DIR=~/ro\nSSH_MODE=existing\nSSH_KEY_PATH=~/.ssh/id_work\n"},
 		{name: "ssh-keygen fails", args: []string{"--yes"}, want: "ssh-keygen failed for",
 			conf: "PROFILE_NAME=keyfail\nGIT_NAME=K\n"},
 		{name: "bad signing leaves nothing", args: []string{"--yes"}, want: "SIGNING_FORMAT must be ssh|gpg|none",
@@ -305,6 +344,9 @@ func (e *batchEnv) confArgs(t *testing.T, c batchCase) []string {
 // command: output, exit code, every file under HOME (backups included, stamps
 // normalized) and the argv of git, ssh-keygen, mise and gh.
 func TestBatchMatchesBash(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based cases need a non-root user")
+	}
 	start := time.Now()
 	e := newBatchEnv(t)
 	stamp, _ := time.ParseInLocation("20060102-150405", batchStamp, time.Local)
@@ -317,6 +359,9 @@ func TestBatchMatchesBash(t *testing.T) {
 			want := e.bash(t, c.dry, c.stdin, e.confArgs(t, c)...)
 			if !strings.Contains(want.stdout+want.stderr, c.want) {
 				t.Fatalf("bash output lacks %q:\n%s%s", c.want, want.stdout, want.stderr)
+			}
+			if c.check != nil {
+				c.check(t, want)
 			}
 			e.reset(t, c.seed)
 			got := e.goRun(t, c.dry, c.stdin, e.confArgs(t, c)...)

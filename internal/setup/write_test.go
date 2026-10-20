@@ -258,3 +258,26 @@ func TestDryRunReportAndSummary(t *testing.T) {
 		t.Errorf("extend summary\n got %q\nwant %q", u.lines, wantExt)
 	}
 }
+
+// TestWriteReportsFailedSteps: a step that cannot write prints its error
+// instead of its success line, the rest still runs, and Write fails.
+func TestWriteReportsFailedSteps(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("needs a non-root user")
+	}
+	home := writeHome(t)
+	write(t, filepath.Join(home, ".gitconfig"), "[user]\n")
+	if err := os.Chmod(filepath.Join(home, ".gitconfig"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	in := Inputs{Scope: "full", Profile: "acme", GitName: "N", GitEmail: "n@x.io", WorkDir: filepath.Join(home, "w")}
+	var u termOut
+	if err := Write(in, &u); err != ErrWriteFailed {
+		t.Fatalf("err = %v", err)
+	}
+	all := strings.Join(u.lines, "\n")
+	if !strings.Contains(all, "error:Could not write "+home+"/.gitconfig: permission denied") ||
+		strings.Contains(all, "includeIf added") || !strings.Contains(all, "mise.toml generated") {
+		t.Errorf("lines:\n%s", all)
+	}
+}

@@ -956,9 +956,10 @@ cmd_import() {
   fi
 
   # ── Write everything ────────────────────────────────────────────────────
-  backup_file "$HOME/.gitconfig"
-  backup_file "$HOME/.config/git/ctx-${PROFILE_NAME}"
-  backup_file "$CTX_SSH_CONFIG"
+  local _bf
+  for _bf in "$HOME/.gitconfig" "$HOME/.config/git/ctx-${PROFILE_NAME}" "$CTX_SSH_CONFIG"; do
+    backup_file "$_bf" || die "Could not back up $_bf"
+  done
 
   _write_all \
     "$PROFILE_NAME" "$GIT_NAME" "$GIT_EMAIL" "$WORK_DIR" \
@@ -1138,6 +1139,10 @@ _write_all() {
     signing_format=""
   fi
 
+  # A step that cannot write prints an error instead of its success line;
+  # the other steps still run, and setup then exits 1.
+  local _wfail=0 _rc
+
   # 1. Profile .conf — metadata only, no secrets
   mkdir -p "$CTX_PROFILES_DIR"
   {
@@ -1160,7 +1165,8 @@ _write_all() {
     printf 'EXTRA_ENVS=%q\n' "$extra_envs"
     printf 'SIGNING_FORMAT=%q\n' "$signing_format"
     printf 'SIGNING_KEY=%q\n' "$signing_key"
-  } > "$CTX_PROFILES_DIR/${profile}.conf"
+  } 2>/dev/null >"$CTX_PROFILES_DIR/${profile}.conf" \
+    || { error "Could not write $CTX_PROFILES_DIR/${profile}.conf"; exit 1; }
   chmod 600 "$CTX_PROFILES_DIR/${profile}.conf"
   success "Profile config written"
 
@@ -1186,21 +1192,25 @@ _write_all() {
 
   # 3. ~/.gitconfig includeIf — only one line added, deduped
   if [[ -n "$work_dir" ]]; then
-    if gitconfig_add_include "$work_dir" "$HOME/.config/git/ctx-${profile}"; then
-      success "gitconfig includeIf added for $work_dir"
-    else
-      dim  "  gitconfig includeIf already present"
-    fi
+    _rc=0
+    gitconfig_add_include "$work_dir" "$HOME/.config/git/ctx-${profile}" || _rc=$?
+    case "$_rc" in
+      0) success "gitconfig includeIf added for $work_dir" ;;
+      1) dim  "  gitconfig includeIf already present" ;;
+      *) error "Could not write $HOME/.gitconfig"; _wfail=1 ;;
+    esac
   fi
 
   # 4. SSH host block → ~/.ssh/ctx_config (not ~/.ssh/config directly)
   if [[ -n "$ssh_key" && -f "$ssh_key" ]]; then
     local ssh_host="github-${profile}"
-    if ctx_ssh_add_host "$ssh_host" "$ssh_key"; then
-      success "SSH host '$ssh_host' → ~/.ssh/ctx_config"
-    else
-      dim "  SSH host '$ssh_host' already in ctx_config"
-    fi
+    _rc=0
+    ctx_ssh_add_host "$ssh_host" "$ssh_key" || _rc=$?
+    case "$_rc" in
+      0) success "SSH host '$ssh_host' → ~/.ssh/ctx_config" ;;
+      1) dim "  SSH host '$ssh_host' already in ctx_config" ;;
+      *) error "Could not write $CTX_SSH_CONFIG"; _wfail=1 ;;
+    esac
     if [[ -n "$work_dir" ]]; then
       ctx_git_identity_set_rewrite "$profile"
       info "  Inside $work_dir, git@github.com: URLs use $ssh_host automatically"
@@ -1220,6 +1230,9 @@ _write_all() {
         "$secret_keys" "$extra_envs"
     then
       success "mise.toml generated: $work_dir/mise.toml"
+    else
+      error "Could not write $work_dir/mise.toml"
+      _wfail=1
     fi
     if [[ -f "$work_dir/mise.toml" ]]; then
       if command -v mise &>/dev/null; then
@@ -1229,4 +1242,5 @@ _write_all() {
       fi
     fi
   fi
+  [[ "$_wfail" == 0 ]] || exit 1
 }
