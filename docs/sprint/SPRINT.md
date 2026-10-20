@@ -56,7 +56,9 @@ Update this file when an item ships (check the box, link PR or commit).
 | E1 | `ctx mcp` in Go (`ctx-core`) | L | [x] | Phase 1 |
 | E2 | Read-only/hot-path commands in Go: `list --json`, `status --json`, `workdir-prompt`, `env`, `run`, `guard check` | M | [x] | Forwarding via `ctx-core implements`; `CTX_CORE=off` forces Bash |
 | E3 | `use` (quiet), `deactivate`, `secret get/list/delete`, `config`, `guard install/uninstall/status` | M | [x] | Autoswitch path ~152 ms to ~96 ms (median of 20, 10 profiles, fake tools) |
-| E4 | Setup wizard and text `list`/`status` with Charm libraries | L | [ ] | Still Bash: interactive `secret set`/`migrate`, non-quiet `use` (gum output), text `list`/`status`, `setup` wizard (and its `import`/`add` aliases); also `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `remove`, `undo`, `edit`, `completion`, `help` |
+| E4a | Text `list`/`status`, non-quiet `use`, `secret set`/`migrate`, `remove`/`rm`/`del`, with Charm (`internal/tui`) | M | [x] | Rich UI without gum; `ctx-core` 13.27 MB to 15.75 MB |
+| E4b | `setup` wizard with its `import`/`add` aliases, plus `Ask`/`PickOne`/`PickMany`/`Spin` | L | [ ] | |
+| E4c | Remaining Bash-only commands: `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `completion`, `help` | L | [ ] | |
 | E5 | Shell hook via `ctx hook-env` | M | [ ] | |
 | E6 | Drop Bash | L | [ ] | |
 

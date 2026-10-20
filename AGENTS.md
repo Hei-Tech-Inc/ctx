@@ -38,6 +38,7 @@ When adding scripting fields, extend **`ctx --json`** handlers in `lib/cmd_ops.s
 | CLI entry | `bin/ctx` |
 | Installer (also builds/downloads `ctx-core`) | `install.sh` |
 | `ctx-core` entry, `mcp install` | `cmd/ctx-core/` |
+| Terminal UI (rich/plain prompts, lipgloss/huh) | `internal/tui/` |
 | MCP server and tools | `internal/mcpserver/` |
 | Knowledge store, kubectl/login runner, ops | `internal/knowledge/`, `internal/kube/`, `internal/ops/` |
 | Profiles, folder resolution, secrets | `internal/profile/`, `internal/resolve/`, `internal/secret/` |
