@@ -1582,6 +1582,76 @@ test_clone_no_extra_args_bash32() {
   pass "clone with no extra args works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
 }
 
+test_verify_gh_account_and_exit_code() {
+  (
+    set -euo pipefail
+    local td out rc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$HOME/.ssh" "$HOME/work" "$CTX_DIR/profiles" "$td/fake"
+    : >"$HOME/.ssh/id_acme"
+    printf 'Host github-acme\n  HostName github.com\n' >"$HOME/.ssh/ctx_config"
+    printf 'GIT_EMAIL=a@b.co\nGITHUB_USER=alice\nWORK_DIR=%s\nSSH_KEY_PATH=%s\n' "$HOME/work" "$HOME/.ssh/id_acme" >"$CTX_DIR/profiles/acme.conf"
+    # ssh hangs (sleeps) unless it is told never to prompt
+    cat >"$td/fake/ssh" <<'EOS'
+#!/bin/sh
+printf '%s\n' "$*" >>"$FAKE_LOG/ssh.log"
+case " $* " in *" BatchMode=yes "*) ;; *) sleep 30 ;; esac
+echo "Hi acme! You've successfully authenticated, but GitHub does not provide shell access."
+exit 1
+EOS
+    cat >"$td/fake/gh" <<'EOS'
+#!/bin/sh
+cat <<EOT
+github.com
+  X Failed to log in to github.com account carol (keyring)
+  - Active account: false
+  ✓ Logged in to github.com account ${GH_FIRST:-bob} (keyring)
+  - Active account: ${GH_FIRST_ACTIVE:-false}
+  ✓ Logged in to github.com account ${GH_SECOND:-alice} (keyring)
+  - Active account: ${GH_SECOND_ACTIVE:-true}
+EOT
+EOS
+    chmod +x "$td/fake/ssh" "$td/fake/gh"
+    export FAKE_LOG="$td" PATH="$td/fake:$PATH"
+
+    rc=0; out="$("$ROOT_DIR/bin/ctx" --no-gum verify acme </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 0 ]] || { echo "all ok: exit $rc: $out"; exit 1; }
+    [[ "$out" == *"gh active user matches: alice"* && "$out" == *"verification passed"* ]] || { echo "all ok: $out"; exit 1; }
+    grep -qx -- '-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -T git@github-acme' "$td/ssh.log" \
+      || { echo "ssh argv: $(cat "$td/ssh.log")"; exit 1; }
+
+    rc=0; out="$(GH_SECOND_ACTIVE=false GH_FIRST_ACTIVE=true "$ROOT_DIR/bin/ctx" --no-gum verify acme </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 1 ]] || { echo "gh mismatch: exit $rc, want 1: $out"; exit 1; }
+    [[ "$out" == *"gh active: 'bob', profile expects: 'alice'"* && "$out" == *"found issues"* ]] || { echo "gh mismatch: $out"; exit 1; }
+  ) || fail "verify reads the active gh account and exits 1 on failure"
+  pass "verify reads the active gh account and exits 1 on failure"
+}
+
+test_clone_dry_run() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$CTX_DIR/profiles" "$td/fake"
+    echo 'GIT_EMAIL=a@b.co' >"$CTX_DIR/profiles/acme.conf"
+    printf '#!/bin/sh\necho ran >>"%s/git.ran"\n' "$td" >"$td/fake/git"
+    chmod +x "$td/fake/git"
+    out="$(PATH="$td/fake:$PATH" "$ROOT_DIR/bin/ctx" --no-gum --dry-run clone -p acme git@github.com:o/r.git 'my dir' 2>&1)" \
+      || { echo "dry-run failed: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would run: git clone git@github-acme:o/r.git my\\ dir"* ]] || { echo "dry-run: $out"; exit 1; }
+    [[ ! -e "$td/git.ran" ]] || { echo "git ran"; exit 1; }
+    out="$(PATH="$td/fake:$PATH" "$ROOT_DIR/bin/ctx" --no-gum --dry-run clone -p ghost git@github.com:o/r.git 2>&1)" && { echo "ghost: $out"; exit 1; }
+    [[ ! -e "$td/git.ran" ]] || { echo "git ran"; exit 1; }
+  ) || fail "clone --dry-run prints the git command and changes nothing"
+  pass "clone --dry-run prints the git command and changes nothing"
+}
+
 test_setup_cancel_exits_130() {
   (
     set -euo pipefail
@@ -1973,6 +2043,8 @@ test_setup_batch_checks_before_side_effects
 test_setup_cfg_quoted_bash32
 test_edit_editor_with_args
 test_clone_no_extra_args_bash32
+test_verify_gh_account_and_exit_code
+test_clone_dry_run
 test_undo_lists_backs_up_and_keeps_mode
 test_undo_ambiguous_and_same_second
 test_uninstall_removes_install_and_purges

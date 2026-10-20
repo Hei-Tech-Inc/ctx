@@ -985,6 +985,39 @@ cmd_clone() {
 }
 
 # ─── verify ───────────────────────────────────────────────────────────────────
+# The active github.com account in `gh auth status` output ($1): the one whose
+# block says "- Active account: true"; gh versions without that line list the
+# active account first. Account lines are "Logged in to github.com account USER"
+# (newer) or "... as USER" (older); "Failed to log in" is not a login.
+_ctx_gh_active_account() {
+  printf '%s\n' "$1" | awk '
+    { l = $0; t = l; sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
+    t ~ /^- Active account:/ {
+      if (cur > 0) {
+        v = t; sub(/^- Active account:/, "", v); gsub(/^[ \t]+|[ \t]+$/, "", v)
+        st[cur] = (v == "true") ? 1 : -1
+      }
+      next
+    }
+    l !~ /Logged in to / && l !~ /Failed to log in to / { next }
+    {
+      cur = 0
+      if (l ~ /Logged in to github\.com (account|as) /)
+        for (i = 1; i + 2 <= NF; i++)
+          if ($i == "github.com" && ($(i+1) == "account" || $(i+1) == "as") && $(i-1) == "to") {
+            n++; user[n] = $(i+2); cur = n; break
+          }
+    }
+    END {
+      known = 0
+      for (i = 1; i <= n; i++) {
+        if (st[i] == 1) { print user[i]; exit }
+        if (st[i] != 0) known = 1
+      }
+      if (!known && n > 0) print user[1]
+    }'
+}
+
 cmd_verify() {
   local name="${1:-}"
   ctx_init_dirs
@@ -1015,7 +1048,7 @@ cmd_verify() {
     fi
     if has ssh && [[ -f "$SSH_KEY_PATH" ]]; then
       local st
-      st=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T "git@${host}" 2>&1 || true)
+      st=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -T "git@${host}" 2>&1 || true)
       if echo "$st" | grep -qi "successfully authenticated"; then
         success "ssh -T git@${host}: OK"
       else
@@ -1030,8 +1063,7 @@ cmd_verify() {
 
   if [[ -n "${GITHUB_USER:-}" ]] && has gh; then
     local active_gh
-    active_gh=$(gh auth status 2>&1 | grep "Logged in to github.com account" \
-      | awk '{print $NF}' | tr -d '()' | head -1)
+    active_gh=$(_ctx_gh_active_account "$(gh auth status 2>&1)")
     if [[ "$active_gh" == "$GITHUB_USER" ]]; then
       success "gh active user matches: $GITHUB_USER"
     else
@@ -1049,8 +1081,9 @@ cmd_verify() {
     fi
   fi
 
-  $ok && success "Profile verification passed." || warn "Profile verification found issues."
+  if $ok; then success "Profile verification passed."; else warn "Profile verification found issues."; fi
   echo ""
+  $ok
 }
 
 # ─── uninstall ──────────────────────────────────────────────────────────────────
