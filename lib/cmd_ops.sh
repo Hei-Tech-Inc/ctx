@@ -1715,17 +1715,33 @@ cmd_agent_rules() {
     info "[dry-run] Would write ctx agent rules to $file"
     return 0
   fi
-  tmp="$(mktemp "${file}.XXXXXX")" || die "Cannot write next to $file"
-  if [[ -f "$file" ]]; then
+  # A name starting with "-" must not be read as an option by the tools below.
+  [[ "$file" == -* ]] && file="./$file"
+  [[ -d "$file" ]] && die "$file is a directory"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-agent-rules.XXXXXX")" || die "Cannot create a temporary file"
+  if [[ -e "$file" ]]; then
+    [[ -f "$file" && -r "$file" ]] || { rm -f "$tmp"; die "Cannot read $file"; }
     while IFS= read -r line || [[ -n "$line" ]]; do
       [[ "$line" == "$CTX_AGENT_RULES_BEGIN" ]] && { skip=1; continue; }
-      [[ "$line" == "$CTX_AGENT_RULES_END" ]] && { skip=0; continue; }
-      [[ $skip -eq 1 ]] || printf '%s\n' "$line"
+      if [[ $skip -eq 1 ]]; then
+        [[ "$line" == "$CTX_AGENT_RULES_END" ]] && skip=0
+        continue
+      fi
+      printf '%s\n' "$line"
     done <"$file" >"$tmp"
+    if [[ $skip -eq 1 ]]; then
+      rm -f "$tmp"
+      die "Unterminated ctx block in $file; add the END marker or remove the BEGIN line"
+    fi
     if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp"; fi
   fi
   _ctx_agent_rules_text >>"$tmp"
-  mv "$tmp" "$file"
+  # Write through (symlinks and the file's mode stay); a new file gets the umask default.
+  if ! { cat "$tmp" >"$file"; } 2>/dev/null; then
+    rm -f "$tmp"
+    die "Cannot write $file"
+  fi
+  rm -f "$tmp"
   success "ctx agent rules written to $file"
 }
 

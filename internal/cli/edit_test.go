@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
 	"github.com/Hei-Tech-Inc/ctx/internal/tui"
@@ -114,6 +116,70 @@ func TestEditMatchesBash(t *testing.T) {
 				if len(want.argv) != 1 || len(want.argv[0]) == 0 || !strings.HasSuffix(want.argv[0][len(want.argv[0])-1], "/profiles/acme.conf") {
 					t.Errorf("vacuous: editor argv %q", want.argv)
 				}
+			}
+		})
+	}
+}
+
+// TestEditCtrlC: Ctrl+C goes to the whole foreground group. ctx-core must not
+// die before the editor: the editor's own handling decides the exit code.
+func TestEditCtrlC(t *testing.T) {
+	core := buildCore(t)
+	for _, c := range []struct {
+		name, script string
+		want         int
+	}{
+		{"editor handles it", `trap 'exit 3' INT; echo ready > "$READY"; while :; do sleep 0.1; done`, 3},
+		{"editor dies by it", `echo ready > "$READY"; exec sleep 30`, 130},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			home, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctxDir := filepath.Join(home, ".ctx")
+			if err := os.MkdirAll(filepath.Join(ctxDir, "profiles"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(ctxDir, "profiles", "acme.conf"), []byte("PROFILE_NAME=acme\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ed := filepath.Join(home, "ed.sh")
+			testutil.Script(t, ed, "#!/bin/sh\n"+c.script+"\n")
+			ready := filepath.Join(home, "ready")
+			cmd := exec.Command(core, "edit", "acme")
+			cmd.Env = append(os.Environ(), "HOME="+home, "CTX_DIR="+ctxDir, "EDITOR="+ed, "READY="+ready, "VISUAL=", "CTX_NO_GUM=1")
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			var eb bytes.Buffer
+			cmd.Stderr = &eb
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+			for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("editor never started: %s", eb.String())
+				}
+			}
+			time.Sleep(100 * time.Millisecond) // let the trap be installed
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+			select {
+			case err := <-done:
+				code := 0
+				if ee, ok := err.(*exec.ExitError); ok {
+					code = ee.ExitCode()
+				}
+				if code != c.want {
+					t.Errorf("exit %d, want %d (stderr %q)", code, c.want, eb.String())
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("ctx-core did not exit")
 			}
 		})
 	}

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -104,19 +103,6 @@ func (e *arEnv) goRun(t *testing.T, dry bool, args ...string) arRun {
 	return e.collect(t, o.String(), eb.String(), code)
 }
 
-var mktempRandRE = regexp.MustCompile(`AGENTS\.md\.[A-Za-z0-9]{6}:`)
-
-// stripMktempMsg drops mktemp(1)'s own stderr lines, which differ by platform and locale.
-func stripMktempMsg(s string) string {
-	var keep []string
-	for _, l := range strings.Split(s, "\n") {
-		if strings.HasPrefix(l, "✗ ") || l == "" {
-			keep = append(keep, l)
-		}
-	}
-	return strings.Join(keep, "\n")
-}
-
 func TestAgentRulesMatchesBash(t *testing.T) {
 	blockOld := "<!-- BEGIN ctx agent rules -->\nold text\n<!-- END ctx agent rules -->\n"
 	write := func(rel, content string) func(string) {
@@ -142,7 +128,7 @@ func TestAgentRulesMatchesBash(t *testing.T) {
 		{name: "write new in git top", repo: true, args: []string{"--write"}, vacuous: "written to"},
 		{name: "write explicit file", args: []string{"--write", "R.md"}, vacuous: "written to"},
 		{name: "write empty file arg is default", args: []string{"--write", ""}, vacuous: "written to"},
-		{name: "write dash file", args: []string{"--write", "-x"}, vacuous: "Cannot write next to -x"},
+		{name: "write dash file", args: []string{"--write", "-x"}, vacuous: "written to ./-x"},
 		{name: "extra args", args: []string{"--write", "R.md", "more"}, vacuous: "written to"},
 		{name: "upsert existing", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "# Mine\n\nkeep\n\n"+blockOld+"\ntail\n"), vacuous: "written to"},
 		{name: "upsert appends", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "# Mine\nkeep"), vacuous: "written to"},
@@ -151,19 +137,31 @@ func TestAgentRulesMatchesBash(t *testing.T) {
 		{name: "upsert whitespace last line", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "a\n  \n"), vacuous: "written to"},
 		{name: "upsert only block", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", blockOld), vacuous: "written to"},
 		{name: "upsert empty file", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", ""), vacuous: "written to"},
-		{name: "unterminated begin drops rest", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "head\n<!-- BEGIN ctx agent rules -->\nlost\n"), vacuous: "written to"},
-		{name: "stray end dropped", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "a\n<!-- END ctx agent rules -->\nb\n"), vacuous: "written to"},
+		{name: "unterminated begin", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "head\n<!-- BEGIN ctx agent rules -->\nkept\n"), vacuous: "Unterminated ctx block in AGENTS.md; add the END marker or remove the BEGIN line"},
+		{name: "stray end kept", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "a\n<!-- END ctx agent rules -->\nb\n"), vacuous: "written to"},
 		{name: "two blocks", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", blockOld+"mid\n"+blockOld), vacuous: "written to"},
 		{name: "crlf lines kept", args: []string{"--write", "AGENTS.md"}, tweak: write("AGENTS.md", "a\r\n"+blockOld), vacuous: "written to"},
-		{name: "symlink replaced", args: []string{"--write", "link.md"}, tweak: func(home string) {
+		{name: "symlink kept", args: []string{"--write", "link.md"}, tweak: func(home string) {
 			write("real.md", "real\n")(home)
 			_ = os.Symlink("real.md", filepath.Join(home, "proj", "link.md"))
 		}, vacuous: "written to"},
-		{name: "target is a directory", args: []string{"--write", "d"}, tweak: func(home string) { _ = os.Mkdir(filepath.Join(home, "proj", "d"), 0o755) }, vacuous: "written to"},
+		{name: "target is a directory", args: []string{"--write", "d"}, tweak: func(home string) { _ = os.Mkdir(filepath.Join(home, "proj", "d"), 0o755) }, vacuous: "d is a directory"},
+		{name: "read-only target", args: []string{"--write", "AGENTS.md"}, tweak: func(home string) {
+			write("AGENTS.md", "mine\n")(home)
+			_ = os.Chmod(filepath.Join(home, "proj", "AGENTS.md"), 0o444)
+		}, vacuous: "Cannot write AGENTS.md"},
+		{name: "read-only directory new file", args: []string{"--write", "ro/AGENTS.md"}, tweak: func(home string) {
+			_ = os.MkdirAll(filepath.Join(home, "proj", "ro"), 0o755)
+			_ = os.Chmod(filepath.Join(home, "proj", "ro"), 0o555)
+		}, vacuous: "Cannot write ro/AGENTS.md"},
+		{name: "mode kept", args: []string{"--write", "AGENTS.md"}, tweak: func(home string) {
+			write("AGENTS.md", "mine\n")(home)
+			_ = os.Chmod(filepath.Join(home, "proj", "AGENTS.md"), 0o644)
+		}, vacuous: "written to"},
 		{name: "dry run default", dry: true, args: []string{"--write"}, vacuous: "[dry-run] Would write ctx agent rules to"},
 		{name: "dry run file", dry: true, args: []string{"--write", "R.md"}, tweak: write("R.md", "x\n"), vacuous: "[dry-run]"},
 		{name: "dry run print is not dry", dry: true, vacuous: "BEGIN ctx agent rules"},
-		{name: "missing parent dir", args: []string{"--write", "nope/AGENTS.md"}, vacuous: "Cannot write next to nope/AGENTS.md"},
+		{name: "missing parent dir", args: []string{"--write", "nope/AGENTS.md"}, vacuous: "Cannot write nope/AGENTS.md"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -172,11 +170,6 @@ func TestAgentRulesMatchesBash(t *testing.T) {
 			want := e.bash(t, c.dry, c.args...)
 			e.seed(t, c.repo, c.tweak)
 			got := e.goRun(t, c.dry, c.args...)
-			if runtime.GOOS != "darwin" {
-				got.stderr, want.stderr = stripMktempMsg(got.stderr), stripMktempMsg(want.stderr)
-			}
-			// BSD mktemp reports the template with its random part filled in.
-			want.stderr = mktempRandRE.ReplaceAllString(want.stderr, "AGENTS.md.XXXXXX:")
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("Go and Bash differ\n stdout go:   %q\n stdout bash: %q\n stderr go:   %q\n stderr bash: %q\n code go %d bash %d\n tree diff: %s",
 					got.stdout, want.stdout, got.stderr, want.stderr, got.code, want.code, testutil.DiffSnapshots(want.tree, got.tree))
@@ -205,7 +198,73 @@ func TestAgentRulesWriteResult(t *testing.T) {
 			t.Fatalf("run %d:\n%q\nwant\n%q", i, got, want)
 		}
 	}
-	if st, _ := os.Stat(file); st.Mode().Perm() != 0o600 {
-		t.Errorf("mode %v, want 0600 (mktemp quirk mirrored)", st.Mode().Perm())
+}
+
+// TestAgentRulesWriteThrough: the link and the mode stay; a new file gets the umask default.
+func TestAgentRulesWriteThrough(t *testing.T) {
+	e := newArEnv(t)
+	e.seed(t, false, nil)
+	real := filepath.Join(e.cwd, "real.md")
+	link := filepath.Join(e.cwd, "link.md")
+	if err := os.WriteFile(real, []byte("x\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.md", link); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.goRun(t, false, "--write", "link.md"); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if st, _ := os.Lstat(link); st.Mode()&os.ModeSymlink == 0 {
+		t.Error("link replaced")
+	}
+	got, _ := os.ReadFile(real)
+	if want := "x\n\n" + agentRulesText; string(got) != want {
+		t.Errorf("target %q", got)
+	}
+	if st, _ := os.Stat(real); st.Mode().Perm() != 0o640 {
+		t.Errorf("mode %v, want 0640", st.Mode().Perm())
+	}
+	if r := e.goRun(t, false, "--write", "new.md"); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if st, _ := os.Stat(filepath.Join(e.cwd, "new.md")); st.Mode().Perm()&0o044 == 0 {
+		t.Errorf("new file mode %v, want the umask default", st.Mode().Perm())
+	}
+}
+
+// TestAgentRulesUnreadable: an unreadable file is an error, not an empty file.
+// (Apart from the differential suite because the tree snapshot reads files.)
+func TestAgentRulesUnreadable(t *testing.T) {
+	var res [2]arRun
+	for i, impl := range []string{"bash", "go"} {
+		e := newArEnv(t)
+		e.seed(t, false, nil)
+		file := filepath.Join(e.cwd, "AGENTS.md")
+		if err := os.WriteFile(file, []byte("mine\n"), 0o200); err != nil {
+			t.Fatal(err)
+		}
+		var o, eb bytes.Buffer
+		code := 0
+		if impl == "bash" {
+			cmd := exec.Command(bashBin(t), "--no-gum", "agent-rules", "--write", "AGENTS.md")
+			cmd.Env, cmd.Dir, cmd.Stdout, cmd.Stderr = e.p.Environ("CTX_CORE=off"), e.cwd, &o, &eb
+			if err := cmd.Run(); err != nil {
+				code = err.(*exec.ExitError).ExitCode()
+			}
+		} else {
+			e.p.inProc(e.cwd, func() { code = AgentRules(tui.Term{Out: &o, Err: &eb}, []string{"--write", "AGENTS.md"}) })
+		}
+		_ = os.Chmod(file, 0o644)
+		if b, _ := os.ReadFile(file); string(b) != "mine\n" {
+			t.Errorf("%s changed the file: %q", impl, b)
+		}
+		res[i] = arRun{stdout: o.String(), stderr: eb.String(), code: code}
+	}
+	if res[0].code != 1 || !reflect.DeepEqual(res[0], res[1]) {
+		t.Errorf("bash %+v go %+v", res[0], res[1])
+	}
+	if !strings.Contains(res[0].stderr, "Cannot read AGENTS.md") {
+		t.Errorf("vacuous: %q", res[0].stderr)
 	}
 }
