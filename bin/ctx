@@ -505,7 +505,10 @@ main() {
   shift 2>/dev/null || true
 
   case "$cmd" in
-    init)             cmd_init ;;
+    init)
+      _ctx_core_forward init
+      cmd_init
+      ;;
     setup|import|add)
       _ctx_core_forward setup "$@" # every shape, --extend NAME included
       cmd_import "$@"
@@ -563,7 +566,10 @@ main() {
       _ctx_core_forward undo "$@"
       cmd_undo
       ;;
-    install-hook)     cmd_install_hook "${1:-}" ;;
+    install-hook)
+      _ctx_core_forward install-hook "$@" # Go, like Bash, reads only the first
+      cmd_install_hook "${1:-}"
+      ;;
     upgrade)          cmd_upgrade "$@" ;;
     uninstall)
       _ctx_core_forward uninstall "$@"

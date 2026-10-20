@@ -960,14 +960,19 @@ test_ctx_core_is_exercised() {
     env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" list --json >/dev/null 2>&1 || { echo "list --json failed"; exit 1; }
     out="$(env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" --no-gum doctor 2>&1 || true)"
     env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" version >/dev/null 2>&1 || { echo "version failed"; exit 1; }
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" SHELL=/bin/zsh "$ROOT_DIR/bin/ctx" --no-gum --dry-run install-hook "$td/home/rc" </dev/null >/dev/null 2>&1 \
+      || { echo "install-hook --dry-run failed"; exit 1; }
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" SHELL=/bin/zsh "$ROOT_DIR/bin/ctx" --no-gum --dry-run init </dev/null >/dev/null 2>&1 \
+      || { echo "init --dry-run failed"; exit 1; }
     local want
-    for want in 'implements list --json' 'list --json' 'implements doctor' 'doctor' 'implements ctx-version' 'ctx-version'; do
+    for want in 'implements list --json' 'list --json' 'implements doctor' 'doctor' 'implements ctx-version' 'ctx-version' \
+      "implements install-hook $td/home/rc" "install-hook $td/home/rc" 'implements init' 'init'; do
       grep -qx -- "$want" "$td/core-calls" || { echo "ctx-core was not asked '$want'; calls: $(cat "$td/core-calls")"; exit 1; }
     done
     [[ "$out" == *"ctx-core: "*"($td/core)"* || "$out" == *"ctx-core: "*"/ctx-core)"* ]] || { echo "doctor does not report ctx-core: $out"; exit 1; }
     [[ "$out" != *"ctx-core missing"* ]] || { echo "doctor says ctx-core is missing: $out"; exit 1; }
   ) || fail "ctx-core coverage guard"
-  pass "bin/ctx finds the repo's bin/ctx-core before PATH and forwards list, doctor and version to it"
+  pass "bin/ctx finds the repo's bin/ctx-core before PATH and forwards list, doctor, version, install-hook and init to it"
 }
 
 test_ctx_core_is_exercised
