@@ -12,6 +12,7 @@ import (
 
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
+	"github.com/Hei-Tech-Inc/ctx/internal/setup"
 )
 
 const (
@@ -21,6 +22,18 @@ const (
 
 // ui prints like the Bash helpers info/success/warn/bold/dim (stdout) and
 // error/die (stderr); every message goes through echo -e semantics.
+// setupOut adapts ui to setup.Out with the same bytes as the Bash helpers.
+type setupOut struct{ u ui }
+
+func (o setupOut) Info(m string)    { o.u.info(m) }
+func (o setupOut) Success(m string) { o.u.success(m) }
+func (o setupOut) Warn(m string)    { o.u.warn(m) }
+func (o setupOut) Dim(m string)     { o.u.dim(m) }
+func (o setupOut) Bold(m string)    { o.u.bold(m) }
+
+// setupOut returns u as a setup.Out.
+func (u ui) setupOut() setup.Out { return setupOut{u} }
+
 type ui struct {
 	out, err io.Writer
 	colors   bool
@@ -97,18 +110,6 @@ func lastValue(key string) string {
 	return cfg.Last[key]
 }
 
-// workRoot is `$(ctx_work_root)`.
-func workRoot() string {
-	configured := os.Getenv("CTX_WORK_ROOT")
-	if configured == "" {
-		configured = lastValue("work_root")
-	}
-	if configured == "" {
-		configured = os.Getenv("HOME") + "/clients"
-	}
-	return strings.TrimRight(echoPlain(expandTilde(configured)), "\n")
-}
-
 func secretProviderLine() string {
 	return secret.ConfiguredProvider() + " (effective: " + secret.EffectiveProvider() + ")"
 }
@@ -168,7 +169,7 @@ func configCmd(u ui, args []string) int {
 	switch key {
 	case "", "show":
 		u.bold(`\n  ctx config\n`)
-		u.say("  work_root: " + workRoot())
+		u.say("  work_root: " + ctxconfig.WorkRoot())
 		u.say("  secret_provider: " + secretProviderLine())
 		u.say("  prompt_workdir_max_depth: " + promptDepthText() + " (prompt: CTX_PROMPT_* under each profile WORK_DIR)")
 		u.say("  prompt_extra_paths: " + promptExtraPaths())
@@ -186,7 +187,7 @@ func configCmd(u ui, args []string) int {
 		u.info("      or: ctx config export <dir> / ctx config import <dir>")
 	case "work-root":
 		if value == "" {
-			u.say("  work_root: " + workRoot())
+			u.say("  work_root: " + ctxconfig.WorkRoot())
 			u.say("")
 			u.info("Usage: ctx config work-root <path>")
 			return 0
