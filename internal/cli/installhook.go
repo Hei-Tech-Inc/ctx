@@ -78,6 +78,9 @@ func InstallHook(t tui.Term, args []string) int {
 		}
 	}
 	target := followLinks(rc)
+	if st, err := os.Lstat(target); err == nil && st.Mode()&os.ModeSymlink != 0 {
+		return u.die("Cannot write " + rc) // a link loop
+	}
 	if _, err := os.Stat(target); err == nil {
 		if syscall.Access(target, 2) != nil { // W_OK
 			return u.die("Cannot write " + rc)

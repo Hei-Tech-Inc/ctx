@@ -8,6 +8,7 @@ package atomicfile
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // FollowLinks resolves a chain of symlinks (at most 40), also when the last
@@ -32,17 +33,25 @@ func FollowLinks(path string) string {
 }
 
 // WriteThrough atomically replaces the file path points to (an existing
-// symlink chain is followed) with data. mode picks the result's mode from the
-// current one (existed false: there is no file yet). write fills the temp
-// file; nil writes data with f.Write (tests inject failures here). On any
-// error the target is as it was and the temp file is removed.
+// symlink chain is followed, also a dangling one: the file is then created
+// where it points) with data. mode picks the result's mode from the current
+// one (existed false: there is no file yet); it is called once. write fills
+// the temp file; nil writes data with f.Write (tests inject failures here).
+// A chain that does not end (a link loop, or over 40 links) is an ELOOP
+// error. On any error the target is as it was and the temp file is removed.
 func WriteThrough(path string, data []byte, mode func(old os.FileMode, existed bool) os.FileMode, write func(f *os.File, data []byte) error) error {
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		path = real
+	path = FollowLinks(path)
+	if st, err := os.Lstat(path); err == nil && st.Mode()&os.ModeSymlink != 0 {
+		return &os.PathError{Op: "write", Path: path, Err: syscall.ELOOP}
 	}
-	m := mode(0, false)
+	if real, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		path = filepath.Join(real, filepath.Base(path))
+	}
+	var m os.FileMode
 	if st, err := os.Stat(path); err == nil {
 		m = mode(st.Mode().Perm(), true)
+	} else {
+		m = mode(0, false)
 	}
 	if write == nil {
 		write = func(f *os.File, data []byte) error { _, err := f.Write(data); return err }

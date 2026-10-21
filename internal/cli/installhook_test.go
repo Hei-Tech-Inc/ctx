@@ -419,6 +419,11 @@ func TestInstallHookRcEdge(t *testing.T) {
 			tweak: func(home string) { _ = os.Chmod(filepath.Join(home, ".zshrc"), 0o444) }},
 		{name: "read-only rc through a link", shell: "/bin/zsh", files: map[string]string{"dots/zshrc": "ro\n"}, code: 1, vacuous: "Cannot write $HOME/.zshrc",
 			tweak: func(home string) { link(home); _ = os.Chmod(filepath.Join(home, "dots/zshrc"), 0o444) }},
+		{name: "symlink loop rc is refused, links kept", shell: "/bin/zsh", code: 1, vacuous: "Cannot write $HOME/.zshrc",
+			tweak: func(home string) {
+				_ = os.Symlink("loop", filepath.Join(home, ".zshrc"))
+				_ = os.Symlink(".zshrc", filepath.Join(home, "loop"))
+			}},
 		{name: "mode kept", shell: "/bin/zsh", files: map[string]string{".zshrc": "x\n"}, vacuous: "refreshed",
 			tweak: func(home string) { _ = os.Chmod(filepath.Join(home, ".zshrc"), 0o600) },
 			check: func(t *testing.T, home string, r cvRun) {

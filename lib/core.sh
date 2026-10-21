@@ -735,11 +735,13 @@ _ctx_link_target() {
 # Atomic write-through: put SRC's content at FILE. Symlinks are followed; the
 # result is built in a temp file next to the target (same filesystem, mode kept
 # via cp -p, or the umask default for a new file; MODE, when given, wins) and
-# moved over it. A read-only target is not replaced behind the user's back.
+# moved over it. A read-only target is not replaced behind the user's back,
+# nor is a link chain that does not end (a loop).
 # Returns 1 on any failure, and FILE is then as it was.
 _ctx_write_through() {
   local src="$1" mode="${3:-}" target d new
   target="$(_ctx_link_target "$2")"
+  [[ ! -L "$target" ]] || return 1 # a link loop (or over 40 links)
   [[ ! -e "$target" || -w "$target" ]] || return 1
   d="$(cd -P -- "$(dirname -- "$target")" 2>/dev/null && pwd)" || return 1
   new="$(mktemp "$d/.ctx-write.XXXXXX" 2>/dev/null)" || return 1

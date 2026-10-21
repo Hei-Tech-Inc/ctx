@@ -2095,6 +2095,7 @@ cmd_install_hook() {
     [[ -f "$shell_rc" && -r "$shell_rc" ]] || die "Cannot read $shell_rc"
   fi
   target="$(_ctx_link_target "$shell_rc")"
+  [[ -L "$target" ]] && die "Cannot write $shell_rc" # a link loop
   if [[ -e "$target" ]]; then
     [[ -w "$target" ]] || die "Cannot write $shell_rc"
   else
