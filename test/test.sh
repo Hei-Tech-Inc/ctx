@@ -768,6 +768,65 @@ test_autoswitch_keeps_manual_lock() {
   pass "autoswitch re-applying the active profile keeps a manual lock"
 }
 
+test_ctx_core_dispatch() {
+  (
+    set -euo pipefail
+    local td out err
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    printf '#!/usr/bin/env bash\necho "$*"\n' >"$td/ctx-core"
+    chmod +x "$td/ctx-core"
+    out="$(CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" mcp --x)"
+    [[ "$out" == "mcp --x" ]] || { echo "mcp dispatch: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" knowledge list)"
+    [[ "$out" == "knowledge list" ]] || { echo "knowledge dispatch: $out"; exit 1; }
+    # CTX_CORE_BIN set but missing: no fall-through
+    set +e
+    err="$(CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" mcp 2>&1 >/dev/null)"
+    local rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "missing: rc=$rc"; exit 1; }
+    [[ "$err" == *"ctx-core not found"* ]] || { echo "missing msg: $err"; exit 1; }
+  ) || fail "ctx-core dispatch"
+  pass "ctx mcp/knowledge dispatch to ctx-core; missing binary exits 1 with guidance"
+}
+
+test_install_builds_ctx_core() {
+  command -v go >/dev/null 2>&1 || { echo "SKIP: test_install_builds_ctx_core (go not installed)"; return 0; }
+  (
+    set -euo pipefail
+    local td out want
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    mkdir -p "$td/bin" "$td/lib"
+    out="$(CTX_INSTALL_BIN="$td/bin" CTX_INSTALL_LIB="$td/lib" CTX_UPGRADE_ONLY=1 \
+      bash "$ROOT_DIR/install.sh" 2>&1)" || { echo "$out"; exit 1; }
+    [[ -x "$td/lib/ctx-core" ]] || { echo "no executable $td/lib/ctx-core: $out"; exit 1; }
+    want="$(parse_ctx_version_from_core_sh_file "$ROOT_DIR/lib/core.sh")"
+    out="$("$td/lib/ctx-core" version)"
+    [[ "$out" == "ctx-core $want" ]] || { echo "version: '$out' want 'ctx-core $want'"; exit 1; }
+    [[ -x "$td/bin/ctx" ]] || exit 1
+  ) || fail "install builds ctx-core"
+  pass "install.sh builds ctx-core next to the libs with the ctx version"
+}
+
+test_doctor_reports_ctx_core() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    mkdir -p "$td/home" "$td/ctx"
+    printf '#!/usr/bin/env bash\necho "ctx-core 9.9.9"\n' >"$td/ctx-core"
+    chmod +x "$td/ctx-core"
+    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    [[ "$out" == *"ctx-core: 9.9.9 ($td/ctx-core)"* ]] || { echo "present: $out"; exit 1; }
+    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    [[ "$out" == *"ctx-core missing"*"ctx mcp unavailable"* ]] || { echo "missing: $out"; exit 1; }
+  ) || fail "doctor reports ctx-core"
+  pass "ctx doctor reports ctx-core version/path or a warning"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -795,5 +854,8 @@ test_use_eval_exports
 test_shell_wrapper_applies_use
 test_autoswitch_exports_profile_env
 test_autoswitch_keeps_manual_lock
+test_ctx_core_dispatch
+test_install_builds_ctx_core
+test_doctor_reports_ctx_core
 
 echo "All tests passed."

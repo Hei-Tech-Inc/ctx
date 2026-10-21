@@ -15,10 +15,37 @@ jobs:
       - name: Run shellcheck
         run: shellcheck -x -S warning bin/ctx lib/*.sh lib/*.bash install.sh test/*.sh scripts/install-git-hooks.sh scripts/git-hooks/commit-msg scripts/git-hooks/prepare-commit-msg scripts/git-hooks/post-commit
 
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: go build ./cmd/ctx-core
+      - name: Cross-build
+        run: |
+          set -euo pipefail
+          for os in darwin linux; do
+            for arch in amd64 arm64; do
+              GOOS=$os GOARCH=$arch go build -o /dev/null ./cmd/ctx-core
+            done
+          done
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build ctx-core
+        run: go build -o bin/ctx-core ./cmd/ctx-core
       - name: Run unit tests
         run: bash test/test.sh
 

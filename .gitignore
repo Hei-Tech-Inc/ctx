@@ -5,3 +5,9 @@
 # IDE metadata (local-only). Exception: commit .cursor/settings.json so git identity stays pinned.
 .cursor/**
 !.cursor/settings.json
+
+# Local agent workspaces
+.superpowers/
+
+# Go build output
+/bin/ctx-core

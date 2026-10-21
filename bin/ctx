@@ -70,6 +70,8 @@ cmd_help() {
       "  run -- <cmd>     Run one command (e.g. an AI agent) with this folder's profile identity" \
       "  env              Print the profile's identity as exports (eval; --secrets to include secrets)" \
       "  agent-rules      Print or --write AI agent instructions (AGENTS.md)" \
+      "  mcp              Run the ctx MCP server (stdio) for AI agents" \
+      "  knowledge        Manage per-client knowledge notes" \
       "" \
       "$(gum style --faint "SECRETS  (Keychain or ~/.ctx/secrets)")" \
       "  secret set   <profile> <KEY>" \
@@ -128,6 +130,8 @@ ${BOLD}DAILY USE${RESET}
   run [-p name] -- <cmd>  Run one command (e.g. an AI agent) with this folder's profile identity
   env [-p name]         Print the profile's identity as exports (eval; --secrets, --fish)
   agent-rules [--write [file]]  Print or write AI agent instructions (default: AGENTS.md)
+  mcp                   Run the ctx MCP server (stdio) for AI agents
+  knowledge             Manage per-client knowledge notes
 
 ${BOLD}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${RESET}
   secret set   <profile> <KEY>
@@ -217,6 +221,8 @@ _ctx() {
     'run:Run a command with the profile identity'
     'env:Print profile identity as exports'
     'agent-rules:Print or write AI agent instructions'
+    'mcp:Run the ctx MCP server'
+    'knowledge:Manage per-client knowledge notes'
     'completion:Print shell completion'
     'version:Print version'
     'help:Show help'
@@ -286,7 +292,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules completion version help"
+  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -341,7 +347,7 @@ complete -c ctx -f
 
 complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall'
@@ -377,6 +383,30 @@ FISH
   esac
 }
 
+# ─── ctx-core (Go) ────────────────────────────────────────────────────────────
+# Print the path of the ctx-core binary. CTX_CORE_BIN, when set, wins and must exist.
+_ctx_core_bin() {
+  if [[ -n "${CTX_CORE_BIN:-}" ]]; then
+    [[ -x "$CTX_CORE_BIN" ]] || return 1
+    printf '%s\n' "$CTX_CORE_BIN"
+    return 0
+  fi
+  local c
+  for c in "$CTX_BIN/ctx-core" "$CTX_LIB/ctx-core"; do
+    if [[ -x "$c" ]]; then printf '%s\n' "$c"; return 0; fi
+  done
+  command -v ctx-core 2>/dev/null
+}
+
+_ctx_core_exec() {
+  local bin
+  bin="$(_ctx_core_bin)" || {
+    echo "ctx-core not found — reinstall ctx (install.sh) or run: go build -o bin/ctx-core ./cmd/ctx-core" >&2
+    exit 1
+  }
+  exec "$bin" "$@"
+}
+
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
 main() {
   local cmd="${1:-help}"
@@ -410,6 +440,7 @@ main() {
     env)              cmd_env "$@" ;;
     run)              cmd_run "$@" ;;
     agent-rules)      cmd_agent_rules "$@" ;;
+    mcp|knowledge)    _ctx_core_exec "$cmd" "$@" ;;
     completion)       cmd_completion "${1:-zsh}" ;;
     version|-v|--version) echo "ctx version $CTX_VERSION" ;;
     help|-h|--help)   cmd_help "$@" ;;

@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`ctx mcp` AI ops agent:** an MCP server (Go binary `ctx-core`) scoped to the profile that owns the current folder. Per-profile knowledge store (`ctx knowledge init`: `clusters.yaml`, `environments.yaml`, `services.yaml`, recipes, scripts), one-step cluster login using the client's own steps and `ctx secret` values, read tools (logs, trace, describe, kubectl read, search) and change tools (restart, network test, port-forward, kubectl change, save recipe/service/script) that ctx confirms with the user itself before running. Secrets are redacted everywhere. `ctx mcp install claude|cursor` registers it; `install.sh`, `ctx upgrade` and the Homebrew formula install `ctx-core`; `ctx doctor` reports it; releases attach `ctx-core_{darwin,linux}_{amd64,arm64}` and `checksums.txt`. See README "AI ops agent".
 - **`ctx run [-p NAME] -- <cmd>`:** runs one command (for example an AI agent, `gh`, `terraform`) with the folder's profile identity: git author/committer, `GIT_SSH_COMMAND` with only the profile's key, `GH_TOKEN`, AWS/GCP/Azure variables, `EXTRA_ENVS` and secrets. Nothing outside that process changes.
 - **`ctx env [-p NAME] [--fish] [--secrets]`:** prints the same identity as `export` lines for `eval`; secrets only with `--secrets`.
 - **`ctx agent-rules [--write [FILE]]`:** prints, or upserts into `AGENTS.md` between markers, instructions for AI coding agents (check identity, use `ctx run`, don't bypass `ctx guard`).
