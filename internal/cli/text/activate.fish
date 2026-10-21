@@ -63,13 +63,8 @@ function ctx --description 'ctx (applies use/deactivate to this shell)'
     return $rc
 end
 
-# Presence-encoded shell variable for hook-env: nothing when unset, "=value" when set.
-function _ctx_shvar
-    set -q $argv[1]; and printf '=%s' "$$argv[1]"
-end
-
 # The legacy hook's functions (and their event handlers) and an older _ctx_hook.
-functions -e _ctx_profile_autoswitch _ctx_profile_autoswitch_postexec _ctx_hook 2>/dev/null
+functions -e _ctx_profile_autoswitch _ctx_profile_autoswitch_postexec _ctx_hook _ctx_shvar 2>/dev/null
 
 # The autoswitch hook. An unchanged prompt runs builtins only: ctx-core hook-env runs
 # when $PWD changed, this shell's stamp is missing, or the config or the profiles dir
@@ -79,9 +74,13 @@ function _ctx_hook --on-variable PWD --on-event fish_postexec
     set -q CTX_DIR; and test -n "$CTX_DIR"; and set d "$CTX_DIR"
     if test "$PWD" != "$__CTX_PWD"; or not test -e "$__CTX_STAMP"; or test "$d/config" -nt "$__CTX_STAMP" 2>/dev/null; or test "$d/profiles" -nt "$__CTX_STAMP" 2>/dev/null
         test -x @CTX_CORE@; or return
+        # Presence-encoded shell variables: "" when unset, "=value" when set.
+        set -l n ""; set -q CTX_AUTOSWITCH_NOTIFY; and set n "=$CTX_AUTOSWITCH_NOTIFY"
+        set -l g ""; set -q GH_TOKEN; and set g "=$GH_TOKEN"
+        set -l a ""; set -q CTX_ACTIVE_PROFILE; and set a "=$CTX_ACTIVE_PROFILE"
+        set -l p ""; set -q _CTX_GH_PROFILE; and set p "=$_CTX_GH_PROFILE"
         env __CTX_STATE="$__CTX_STATE" __CTX_STAMP="$__CTX_STAMP" \
-            __CTX_SH_NOTIFY=(_ctx_shvar CTX_AUTOSWITCH_NOTIFY) __CTX_SH_GH_TOKEN=(_ctx_shvar GH_TOKEN) \
-            __CTX_SH_ACTIVE=(_ctx_shvar CTX_ACTIVE_PROFILE) __CTX_SH_GH_PROFILE=(_ctx_shvar _CTX_GH_PROFILE) \
+            __CTX_SH_NOTIFY="$n" __CTX_SH_GH_TOKEN="$g" __CTX_SH_ACTIVE="$a" __CTX_SH_GH_PROFILE="$p" \
             @CTX_CORE@ hook-env fish | source
         set -gu __CTX_PWD $PWD
     end

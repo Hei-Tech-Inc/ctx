@@ -126,11 +126,14 @@ if [ -n "${ZSH_VERSION-}" ]; then
   prompt() { local _f; for _f in $precmd_functions; do "$_f"; done; }
   nhooks() { local _f; N=0; for _f in $precmd_functions $chpwd_functions; do [ "$_f" = "$1" ] && N=$((N+1)); done; }
 else
+  # As bash runs PROMPT_COMMAND: $? is the last command's status.
+  _st() { return "$1"; }
   prompt() {
+    local _s=$?
     if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
-      for _c in "${PROMPT_COMMAND[@]}"; do eval "$_c"; done
+      for _c in "${PROMPT_COMMAND[@]}"; do _st "$_s"; eval "$_c"; _s=$?; done
     else
-      eval "${PROMPT_COMMAND-}"
+      _st "$_s"; eval "${PROMPT_COMMAND-}"
     fi
   }
 fi
@@ -144,6 +147,7 @@ src() { source "$GLUE" >>"$TMPDIR/src.out"; }
 // activateCase is one scripted scenario; shells limits it ("" = bash and zsh).
 type activateCase struct {
 	name, shells, script string
+	check                func(t *testing.T, td string)
 }
 
 var activateCases = []activateCase{
@@ -154,7 +158,7 @@ if [ -n "${ZSH_VERSION-}" ]; then
   nhooks _ctx_hook; [ $N = 2 ] || fail "zsh: $N registrations (want chpwd+precmd)"
   [ "${precmd_functions[1]}" = user1 ] || fail "user precmd lost: $precmd_functions"
 else
-  [ "$PROMPT_COMMAND" = '_ctx_hook;user1;user2' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
+  [ "$PROMPT_COMMAND" = '_ctx_hook keep && :;user1;user2' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
 fi
 [ ! -s "$TMPDIR/src.out" ] || fail "source printed: $(cat "$TMPDIR/src.out")"
 settle; cd w/a; prompt; prompt
@@ -171,7 +175,7 @@ if [ -n "${ZSH_VERSION-}" ]; then
   nhooks _ctx_hook; [ $N = 2 ] || fail "zsh: $N registrations"
   (( ${+functions[_ctx_profile_autoswitch]} )) && fail "legacy function left"
 else
-  [ "$PROMPT_COMMAND" = '_ctx_hook;user1' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
+  [ "$PROMPT_COMMAND" = '_ctx_hook keep && :;user1' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
   declare -F _ctx_profile_autoswitch >/dev/null && fail "legacy function left"
 fi
 settle; cd w/a; prompt
@@ -179,9 +183,9 @@ settle; cd w/a; prompt
 delta 1 "enter"
 `},
 	{name: "legacy tokens in a PROMPT_COMMAND string", shells: "bash", script: `
-PROMPT_COMMAND='_ctx_profile_autoswitch;user1;_ctx_auto_switch;user2;_ctx_hook'
+PROMPT_COMMAND='_ctx_profile_autoswitch;user1;_ctx_auto_switch;user2;_ctx_hook;_ctx_hook keep && :'
 src; src
-[ "$PROMPT_COMMAND" = '_ctx_hook;user1;user2' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
+[ "$PROMPT_COMMAND" = '_ctx_hook keep && :;user1;user2' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
 `},
 	{name: "PROMPT_COMMAND array keeps the user's entries", shells: "bash", script: `
 if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then echo SKIP; exit 0; fi
@@ -189,8 +193,8 @@ PROMPT_COMMAND=(user1 user2)
 CTX_CORE=off source "$CTX_ROOT/lib/ctx_autoswitch.bash"
 PROMPT_COMMAND+=('_ctx_profile_autoswitch;user3')
 src; src
-want=(_ctx_hook user1 user2 user3)
-[ "${PROMPT_COMMAND[*]}" = "${want[*]}" ] || fail "PROMPT_COMMAND=(${PROMPT_COMMAND[*]})"
+want=('_ctx_hook keep && :' user1 user2 user3)
+[ "${#PROMPT_COMMAND[@]}" = 4 ] && [ "${PROMPT_COMMAND[*]}" = "${want[*]}" ] || fail "PROMPT_COMMAND=(${PROMPT_COMMAND[*]})"
 [[ "$(declare -p PROMPT_COMMAND)" == "declare -a"* ]] || fail "no longer an array"
 settle; cd w/a; prompt
 [ "${CTX_ACTIVE_PROFILE-}" = a ] && [ "$ran" = 123 ] || fail "prompt: active=${CTX_ACTIVE_PROFILE-} ran=$ran"
@@ -199,7 +203,7 @@ delta 1 "enter"
 	{name: "bash-preexec", shells: "bash", script: `
 PROMPT_COMMAND='user1'
 src
-[ "$PROMPT_COMMAND" = '_ctx_hook;user1' ] || fail "before bash-preexec: $PROMPT_COMMAND"
+[ "$PROMPT_COMMAND" = '_ctx_hook keep && :;user1' ] || fail "before bash-preexec: $PROMPT_COMMAND"
 # A minimal bash-preexec: precmd_functions, and an install that wraps
 # PROMPT_COMMAND between its own commands (as __bp_install does).
 bash_preexec_imported=defined
@@ -209,7 +213,7 @@ __bp_interactive_mode() { :; }
 PROMPT_COMMAND=$'__bp_precmd_invoke_cmd\n'"$PROMPT_COMMAND"$'\n__bp_interactive_mode'
 src; src
 [ "$PROMPT_COMMAND" = $'__bp_precmd_invoke_cmd\nuser1\n__bp_interactive_mode' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
-[ "${precmd_functions[*]}" = 'user2 _ctx_hook' ] || fail "precmd_functions=(${precmd_functions[*]})"
+[ "${precmd_functions[*]}" = '_ctx_hook user2' ] || fail "precmd_functions=(${precmd_functions[*]})"
 settle; cd w/a; prompt; prompt
 [ "${CTX_ACTIVE_PROFILE-}" = a ] || fail "not entered"
 delta 1 "enter"
@@ -246,12 +250,14 @@ mv "$FAKE" "$FAKE.gone"
 cd ../b; prompt; prompt
 rm -f "$__CTX_STAMP"; prompt
 (exit 7); _ctx_hook; _rc=$?
-[ $_rc = 7 ] || fail "status $_rc, want 7"
+[ $_rc = 0 ] || fail "status $_rc, want 0"
+if [ -n "${BASH_VERSION-}" ]; then (exit 7); _ctx_hook keep; _rc=$?; [ $_rc = 7 ] || fail "keep: status $_rc, want 7"; fi
 ctx -q use b || fail "wrapper without ctx-core"
 [ "${CTX_ACTIVE_PROFILE-}" = b ] || fail "wrapper fallback did not apply"
 mv "$FAKE.gone" "$FAKE"
 (exit 5); _ctx_hook; _rc=$?
-[ $_rc = 5 ] || fail "status $_rc, want 5"
+[ $_rc = 0 ] || fail "status $_rc, want 0"
+if [ -n "${BASH_VERSION-}" ]; then (exit 5); _ctx_hook keep; _rc=$?; [ $_rc = 5 ] || fail "keep: status $_rc, want 5"; fi
 `},
 	{name: "ctx wrapper", script: `
 src; settle
@@ -286,6 +292,27 @@ CTX_CORE=off ctx -q use b || fail "CTX_CORE=off use"
 [ "${CTX_ACTIVE_PROFILE-}" = b ] || fail "CTX_CORE=off use not applied"
 delta 0 "CTX_CORE=off goes through bin/ctx"
 `},
+	{name: "an alias named ctx does not stop the glue", script: `
+if [ -n "${BASH_VERSION-}" ]; then shopt -s expand_aliases; fi
+alias ctx='echo ALIAS'
+src || fail "source failed"
+unalias ctx
+ctx -q use a || fail "use after unalias"
+[ "${CTX_ACTIVE_PROFILE-}" = a ] || fail "wrapper not defined"
+`},
+	{name: "shell variables reach hook-env presence-encoded", script: `
+src; GH_TOKEN='x
+y'
+rm -f "$__CTX_STAMP"; prompt
+unset GH_TOKEN; rm -f "$__CTX_STAMP"; prompt
+GH_TOKEN=; rm -f "$__CTX_STAMP"; prompt
+`, check: func(t *testing.T, td string) {
+		got := hookEnvTokens(t, td)
+		want := []string{"", "=x\ny", "", "="}
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("__CTX_SH_GH_TOKEN per run = %q, want %q", got, want)
+		}
+	}},
 	{name: "set -u", script: `
 set -u
 src; cd w/a; prompt; prompt
@@ -312,7 +339,11 @@ func activateFixture(t *testing.T, td, shell string) (env []string, fake, log st
 	if err := os.MkdirAll(filepath.Dir(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	testutil.Script(t, fake, "#!/bin/sh\nprintf '%s\\n' \"$*\" >>"+shellQ(log)+"\nexec "+shellQ(core)+" \"$@\"\n")
+	// The fake logs each call and, for hook-env, the GH_TOKEN it was passed
+	// (<none> when the variable is absent), NUL-terminated.
+	testutil.Script(t, fake, "#!/bin/sh\nprintf '%s\\n' \"$*\" >>"+shellQ(log)+
+		"\n[ \"$1\" = hook-env ] && printf '%s\\0' \"${__CTX_SH_GH_TOKEN-<none>}\" >>"+shellQ(log+".env")+
+		"\nexec "+shellQ(core)+" \"$@\"\n")
 	glue := filepath.Join(td, "glue."+shell)
 	hookWrite(t, glue, activateScript(shell, fake))
 	env = append(env,
@@ -320,6 +351,17 @@ func activateFixture(t *testing.T, td, shell string) (env []string, fake, log st
 		"CTX_CORE_BIN="+core, "CTX_AUTOSWITCH_NOTIFY=0", "EXPECT_SECRET="+hookSecret,
 	)
 	return env, fake, log
+}
+
+// hookEnvTokens are the __CTX_SH_GH_TOKEN values the fake ctx-core got per
+// hook-env run.
+func hookEnvTokens(t *testing.T, td string) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(td, "core.log.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 }
 
 // TestActivateShells sources the glue in real bash and zsh through every
@@ -352,6 +394,9 @@ func TestActivateShells(t *testing.T) {
 				if stderr.Len() > 0 {
 					t.Errorf("stderr: %q", stderr.String())
 				}
+				if c.check != nil {
+					c.check(t, td)
+				}
 				for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 					switch {
 					case l == "SKIP":
@@ -380,9 +425,11 @@ func logPromptTime(t *testing.T, l string) {
 	}
 }
 
-// TestActivateFish sources the fish glue twice in real fish (when installed):
-// one handler, the legacy functions gone, the guard skipping unchanged
-// prompts, the wrapper applying use.
+// TestActivateFish sources the fish glue in real fish (when installed): the
+// builtin test supports -nt; one handler after sourcing twice; the legacy
+// functions gone; the guard: no call on unchanged prompts, one call when the
+// stamp is missing, the config or the profiles dir is newer; silence without
+// ctx-core; the shell variables passed presence-encoded; the wrapper.
 func TestActivateFish(t *testing.T) {
 	fish, err := exec.LookPath("fish")
 	if err != nil {
@@ -390,26 +437,56 @@ func TestActivateFish(t *testing.T) {
 	}
 	t.Parallel()
 	td := t.TempDir()
-	env, fake, _ := activateFixture(t, td, "fish")
+	env, _, _ := activateFixture(t, td, "fish")
 	script := `
 function fail; printf 'FAIL: %s\n' "$argv"; exit 1; end
+function calls; if test -f $LOG; wc -l < $LOG | string trim; else; echo 0; end; end
+function delta -a want what
+    set -l n (calls)
+    test (math $n - $base) = $want; or fail "$what: "(math $n - $base)" ctx-core calls, want $want"
+    set -g base $n
+end
+function prompt; emit fish_postexec; end
+cd $TD
+touch -t 200001010000 old; touch new
+test new -nt old; or fail "fish test: no -nt"
+test old -nt new; and fail "fish test -nt: old newer"
+fish --version
 CTX_CORE=off source $CTX_ROOT/lib/ctx_autoswitch.fish
-source $GLUE; source $GLUE
+source $GLUE
+set -l h1 (functions --handlers | string match '*_ctx_hook*' | count)
+source $GLUE
+set -l h2 (functions --handlers | string match '*_ctx_hook*' | count)
+test $h1 -ge 1; and test $h1 = $h2; or fail "handlers: $h1 then $h2"
 functions -q _ctx_profile_autoswitch; and fail "legacy hook left"
 functions -q _ctx_profile_autoswitch_postexec; and fail "legacy postexec left"
-test (functions --handlers | string match -c '*_ctx_hook*') -ge 1; or fail "no handler"
-cd w/a
-test "${CTX_ACTIVE_PROFILE-}" = a; or fail "not entered: $CTX_ACTIVE_PROFILE"
-set -l n0 (wc -l < $LOG)
-for i in (seq 50); emit fish_postexec; end
-test (wc -l < $LOG) = $n0; or fail "unchanged prompts called ctx-core"
-rm -f $__CTX_STAMP; emit fish_postexec
+set -g base (calls)
+cd w/a; prompt
+test "$CTX_ACTIVE_PROFILE" = a; or fail "not entered: $CTX_ACTIVE_PROFILE"
+delta 1 "enter"
+for i in (seq 50); prompt; end
+delta 0 "50 unchanged prompts"
+rm -f $__CTX_STAMP; prompt; delta 1 "stamp missing"
 test -e $__CTX_STAMP; or fail "stamp not recreated"
-mv $FAKE $FAKE.gone; cd ../b; emit fish_postexec
+prompt; delta 0 "after the stamp is back"
+touch -t 200001010000 $__CTX_STAMP; prompt; delta 1 "config newer"
+prompt; delta 0 "after config"
+touch -t 200001010000 $CTX_DIR/config; touch -t 200101010000 $__CTX_STAMP
+prompt; delta 1 "profiles dir newer"
+prompt; delta 0 "after profiles"
+set -g GH_TOKEN 'x
+y'
+rm -f $__CTX_STAMP; prompt
+set -e GH_TOKEN; rm -f $__CTX_STAMP; prompt
+set -g GH_TOKEN ''; rm -f $__CTX_STAMP; prompt
+set -e GH_TOKEN
+mv $FAKE $FAKE.gone; cd ../b; prompt; rm -f $__CTX_STAMP; prompt
 mv $FAKE.gone $FAKE
+set -g base (calls)
 ctx -q use b; or fail "use b"
-test "${CTX_ACTIVE_PROFILE-}" = b; or fail "wrapper"
-set -q AWS_PROFILE; and fail "AWS_PROFILE left from a"
+test "$CTX_ACTIVE_PROFILE" = b; or fail "wrapper"
+delta 1 "use runs the baked ctx-core"
+grep -qx 'use --eval fish b' $LOG; or fail "log: "(cat $LOG)
 `
 	cmd := exec.Command(fish, "--no-config", "-c", script)
 	cmd.Dir = td
@@ -418,6 +495,194 @@ set -q AWS_PROFILE; and fail "AWS_PROFILE left from a"
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil || stderr.Len() > 0 {
-		t.Fatalf("fish: %v\n%s\n%s (fake %s)", err, out, stderr.String(), fake)
+		t.Fatalf("fish: %v\nstdout: %s\nstderr: %s", err, out, stderr.String())
+	}
+	t.Logf("%s", strings.TrimSpace(string(out)))
+	got := hookEnvTokens(t, td)
+	// first source, cd, stamp, config, profiles: GH_TOKEN unset; then the
+	// newline value, unset, empty.
+	if len(got) < 3 || strings.Join(got[len(got)-3:], "|") != "=x\ny||=" {
+		t.Errorf("__CTX_SH_GH_TOKEN per run = %q", got)
+	}
+	for _, v := range got {
+		if v == "<none>" {
+			t.Errorf("a run without __CTX_SH_GH_TOKEN: %q", got)
+		}
+	}
+}
+
+// TestActivateGuardForkFree keeps the guard builtin-only: the hook's text up
+// to the ctx-core check has no command substitution.
+func TestActivateGuardForkFree(t *testing.T) {
+	for _, c := range []struct{ shell, start, end string }{
+		{"bash", "_ctx_hook() {", "[[ -x "},
+		{"zsh", "_ctx_hook() {", "[[ -x "},
+		{"fish", "function _ctx_hook ", "test -x "},
+	} {
+		g := activateScript(c.shell, "/c/ctx-core")
+		i := strings.Index(g, c.start)
+		j := strings.Index(g[i:], c.end)
+		if i < 0 || j < 0 {
+			t.Fatalf("%s: guard section not found", c.shell)
+		}
+		guard := g[i : i+j]
+		body := strings.TrimPrefix(guard, c.start)
+		// Command substitution ($(, backticks, fish's parentheses) or a pipe.
+		bad := regexp.MustCompile("\\$\\(|`|[^|]\\|[^|]")
+		if c.shell == "fish" {
+			bad = regexp.MustCompile("[()`]|[^|]\\|[^|]")
+		}
+		if m := bad.FindString(body); m != "" {
+			t.Errorf("%s guard contains %q:\n%s", c.shell, m, guard)
+		}
+	}
+}
+
+// interactiveShell runs script on the stdin of an interactive shell, which
+// runs the prompt hooks before each line as a terminal session does, and
+// returns stdout (prompts and job-control notes go to stderr).
+func interactiveShell(t *testing.T, env []string, td string, argv []string, script string) string {
+	t.Helper()
+	cmd := exec.Command(argv[0], append(append([]string{}, argv[1:]...), "-i")...)
+	cmd.Dir = td
+	cmd.Env = append(append([]string{}, env...), "PS1=", "PROMPT=", "RPROMPT=")
+	cmd.Stdin = strings.NewReader(script)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Logf("%s -i: %v (stderr %q)", argv[0], err, stderr.String())
+	}
+	return string(out)
+}
+
+// TestActivateErrexit runs the glue in interactive shells with errexit and
+// ERR traps: sourcing succeeds, `false && true` at the prompt does not end
+// the shell, the ERR trap / TRAPZERR fires once per failing command, and a
+// later PROMPT_COMMAND entry still sees the command's status (bash).
+func TestActivateErrexit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs interactive shells")
+	}
+	for key, argv := range activateShells(t) {
+		sh := shellOf(key)
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			td := t.TempDir()
+			env, _, _ := activateFixture(t, td, sh)
+			var exitScript, trapScript string
+			if sh == "zsh" {
+				exitScript = `setopt err_exit
+source "$GLUE"
+echo M-sourced
+cd w/a
+false && true
+echo M-alive=$? active=$CTX_ACTIVE_PROFILE
+`
+				trapScript = `source "$GLUE"
+TRAPZERR() { echo M-ZERR; }
+cd w/a
+false
+echo M-after
+`
+			} else {
+				exitScript = `cd "$TD"
+seen() { echo "M-seen=$?"; }
+PROMPT_COMMAND=seen
+set -e
+source "$GLUE"
+echo M-sourced
+cd w/a
+false && true
+echo M-alive active=$CTX_ACTIVE_PROFILE
+`
+				trapScript = `cd "$TD"
+source "$GLUE"
+trap 'echo M-ERR' ERR
+cd w/a
+false
+echo M-after
+`
+			}
+			out := interactiveShell(t, env, td, argv, `cd "$TD"`+"\n"+exitScript)
+			for _, want := range []string{"M-sourced", "M-alive", "active=a"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("errexit session: no %q in %q", want, out)
+				}
+			}
+			if sh == "zsh" && !strings.Contains(out, "M-alive=1") {
+				t.Errorf("zsh $? after precmd: %q", out)
+			}
+			if sh == "bash" && !strings.Contains(out, "M-seen=1") {
+				t.Errorf("a later PROMPT_COMMAND entry did not see status 1: %q", out)
+			}
+			out = interactiveShell(t, env, td, argv, `cd "$TD"`+"\n"+trapScript)
+			if n := strings.Count(out, "M-ERR") + strings.Count(out, "M-ZERR"); n != 1 || !strings.Contains(out, "M-after") {
+				t.Errorf("ERR trap fired %d times (want 1): %q", n, out)
+			}
+		})
+	}
+}
+
+// TestActivateBashPreexec runs the glue with the real bash-preexec 0.5.0
+// (testdata, vendored) in interactive bash, sourced before and after the
+// glue: one registration, first in precmd_functions (prompt tools that come
+// later see this prompt's CTX_PROMPT_*). Not under errexit: bash-preexec 0.5
+// itself ends a set -e shell after a failed command (__bp_set_ret_value).
+func TestActivateBashPreexec(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs interactive bash")
+	}
+	bp, err := filepath.Abs("testdata/bash-preexec/bash-preexec.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scripts := map[string]string{
+		"bash-preexec first": `source "$BP"
+tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }
+precmd_functions+=(tool)
+source "$GLUE"
+`,
+		"glue first": `source "$GLUE"
+source "$BP"
+tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }
+precmd_functions+=(tool)
+true
+source "$GLUE"
+`,
+	}
+	for key, argv := range activateShells(t) {
+		if shellOf(key) != "bash" {
+			continue
+		}
+		for name, setup := range scripts {
+			t.Run(name+"/"+key, func(t *testing.T) {
+				t.Parallel()
+				td := t.TempDir()
+				env, _, log := activateFixture(t, td, "bash")
+				env = append(env, "BP="+bp)
+				out := interactiveShell(t, env, td, argv, `cd "$TD"
+`+setup+`echo "M-pf=${precmd_functions[*]}"
+echo "M-pc=$(declare -p PROMPT_COMMAND | grep -c _ctx_hook)"
+cd w/a
+false
+echo M-alive active=$CTX_ACTIVE_PROFILE
+`)
+				// bash-preexec adds its own "precmd" entry.
+				for _, want := range []string{"M-pf=_ctx_hook precmd tool", "M-pc=0", "M-alive active=a"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("no %q in %q", want, out)
+					}
+				}
+				// The prompt after `cd w/a` already shows the profile to the tool.
+				if i := strings.Index(out, "M-pc="); i < 0 || !strings.Contains(out[i:], "M-tool show=1") {
+					t.Errorf("tool did not see this prompt's CTX_PROMPT_SHOW: %q", out)
+				}
+				b, _ := os.ReadFile(log)
+				if n := strings.Count(string(b), "hook-env"); n > 3 {
+					t.Errorf("%d hook-env runs for 2 cds:\n%s", n, b)
+				}
+			})
+		}
 	}
 }

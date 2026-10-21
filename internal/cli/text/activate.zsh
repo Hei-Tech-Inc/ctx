@@ -5,8 +5,10 @@
 # ctx runs as a child process, so `ctx use` / `ctx deactivate` cannot change this shell's
 # environment by themselves. This function evals their --eval output; every other
 # subcommand goes straight to the binary. Global flags may come before the subcommand.
-ctx() {
-  local -a _ctx_pre=() _ctx_args=()
+function ctx {
+  local -a _ctx_pre _ctx_args
+  _ctx_pre=()
+  _ctx_args=()
   local _ctx_a _ctx_out _ctx_rc _ctx_sub _ctx_dd="" _ctx_q="" _ctx_ng="" _ctx_js=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -55,30 +57,33 @@ ctx() {
 
 # The autoswitch hook. An unchanged prompt runs builtins only: ctx-core hook-env runs
 # when $PWD changed, this shell's stamp is missing, or the config or the profiles dir
-# changed since (a `ctx use` in another terminal). Keeps the caller's $?.
+# changed since (a `ctx use` in another terminal). Returns 0 (zsh restores $? after
+# precmd; a nonzero status would end an err_exit shell and fire TRAPZERR again).
 _ctx_hook() {
-  local _ctx_st=$? _ctx_out _ctx_d="${CTX_DIR:-$HOME/.ctx}"
+  local _ctx_out _ctx_d="${CTX_DIR:-$HOME/.ctx}"
   if [[ "$PWD" != "${__CTX_PWD-}" || ! -e "${__CTX_STAMP-}" || "$_ctx_d/config" -nt "$__CTX_STAMP" || "$_ctx_d/profiles" -nt "$__CTX_STAMP" ]]; then
-    [[ -x @CTX_CORE@ ]] || return "$_ctx_st"
-    _ctx_out="$(__CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" \
-      __CTX_SH_NOTIFY="${CTX_AUTOSWITCH_NOTIFY+=$CTX_AUTOSWITCH_NOTIFY}" \
-      __CTX_SH_GH_TOKEN="${GH_TOKEN+=$GH_TOKEN}" \
-      __CTX_SH_ACTIVE="${CTX_ACTIVE_PROFILE+=$CTX_ACTIVE_PROFILE}" \
-      __CTX_SH_GH_PROFILE="${_CTX_GH_PROFILE+=$_CTX_GH_PROFILE}" \
-      @CTX_CORE@ hook-env zsh)"
-    eval "$_ctx_out"
-    typeset -g __CTX_PWD="$PWD"
+    if [[ -x @CTX_CORE@ ]]; then
+      _ctx_out="$(__CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" \
+        __CTX_SH_NOTIFY="${CTX_AUTOSWITCH_NOTIFY+=$CTX_AUTOSWITCH_NOTIFY}" \
+        __CTX_SH_GH_TOKEN="${GH_TOKEN+=$GH_TOKEN}" \
+        __CTX_SH_ACTIVE="${CTX_ACTIVE_PROFILE+=$CTX_ACTIVE_PROFILE}" \
+        __CTX_SH_GH_PROFILE="${_CTX_GH_PROFILE+=$_CTX_GH_PROFILE}" \
+        @CTX_CORE@ hook-env zsh)" || :
+      eval "$_ctx_out" || :
+      typeset -g __CTX_PWD="$PWD"
+    fi
   fi
-  return "$_ctx_st"
+  return 0
 }
 
 # Registers _ctx_hook once on chpwd and precmd, removing the legacy hook.
 # The hook's globals are declared here so WARN_CREATE_GLOBAL stays quiet.
 typeset -g __CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" __CTX_PWD="${__CTX_PWD-}"
-autoload -Uz add-zsh-hook 2>/dev/null
-add-zsh-hook -d chpwd _ctx_profile_autoswitch 2>/dev/null
-add-zsh-hook -d precmd _ctx_profile_autoswitch 2>/dev/null
-add-zsh-hook chpwd _ctx_hook 2>/dev/null
-add-zsh-hook precmd _ctx_hook 2>/dev/null
-unfunction _ctx_profile_autoswitch 2>/dev/null
+# Every step tolerates failure: an err_exit .zshrc must survive the eval.
+autoload -Uz add-zsh-hook 2>/dev/null || :
+add-zsh-hook -d chpwd _ctx_profile_autoswitch 2>/dev/null || :
+add-zsh-hook -d precmd _ctx_profile_autoswitch 2>/dev/null || :
+add-zsh-hook chpwd _ctx_hook 2>/dev/null || :
+add-zsh-hook precmd _ctx_hook 2>/dev/null || :
+if (( ${+functions[_ctx_profile_autoswitch]} )); then unfunction _ctx_profile_autoswitch; fi
 _ctx_hook

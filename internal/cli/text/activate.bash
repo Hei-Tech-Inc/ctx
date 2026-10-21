@@ -5,8 +5,10 @@
 # ctx runs as a child process, so `ctx use` / `ctx deactivate` cannot change this shell's
 # environment by themselves. This function evals their --eval output; every other
 # subcommand goes straight to the binary. Global flags may come before the subcommand.
-ctx() {
-  local -a _ctx_pre=() _ctx_args=()
+function ctx {
+  local -a _ctx_pre _ctx_args
+  _ctx_pre=()
+  _ctx_args=()
   local _ctx_a _ctx_out _ctx_rc _ctx_sub _ctx_dd="" _ctx_q="" _ctx_ng="" _ctx_js=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -55,21 +57,25 @@ ctx() {
 
 # The autoswitch hook. An unchanged prompt runs builtins only: ctx-core hook-env runs
 # when $PWD changed, this shell's stamp is missing, or the config or the profiles dir
-# changed since (a `ctx use` in another terminal). Keeps the caller's $?.
+# changed since (a `ctx use` in another terminal). Returns 0, or with an argument the
+# caller's $? (PROMPT_COMMAND runs `_ctx_hook keep && :`, so later entries still see
+# the command's status while errexit and the ERR trap ignore it).
 _ctx_hook() {
   local _ctx_st=$? _ctx_out _ctx_d="${CTX_DIR:-$HOME/.ctx}"
   if [[ "$PWD" != "${__CTX_PWD-}" || ! -e "${__CTX_STAMP-}" || "$_ctx_d/config" -nt "$__CTX_STAMP" || "$_ctx_d/profiles" -nt "$__CTX_STAMP" ]]; then
-    [[ -x @CTX_CORE@ ]] || return "$_ctx_st"
-    _ctx_out="$(__CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" \
-      __CTX_SH_NOTIFY="${CTX_AUTOSWITCH_NOTIFY+=$CTX_AUTOSWITCH_NOTIFY}" \
-      __CTX_SH_GH_TOKEN="${GH_TOKEN+=$GH_TOKEN}" \
-      __CTX_SH_ACTIVE="${CTX_ACTIVE_PROFILE+=$CTX_ACTIVE_PROFILE}" \
-      __CTX_SH_GH_PROFILE="${_CTX_GH_PROFILE+=$_CTX_GH_PROFILE}" \
-      @CTX_CORE@ hook-env bash)"
-    eval "$_ctx_out"
-    __CTX_PWD="$PWD"
+    if [[ -x @CTX_CORE@ ]]; then
+      _ctx_out="$(__CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" \
+        __CTX_SH_NOTIFY="${CTX_AUTOSWITCH_NOTIFY+=$CTX_AUTOSWITCH_NOTIFY}" \
+        __CTX_SH_GH_TOKEN="${GH_TOKEN+=$GH_TOKEN}" \
+        __CTX_SH_ACTIVE="${CTX_ACTIVE_PROFILE+=$CTX_ACTIVE_PROFILE}" \
+        __CTX_SH_GH_PROFILE="${_CTX_GH_PROFILE+=$_CTX_GH_PROFILE}" \
+        @CTX_CORE@ hook-env bash)" || :
+      eval "$_ctx_out" || :
+      __CTX_PWD="$PWD"
+    fi
   fi
-  return "$_ctx_st"
+  if [[ -n "${1-}" ]]; then return "$_ctx_st"; fi
+  return 0
 }
 
 # _ctx_pc_strip CMD: CMD without the hook's names (ours and the legacy ones) as
@@ -77,7 +83,7 @@ _ctx_hook() {
 _ctx_pc_strip() {
   local _ctx_t _ctx_l _ctx_r _ctx_prev _ctx_nl=$'\n'
   _ctx_pc=";$1;"
-  for _ctx_t in _ctx_hook _ctx_profile_autoswitch _ctx_auto_switch; do
+  for _ctx_t in "_ctx_hook keep && :" _ctx_hook _ctx_profile_autoswitch _ctx_auto_switch; do
     for _ctx_l in ";" "$_ctx_nl"; do
       for _ctx_r in ";" "$_ctx_nl"; do
         _ctx_prev=""
@@ -92,11 +98,14 @@ _ctx_pc_strip() {
   _ctx_pc="${_ctx_pc%;}"
 }
 
-# Registers _ctx_hook once: in bash-preexec's precmd_functions when bash-preexec is
-# loaded, else first in PROMPT_COMMAND (an element when it is an array, bash 5.1+).
+# Registers _ctx_hook once, before the user's prompt commands (prompt tools then see
+# this prompt's CTX_PROMPT_*): first in bash-preexec's precmd_functions when
+# bash-preexec is loaded, else first in PROMPT_COMMAND (an element when it is an
+# array, bash 5.1+). Every step tolerates errexit.
 _ctx_activate() {
   local _ctx_pc _ctx_c _ctx_f _ctx_arr=""
-  local -a _ctx_new=()
+  local -a _ctx_new
+  _ctx_new=()
   if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
     eval '[[ -n "${PROMPT_COMMAND+x}" && "${PROMPT_COMMAND@a}" == *a* ]]' && _ctx_arr=1
   fi
@@ -121,11 +130,11 @@ _ctx_activate() {
     precmd_functions=(${_ctx_new[@]+"${_ctx_new[@]}"})
   fi
   if [[ -n "${bash_preexec_imported:-}${__bp_imported:-}" ]]; then
-    precmd_functions+=(_ctx_hook)
+    precmd_functions=(_ctx_hook ${precmd_functions[@]+"${precmd_functions[@]}"})
   elif [[ -n "$_ctx_arr" ]]; then
-    PROMPT_COMMAND=(_ctx_hook ${PROMPT_COMMAND[@]+"${PROMPT_COMMAND[@]}"})
+    PROMPT_COMMAND=("_ctx_hook keep && :" ${PROMPT_COMMAND[@]+"${PROMPT_COMMAND[@]}"})
   else
-    PROMPT_COMMAND="_ctx_hook${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+    PROMPT_COMMAND="_ctx_hook keep && :${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   fi
   unset -f _ctx_profile_autoswitch _ctx_auto_switch 2>/dev/null
 }
