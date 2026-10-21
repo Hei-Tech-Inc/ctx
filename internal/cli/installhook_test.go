@@ -37,11 +37,17 @@ func ihInstall(t *testing.T, drop ...string) (bin, lib string) {
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("cp", "-R", filepath.Join(repoRoot, "lib"), filepath.Join(root, "lib")).CombinedOutput()
+	// cp is looked up under procMu: a parallel sibling's inProc may have
+	// the process PATH set to its fakes right now.
+	cp, err := lookPath("cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(cp, "-R", filepath.Join(repoRoot, "lib"), filepath.Join(root, "lib")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("cp lib: %v %s", err, out)
 	}
-	if out, err := exec.Command("cp", filepath.Join(repoRoot, "bin", "ctx"), filepath.Join(root, "bin", "ctx")).CombinedOutput(); err != nil {
+	if out, err := exec.Command(cp, filepath.Join(repoRoot, "bin", "ctx"), filepath.Join(root, "bin", "ctx")).CombinedOutput(); err != nil {
 		t.Fatalf("cp bin/ctx: %v %s", err, out)
 	}
 	for _, d := range drop {
@@ -545,7 +551,7 @@ func TestInstallHookRemovesHistoricPastes(t *testing.T) {
 				}
 			}},
 		ihCase{name: "CRLF paste", shell: "/bin/zsh",
-			files:   map[string]string{".zshrc": "u\r\n" + pasteHeaderBash + "\r\nbody\r\n\r\nif x; then\r\n  _ctx_profile_autoswitch\r\nfi\r\nv\r\n"},
+			files:   map[string]string{".zshrc": "u\r\n" + pasteHeaderBash + "\r\nbody\r\n\r\nif x; then\r\n  PROMPT_COMMAND=\"_ctx_profile_autoswitch${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"\r\n  _ctx_profile_autoswitch\r\nfi\r\nv\r\n"},
 			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
 				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "u\r\nv\r\n\n# BEGIN") {
 					t.Errorf(".zshrc %q", s)
@@ -558,6 +564,17 @@ func TestInstallHookRemovesHistoricPastes(t *testing.T) {
 				"export MYVAR=keep\nalias ll='ls -l'\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n"},
 			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
 				want := "export A=1\n\nexport MYVAR=keep\nalias ll='ls -l'\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n\n# BEGIN"
+				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, want) {
+					t.Errorf("user lines lost:\n%s", s)
+				}
+			}},
+		// Reviewer's repro: a header left behind with its body deleted, and a
+		// user block that ends like a paste ("  _ctx_profile_autoswitch", "fi")
+		// but without the historic PROMPT_COMMAND line before it.
+		ihCase{name: "a leftover header above a user block ending like a paste keeps the user lines", shell: "/bin/zsh",
+			files:   map[string]string{".zshrc": "export A=1\n" + ihPasteBash + "\n\nexport MYVAR=keep\nif [ -n \"$X\" ]; then\n  _ctx_profile_autoswitch\nfi\nexport AFTER=1\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				want := "export A=1\n\nexport MYVAR=keep\nif [ -n \"$X\" ]; then\n  _ctx_profile_autoswitch\nfi\nexport AFTER=1\n\n# BEGIN"
 				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, want) {
 					t.Errorf("user lines lost:\n%s", s)
 				}

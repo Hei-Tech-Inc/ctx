@@ -108,3 +108,14 @@ func TestInstallHookCtrlCLeavesNoTemp(t *testing.T) {
 		}
 	}
 }
+
+// TestSignaledCode: a child killed by SIGINT or SIGTERM gives 130 or 143 (R24);
+// a plain failure or success gives 0.
+func TestSignaledCode(t *testing.T) {
+	for script, want := range map[string]int{"kill -INT $$": 130, "kill -TERM $$": 143, "exit 1": 0, "exit 0": 0} {
+		err := exec.Command("/bin/sh", "-c", script).Run()
+		if got := signaledCode(err); got != want {
+			t.Errorf("%s: signaledCode(%v) = %d, want %d", script, err, got, want)
+		}
+	}
+}

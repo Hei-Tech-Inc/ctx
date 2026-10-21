@@ -172,6 +172,9 @@ func Upgrade(t tui.Term, args []string) int {
 	if c := sigs.caught(); c != 0 {
 		return c
 	}
+	if c := signaledCode(err); c != 0 {
+		return c // the Ctrl+C reached the installer before our handler saw it
+	}
 	if err != nil {
 		return u.die("Upgrade installer failed")
 	}
@@ -276,3 +279,18 @@ func (s *stopSignals) caught() int {
 }
 
 func (s *stopSignals) stop() { signal.Stop(s.ch) }
+
+// signaledCode is 128+N when err says the child was killed by signal N (130
+// for SIGINT, 143 for SIGTERM), as a shell reports it, else 0. A Ctrl+C
+// reaches the whole process group, so the child may die of it before the
+// stopSignals channel has the signal; the exit is then quiet like Bash's INT
+// trap.
+func signaledCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			return 128 + int(ws.Signal())
+		}
+	}
+	return 0
+}

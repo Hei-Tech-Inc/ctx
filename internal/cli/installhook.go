@@ -184,14 +184,22 @@ const (
 	pasteLastLineFish = "_ctx_profile_autoswitch"
 )
 
+// The line two above a bash paste's final "fi" in every historic version
+// (970aa1a has the second, the others the first).
+const (
+	pastePromptBash    = `  PROMPT_COMMAND="_ctx_profile_autoswitch${PROMPT_COMMAND:+;$PROMPT_COMMAND}"`
+	pastePromptBashOld = `  PROMPT_COMMAND="${PROMPT_COMMAND//_ctx_auto_switch;/}"`
+)
+
 // pasteEnd is _ctx_rc_paste_end: which full paste (bash or fish) ends at line
 // l, given the two lines before it (p1 right before), or "". Every historic
-// bash paste ends "  _ctx_profile_autoswitch" then "fi"; every fish paste
-// ends "end", maybe a blank line, then "_ctx_profile_autoswitch". A user's
-// own `fi` elsewhere is not such an end.
+// bash paste ends with one of the PROMPT_COMMAND lines above,
+// "  _ctx_profile_autoswitch", then "fi"; every fish paste ends "end", maybe
+// a blank line, then "_ctx_profile_autoswitch". A user's own `fi` elsewhere
+// is not such an end.
 func pasteEnd(p2, p1, l string) string {
 	switch {
-	case l == "fi" && p1 == "  _ctx_profile_autoswitch":
+	case l == "fi" && p1 == "  _ctx_profile_autoswitch" && (p2 == pastePromptBash || p2 == pastePromptBashOld):
 		return "bash"
 	case l == pasteLastLineFish && (p1 == "end" || p1 == "" && p2 == "end"):
 		return "fish"

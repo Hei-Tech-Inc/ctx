@@ -2113,6 +2113,12 @@ test_install_hook_keeps_rc() {
     out="$(_hook "$HOME/.partial")" || { echo "partial paste: $out"; exit 1; }
     want=$'export A=1\n\nexport MYVAR=keep\nalias ll=ls\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n'
     [[ "$(head -8 "$HOME/.partial")"$'\n' == "$want" ]] || { echo "partial paste lost user lines: $(cat "$HOME/.partial")"; exit 1; }
+    # a leftover header, body gone, above a user block that ends like a paste (no PROMPT_COMMAND line)
+    printf 'export A=1\n%s\n\nexport MYVAR=keep\nif [ -n "$X" ]; then\n  _ctx_profile_autoswitch\nfi\nexport AFTER=1\n' \
+      '# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook' >"$HOME/.leftover"
+    out="$(_hook "$HOME/.leftover")" || { echo "leftover header: $out"; exit 1; }
+    want=$'export A=1\n\nexport MYVAR=keep\nif [ -n "$X" ]; then\n  _ctx_profile_autoswitch\nfi\nexport AFTER=1'
+    [[ "$(head -7 "$HOME/.leftover")" == "$want" ]] || { echo "leftover header lost user lines: $(cat "$HOME/.leftover")"; exit 1; }
     # a comment that only starts like a legacy header is the user's
     printf '# ctx profile autoswitch notes\nmine=1\n' >"$HOME/.notes"
     out="$(_hook "$HOME/.notes")" || { echo "notes: $out"; exit 1; }

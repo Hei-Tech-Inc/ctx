@@ -1930,14 +1930,23 @@ CTX_PASTE_HEADER_FISH="# ctx profile autoswitch — fish (see lib/ctx_autoswitch
 CTX_LEGACY_HEADER_HOOK="# ── ctx auto-switch ───────────────────────────────────────────────────────────"
 CTX_LEGACY_HEADER_INSTALLER="# ── ctx auto-switch — added by ctx installer ─────────────────────────────────"
 
+# The line two above a bash paste's final "fi" in every historic version
+# (970aa1a has the second, the others the first).
+# shellcheck disable=SC2016 # literal rc text
+CTX_PASTE_PROMPT_BASH='  PROMPT_COMMAND="_ctx_profile_autoswitch${PROMPT_COMMAND:+;$PROMPT_COMMAND}"'
+# shellcheck disable=SC2016
+CTX_PASTE_PROMPT_BASH_OLD='  PROMPT_COMMAND="${PROMPT_COMMAND//_ctx_auto_switch;/}"'
+
 # Print which full paste (bash or fish) ends at line L, given the two lines
 # before it (P1 right before); print nothing and return 1 when none does.
-# Every historic bash paste ends "  _ctx_profile_autoswitch" then "fi"; every
-# fish paste ends "end", maybe a blank line, then "_ctx_profile_autoswitch".
-# A user's own `fi` elsewhere is not such an end.
+# Every historic bash paste ends with one of the PROMPT_COMMAND lines above,
+# "  _ctx_profile_autoswitch", then "fi"; every fish paste ends "end", maybe a
+# blank line, then "_ctx_profile_autoswitch". A user's own `fi` elsewhere is
+# not such an end.
 _ctx_rc_paste_end() {
   local p2="$1" p1="$2" l="$3"
-  if [[ "$l" == "fi" && "$p1" == "  _ctx_profile_autoswitch" ]]; then
+  if [[ "$l" == "fi" && "$p1" == "  _ctx_profile_autoswitch" &&
+    ( "$p2" == "$CTX_PASTE_PROMPT_BASH" || "$p2" == "$CTX_PASTE_PROMPT_BASH_OLD" ) ]]; then
     printf 'bash'
   elif [[ "$l" == _ctx_profile_autoswitch && ( "$p1" == "end" || ( -z "$p1" && "$p2" == "end" ) ) ]]; then
     printf 'fish'
