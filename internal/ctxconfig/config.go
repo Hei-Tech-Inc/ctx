@@ -37,6 +37,8 @@ type Config struct {
 	// PromptWorkdirDepthText is the depth exactly as ctx_config_prompt_workdir_max_depth
 	// prints it (digits as written, e.g. "007"), "2" when unset or invalid.
 	PromptWorkdirDepthText string
+	// AutoswitchNotify is autoswitch_notify (last value) read as the hook does; see ParseNotify.
+	AutoswitchNotify bool
 	// Last holds the raw last value of every key (like grep | tail -1 | cut -d= -f2-).
 	Last map[string]string
 }
@@ -81,11 +83,39 @@ func Load() (*Config, error) {
 	}
 	cfg.ManualPWD = decodeManualPWD(last["manual_pwd"])
 	cfg.PromptExtraPaths = stripCR(last["prompt_extra_paths"])
+	cfg.AutoswitchNotify = ParseNotify(last["autoswitch_notify"])
 	cfg.SSHAgentAdded = stripCR(last["ssh_agent_added"])
 	cfg.SecretProvider = last["secret_provider"]
 	cfg.PromptWorkdirDepthText = depthText(last["prompt_workdir_max_depth"])
 	cfg.PromptWorkdirMaxDepth = parseDepth(last["prompt_workdir_max_depth"])
 	return cfg, nil
+}
+
+// ParseNotify reads an autoswitch_notify value (or CTX_AUTOSWITCH_NOTIFY) the way
+// the hook does: all whitespace removed, then 1, true, yes or on in any case
+// enable it; anything else, including empty, is off.
+func ParseNotify(v string) bool {
+	v = strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\n', '\r', '\v', '\f':
+			return -1
+		}
+		return r
+	}, v)
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// NotifyEnabled applies the hook's precedence: a non-empty CTX_AUTOSWITCH_NOTIFY
+// (envVal) wins even when falsy, else the config value.
+func (c *Config) NotifyEnabled(envVal string) bool {
+	if envVal != "" {
+		return ParseNotify(envVal)
+	}
+	return c.AutoswitchNotify
 }
 
 func stripCR(s string) string { return strings.ReplaceAll(s, "\r", "") }

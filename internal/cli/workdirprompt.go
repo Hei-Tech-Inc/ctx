@@ -37,34 +37,21 @@ func relDepthUnder(p, r string) int {
 	return len(strings.Split(x, "/"))
 }
 
-// WorkdirPrompt ports cmd_workdir_prompt: it prints work_dir='WORK_DIR=<root>'
-// when pwd is within the configured depth of the resolved WORK_DIR, or under a
-// prompt_extra_paths entry, and nothing otherwise.
-func WorkdirPrompt(w io.Writer, pwd string) error {
-	initDirs()
-	if pwd == "" {
-		pwd = os.Getenv("HOME")
-	}
-	_, root, err := resolve.Path(pwd, profile.Dir())
-	if err != nil {
-		return nil // Bash returns silently when resolution fails
-	}
-	cfg, err := ctxconfig.Load()
-	if err != nil {
-		return err
-	}
-	show := false
-	if root != "" {
-		if d := relDepthUnder(pwd, root); d >= 0 && d <= cfg.PromptWorkdirMaxDepth {
-			show = true
+// PromptScope is the prompt decision shared by `ctx workdir-prompt` and the
+// autoswitch hook (_ctx_prompt_update_exports). name and wd are what
+// resolve.Path returned for pwd. It reports whether the prompt shows the
+// work dir (pwd within prompt_workdir_max_depth of wd, or under a
+// prompt_extra_paths entry), the profile for CTX_PROMPT_PROFILE (the resolved
+// one, else the config's active profile) and the root for CTX_PROMPT_WORK_DIR.
+func PromptScope(pwd string, cfg *ctxconfig.Config, name, wd string) (show bool, profileName, root string) {
+	if name != "" && wd != "" {
+		if d := relDepthUnder(pwd, wd); d >= 0 && d <= cfg.PromptWorkdirMaxDepth {
+			show, root = true, wd
 		}
 	}
-	if !show && cfg.PromptExtraPaths != "" {
-		// Bash feeds `printf '%s' "$pex" | tr ':' '\n'` to `while read -r`, and read
-		// drops a final line that has no trailing newline, so the last piece never
-		// counts (a trailing ":" makes it an empty, ignored piece). Kept for parity.
-		pieces := strings.Split(cfg.PromptExtraPaths, ":")
-		for _, piece := range pieces[:len(pieces)-1] {
+	if !show {
+		// Every piece counts, the last included (R5; Bash used to drop it).
+		for _, piece := range strings.Split(cfg.PromptExtraPaths, ":") {
 			if piece == "" {
 				continue
 			}
@@ -75,8 +62,33 @@ func WorkdirPrompt(w io.Writer, pwd string) error {
 			}
 		}
 	}
-	if show && root != "" {
-		_, err = fmt.Fprintf(w, "work_dir='WORK_DIR=%s'\n", root)
+	if !show {
+		return false, "", ""
+	}
+	profileName = name
+	if profileName == "" {
+		profileName = cfg.Active
+	}
+	return true, profileName, root
+}
+
+// WorkdirPrompt ports cmd_workdir_prompt: it prints work_dir='WORK_DIR=<root>'
+// when PromptScope says the prompt shows the work dir, and nothing otherwise.
+func WorkdirPrompt(w io.Writer, pwd string) error {
+	initDirs()
+	if pwd == "" {
+		pwd = os.Getenv("HOME")
+	}
+	name, root, err := resolve.Path(pwd, profile.Dir())
+	if err != nil {
+		return nil // Bash returns silently when resolution fails
+	}
+	cfg, err := ctxconfig.Load()
+	if err != nil {
+		return err
+	}
+	if show, _, r := PromptScope(pwd, cfg, name, root); show && r != "" {
+		_, err = fmt.Fprintf(w, "work_dir='WORK_DIR=%s'\n", r)
 		return err
 	}
 	return nil

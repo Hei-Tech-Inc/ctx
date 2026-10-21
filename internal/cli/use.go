@@ -27,6 +27,15 @@ var profileVars = []string{
 	"KUBE_CONTEXT", "SECRET_KEYS", "EXTRA_ENVS", "SIGNING_FORMAT", "SIGNING_KEY",
 }
 
+// UseOpts replaces the CTX_QUIET and CTX_AUTO_SWITCH environment switches of
+// `ctx use` for in-process callers. Quiet suppresses progress lines;
+// AutoSwitch is the hook's mode (no gh switch, keep a manual lock, SetAuto).
+// Shell is the --eval dialect ("bash", "zsh", "fish"), used by UseIn's output.
+type UseOpts struct {
+	Quiet, AutoSwitch bool
+	Shell             string
+}
+
 // UseIn runs `ctx use <profile> [--eval bash|fish]`, mirroring cmd_use and
 // _ctx_use_apply in lib/cmd_ops.sh, and returns the exit code: the number of
 // failed switches. Like Bash, it is quiet unless CTX_QUIET is unset or "0".
@@ -34,7 +43,11 @@ var profileVars = []string{
 // stderr.
 func UseIn(t tui.Term, args []string) int {
 	stdout, stderr := t.Out, t.Err
-	quiet := os.Getenv("CTX_QUIET") != "" && os.Getenv("CTX_QUIET") != "0"
+	opts := UseOpts{
+		Quiet:      os.Getenv("CTX_QUIET") != "" && os.Getenv("CTX_QUIET") != "0",
+		AutoSwitch: os.Getenv("CTX_AUTO_SWITCH") == "1",
+	}
+	quiet := opts.Quiet
 	name, evalShell := "", ""
 	usage := ui{out: stdout, err: stderr, colors: t.Colors}
 	for i := 0; i < len(args); i++ {
@@ -62,7 +75,7 @@ func UseIn(t tui.Term, args []string) int {
 	}
 
 	if evalShell == "" {
-		a := &useApply{u: termUI(t), out: stdout, quiet: quiet, tm: t}
+		a := &useApply{u: termUI(t), out: stdout, quiet: quiet, tm: t, opts: opts}
 		code, _ := a.run(name)
 		if !quiet && len(a.exports) > 1 {
 			var names []string
@@ -80,7 +93,8 @@ func UseIn(t tui.Term, args []string) int {
 	// Bash runs _ctx_use_apply "$name" >&2: every message line goes to stderr.
 	et := t
 	et.Out = stderr
-	a := &useApply{u: termUI(et), out: stderr, quiet: quiet, tm: et}
+	opts.Shell = evalShell
+	a := &useApply{u: termUI(et), out: stderr, quiet: quiet, tm: et, opts: opts}
 	code, ok := a.run(name)
 	if !ok {
 		return code
@@ -101,6 +115,7 @@ func UseIn(t tui.Term, args []string) int {
 type useApply struct {
 	u       ui
 	quiet   bool
+	opts    UseOpts
 	tm      tui.Term  // rich selects the Accent "Active context" line
 	out     io.Writer // where the tools' stdout goes (stderr under --eval)
 	exports [][2]string
@@ -170,7 +185,7 @@ func (a *useApply) run(name string) (code int, ok bool) {
 	errs := 0
 
 	// 1. GitHub — the autoswitch hook sets GH_TOKEN per terminal instead.
-	if p.GithubUser != "" && os.Getenv("CTX_AUTO_SWITCH") != "1" && has("gh") {
+	if p.GithubUser != "" && !a.opts.AutoSwitch && has("gh") {
 		if a.tool(a.out, nil, "gh", "auth", "switch", "-u", p.GithubUser) != nil {
 			u.warn(fmt.Sprintf("gh switch failed for '%s' — run: gh auth login", p.GithubUser))
 			errs++
@@ -291,7 +306,7 @@ func (a *useApply) run(name string) (code int, ok bool) {
 	ctxconfig.Log("Switched to profile: " + name)
 	a.export("CTX_ACTIVE_PROFILE", name)
 
-	if os.Getenv("CTX_AUTO_SWITCH") == "1" {
+	if a.opts.AutoSwitch {
 		// The hook re-applying a profile already locked by hand keeps the lock.
 		source := "auto"
 		if cfg, err := ctxconfig.Load(); err == nil {

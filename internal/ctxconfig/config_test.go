@@ -152,3 +152,18 @@ func TestWorkRoot(t *testing.T) {
 		t.Errorf("env = %q", got)
 	}
 }
+
+func TestParseNotify(t *testing.T) {
+	for v, want := range map[string]bool{
+		"": false, "1": true, "on": true, "ON": true, " Yes ": true, "tr ue": true, "TRUE\r": true,
+		"0": false, "off": false, "2": false, "enabled": false, "true1": false,
+	} {
+		if got := ParseNotify(v); got != want {
+			t.Errorf("ParseNotify(%q) = %v, want %v", v, got, want)
+		}
+	}
+	c := &Config{AutoswitchNotify: true}
+	if c.NotifyEnabled("0") || !c.NotifyEnabled("") || !(&Config{}).NotifyEnabled("on") {
+		t.Error("NotifyEnabled precedence wrong")
+	}
+}

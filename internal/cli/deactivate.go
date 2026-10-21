@@ -62,7 +62,7 @@ func Deactivate(stdout, stderr io.Writer, args []string) int {
 	_ = ctxconfig.ClearActivation()
 
 	fish := echoLower(shell) == "fish"
-	_, _ = io.WriteString(stdout, deactivateUnsets(p, fish, wd))
+	_, _ = io.WriteString(stdout, DeactivateUnsets(p, fish, wd))
 
 	if !wantEval && quiet == "0" {
 		u.dim("Tip (fish): ctx deactivate --eval fish | source")
@@ -88,8 +88,8 @@ func currentPWD() string {
 	return cwd
 }
 
-// deactivateUnsets mirrors _ctx_deactivate_emit_unsets.
-func deactivateUnsets(p *profile.Profile, fish bool, wd string) string {
+// DeactivateUnsets (exported for hookenv) mirrors _ctx_deactivate_emit_unsets.
+func DeactivateUnsets(p *profile.Profile, fish bool, wd string) string {
 	var b strings.Builder
 	line := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	isSep := func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' }
