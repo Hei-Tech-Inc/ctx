@@ -52,6 +52,8 @@ var hookCases = []hookCase{
 	{name: "exported CTX_AUTOSWITCH_NOTIFY=0 beats config on", steps: []string{"w/a", "."}, env: []string{"CTX_AUTOSWITCH_NOTIFY=0"}},
 	// R13: leaving a deleted current profile clears it once; no notify on later cds.
 	{name: "deleted current profile left once", steps: []string{".", "home", ".", "w/a"}, config: []string{"active=gone"}},
+	// Several active= lines (a hand edit): the last one is the current profile.
+	{name: "several active= lines", steps: []string{"w/a", "w/b", "."}, config: []string{"active=a", "active=b"}},
 }
 
 // hookFixture writes profiles, dirs, config, secrets and fakes under td and

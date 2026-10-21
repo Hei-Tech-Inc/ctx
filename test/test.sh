@@ -1296,17 +1296,19 @@ test_autoswitch_shim() {
         # Core in p, flip to the legacy hook, leave p there, set a variable of
         # the user, flip back: activate starts clean, without a stale
         # __CTX_STATE that would "leave" p again, unset AWS_PROFILE and notify.
+        # The notify output is checked both ways: entering p notifies (the capture works).
+        CTX_AUTOSWITCH_NOTIFY=1
         source "$R/lib/ctx_autoswitch.bash"
-        cd "$T/w/p/r" && prompt 2>/dev/null
+        { cd "$T/w/p/r" && prompt; } 2>"$T/enter.err"
+        grep -q "→ p" "$T/enter.err" || fail "flip: enter did not notify: $(cat "$T/enter.err")"
         [[ "${CTX_ACTIVE_PROFILE:-}" == p ]] || fail "flip: enter: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
         [[ "${AWS_PROFILE:-}" == pa ]] || fail "flip: enter: AWS_PROFILE=${AWS_PROFILE:-}"
         CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
-        cd "$T" && prompt 2>/dev/null
+        { cd "$T" && prompt; } 2>/dev/null
         [[ -z "${CTX_ACTIVE_PROFILE:-}" ]] || fail "flip: legacy leave: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
         export AWS_PROFILE=mine
-        source "$R/lib/ctx_autoswitch.bash"
-        CTX_AUTOSWITCH_NOTIFY=1
-        prompt 2>"$T/flip.err"
+        # The source itself runs the hook once: a phantom leave would show there, too.
+        { source "$R/lib/ctx_autoswitch.bash" && prompt; } 2>"$T/flip.err"
         unset CTX_AUTOSWITCH_NOTIFY
         [[ "${AWS_PROFILE-<unset>}" == mine ]] || fail "flip: AWS_PROFILE=${AWS_PROFILE-<unset>}, want mine"
         ! grep -q "←" "$T/flip.err" || fail "flip: phantom leave: $(cat "$T/flip.err")"
@@ -1373,9 +1375,14 @@ test_autoswitch_shim() {
         end
         # Core in p, legacy leaves p, the user sets AWS_PROFILE, core again:
         # no stale __CTX_STATE "leave" (unsetting it, notifying) on the prompt.
+        # The notify output goes to the shell stderr (a redirection on emit need not
+        # reach the handlers): test.sh checks it between markers, both ways.
+        set -g CTX_AUTOSWITCH_NOTIFY 1
         source $lib
+        echo M-enter-start >&2
         cd $CTX_T_TD/w/p/r
         emit fish_postexec
+        echo M-enter-end >&2
         test "$CTX_ACTIVE_PROFILE" = p; or fail "flip: enter: $CTX_ACTIVE_PROFILE"
         test "$AWS_PROFILE" = pa; or fail "flip: enter: AWS_PROFILE=$AWS_PROFILE"
         set -gx CTX_CORE off
@@ -1385,19 +1392,364 @@ test_autoswitch_shim() {
         emit fish_postexec
         test -z "$CTX_ACTIVE_PROFILE"; or fail "flip: legacy leave: $CTX_ACTIVE_PROFILE"
         set -gx AWS_PROFILE mine
+        echo M-flip-start >&2
         source $lib
-        set -g CTX_AUTOSWITCH_NOTIFY 1
-        emit fish_postexec 2>$CTX_T_TD/flip.err
+        emit fish_postexec
+        echo M-flip-end >&2
         set -e CTX_AUTOSWITCH_NOTIFY
         test "$AWS_PROFILE" = mine; or fail "flip: AWS_PROFILE=$AWS_PROFILE, want mine"
-        grep -q "←" $CTX_T_TD/flip.err; and fail "flip: phantom leave:" (cat $CTX_T_TD/flip.err)
-      ' || exit 1
+        echo FISH-OK
+      ' >"$td/out" 2>"$td/err" || true
+      [[ "$(cat "$td/out")" == FISH-OK ]] || { echo "fish: $(cat "$td/out") $(cat "$td/err")"; exit 1; }
+      sed -n '/^M-enter-start$/,/^M-enter-end$/p' "$td/err" | grep -q "→ p" || { echo "fish: enter did not notify: $(cat "$td/err")"; exit 1; }
+      ! sed -n '/^M-flip-start$/,/^M-flip-end$/p' "$td/err" | grep -q "←" || { echo "fish: phantom leave: $(cat "$td/err")"; exit 1; }
       rm -rf "$td"
     ) || fail "autoswitch lib shim (fish)"
     pass "autoswitch lib evals ctx-core activate, falls back to the legacy hook, and keeps one hook across re-sources (bash, zsh, fish)"
   else
     pass "autoswitch lib evals ctx-core activate, falls back to the legacy hook, and keeps one hook across re-sources (bash, zsh; fish not installed, skipped)"
   fi
+}
+
+# _hook_it_fixture: profiles a (a secret) and b under $td/w, and $td/log/ctx-core, a
+# canary that logs every call to $td/log/calls and runs the real ctx-core. For
+# `activate` it bakes its own path into the glue, so the hook's calls are logged too.
+_hook_it_fixture() {
+  td="$(cd "$(mktemp -d)" && pwd -P)"
+  export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1 LC_ALL=C
+  unset CTX_CORE_BIN CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER CTX_AUTOSWITCH_NOTIFY CTX_QUIET GH_TOKEN _CTX_GH_PROFILE AWS_PROFILE A_SECRET
+  mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/a" "$td/w/a/r" "$td/w/b/r" "$td/x" "$td/log" "$td/syspath"
+  printf 'secret_provider=file\nprompt_extra_paths=%s\n' "$td/x" >"$CTX_DIR/config"
+  printf 'PROFILE_NAME=a\nWORK_DIR=%s\nAWS_PROFILE_NAME=pa\nSECRET_KEYS=A_SECRET\nEXTRA_ENVS=\n' "$td/w/a" >"$CTX_DIR/profiles/a.conf"
+  printf 'PROFILE_NAME=b\nWORK_DIR=%s\nAWS_PROFILE_NAME=pb\nSECRET_KEYS=\nEXTRA_ENVS=\n' "$td/w/b" >"$CTX_DIR/profiles/b.conf"
+  printf 'sa' >"$CTX_DIR/secrets/a/A_SECRET"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/log/calls"\nif [ "$1" = activate ]; then\n  out="$("%s/bin/ctx-core" "$@")" || exit $?\n  printf "%%s\\n" "$out" | sed "s|%s/bin/ctx-core|%s/log/ctx-core|g"\n  exit 0\nfi\nexec "%s/bin/ctx-core" "$@"\n' \
+    "$td" "$ROOT_DIR" "$ROOT_DIR" "$td" "$ROOT_DIR" >"$td/log/ctx-core"
+  chmod +x "$td/log/ctx-core"
+  # A hermetic PATH: ctx from this checkout, then only the system dirs (no cloud CLIs).
+  for d in /usr/bin /bin; do ln -sf "$d"/* "$td/syspath/" 2>/dev/null || true; done
+  rm -f "$td/syspath/ctx" "$td/syspath/ctx-core"
+  export PATH="$ROOT_DIR/bin:$td/syspath"
+}
+
+# The plan's Review Focus 1-5 end to end, through lib/ctx_autoswitch.bash and the real
+# ctx-core (real bash 3.2, bash, zsh; fish when installed, required in CI):
+#   1. 50 prompts without a change run no ctx-core (the logging canary) and the guard has
+#      no command substitution (a $(…) fork the canary cannot see);
+#   2. `ctx use` / `ctx deactivate` in another terminal: the next prompt here runs
+#      hook-env once and ends as the legacy hook does (SNAP lines, compared), also when a
+#      third shell's hook ran first (per-shell stamps, R12);
+#   3. leaving a profile whose .conf was deleted unsets what it exported;
+#   4. an old rc block (legacy hook), the upgraded lib and an added `ctx activate` line,
+#      each sourced twice, leave one hook that runs once per prompt; user hooks kept;
+#      re-sourcing in a hooked shell changes nothing;
+#   5. bash 5.1+ with PROMPT_COMMAND as an array.
+test_hook_integration() {
+  local sh v out want got
+  if [[ -n "${CI:-}" ]]; then
+    command -v zsh >/dev/null 2>&1 || fail "CI must install zsh (the hook tests would skip it)"
+    command -v fish >/dev/null 2>&1 || fail "CI must install fish (the hook tests would skip it)"
+  fi
+  if [[ "${CTX_CORE:-}" == off || ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    pass "hook integration check skipped (CTX_CORE=off or no bin/ctx-core)"
+    return 0
+  fi
+  for sh in /bin/bash bash zsh; do
+    command -v "$sh" >/dev/null 2>&1 || continue
+    for v in legacy string array; do
+      [[ "$v" != array || "$sh" != zsh ]] || continue
+      out="$(
+        set -euo pipefail
+        local td
+        _hook_it_fixture
+        _hook_it_session >"$td/session.sh"
+        cd "$td"
+        "$sh" "$td/session.sh" "$ROOT_DIR" "$td" "$(basename "$sh")" "$v" 2>&1 || true
+        rm -rf "$td"
+      )"
+      case "$out" in
+        *$'\n'SKIP | SKIP) continue ;;
+        *$'\n'OK) ;;
+        *) fail "hook integration ($sh, $v): $out" ;;
+      esac
+      got="$(grep '^SNAP ' <<<"$out")"
+      if [[ "$v" == legacy ]]; then
+        want="$got"
+        [[ -n "$want" ]] || fail "hook integration ($sh): no legacy snapshots"
+      elif [[ "$got" != "$want" ]]; then
+        fail "hook integration ($sh, $v): another terminal's change differs from the legacy hook:"$'\n'"legacy:"$'\n'"$want"$'\n'"core:"$'\n'"$got"
+      fi
+    done
+  done
+  if command -v fish >/dev/null 2>&1; then
+    out="$(
+      set -euo pipefail
+      local td
+      _hook_it_fixture
+      _hook_it_session_fish >"$td/session.fish"
+      cd "$td"
+      fish --no-config "$td/session.fish" "$ROOT_DIR" "$td" 2>"$td/err" || true
+      # The notify output of a step is the stderr between its markers (event handlers
+      # write to the shell's own stderr, whatever a redirection on `emit` says): entering
+      # a notifies, re-applying the other terminal's lock does not (as legacy, m1 and m2).
+      sed -n '/^M-enter-start$/,/^M-enter-end$/p' "$td/err" | grep -qF '[ctx] → a' || echo "enter notify: $(cat "$td/err")"
+      [[ "$(sed -n '/^M-reapply-start$/,/^M-reapply-end$/p' "$td/err")" == $'M-reapply-start\nM-reapply-end' ]] \
+        || echo "re-apply notified: $(cat "$td/err")"
+      rm -rf "$td"
+    )"
+    [[ "$(grep -v '^SNAP ' <<<"$out")" == FISH-OK ]] || fail "hook integration (fish): $out"
+    # The fish snapshots, against the bash legacy hook's of the same steps.
+    got="$(grep '^SNAP ' <<<"$out" | sed 's/ err=.*$//')"
+    want="$(sed 's/ err=.*$//' <<<"$want")"
+    [[ -n "$got" && "$got" == "$want" ]] || fail "hook integration (fish): differs from the legacy hook:"$'\n'"legacy:"$'\n'"$want"$'\n'"fish:"$'\n'"$got"
+    pass "hook integration: no fork on unchanged prompts, other terminals as legacy, deleted profile, re-source, array PROMPT_COMMAND (bash 3.2, bash, zsh, fish)"
+  else
+    pass "hook integration: no fork on unchanged prompts, other terminals as legacy, deleted profile, re-source, array PROMPT_COMMAND (bash 3.2, bash, zsh; fish not installed, skipped)"
+  fi
+}
+
+# _hook_it_session: test_hook_integration's script for bash and zsh, run as
+# SHELL script R T SH V (V: legacy = the legacy hook; string, array = the core hook with
+# that PROMPT_COMMAND). Prints SNAP lines and OK, or the failure.
+_hook_it_session() {
+  cat <<'EOF'
+R=$1 T=$2 SH=$3 V=$4
+fail() { echo "$SH ($V): $*"; exit 1; }
+CORE=$T/log/ctx-core LOG=$T/log/calls
+count() { N=0; if [ -f "$LOG" ]; then while IFS= read -r _l; do N=$((N+1)); done <"$LOG"; fi; }
+settle() { count; _base=$N; }
+delta() {
+  [ "$V" != legacy ] || return 0
+  count; [ $((N-_base)) = "$1" ] || fail "$2: $((N-_base)) ctx-core calls, want $1"; _base=$N
+}
+ran1=0 ran2=0
+user1() { ran1=$((ran1+1)); }
+user2() { ran2=$((ran2+1)); }
+# prompt: one prompt's hooks, run as the shell runs them. regs: the hook is registered
+# once (zsh: chpwd and precmd), the legacy one not at all, the user's hooks kept.
+if [ -n "${ZSH_VERSION-}" ]; then
+  precmd_functions=(user1 user2)
+  prompt() { local _f; for _f in $precmd_functions; do "$_f"; done; }
+  regs() {
+    local _f n=0 l=0
+    for _f in $precmd_functions $chpwd_functions; do
+      case $_f in _ctx_hook) n=$((n+1)) ;; _ctx_profile_autoswitch|_ctx_auto_switch) l=$((l+1)) ;; esac
+    done
+    [ "$n $l" = "2 0" ] && [ "${precmd_functions[*]}" = "user1 user2 _ctx_hook" ] || fail "$1: hooks $n $l, precmd_functions=(${precmd_functions[*]})"
+  }
+elif [ "$V" = array ]; then
+  if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then echo SKIP; exit 0; fi
+  PROMPT_COMMAND=(user1 user2)
+  prompt() { local _c; for _c in "${PROMPT_COMMAND[@]}"; do eval "$_c"; done; }
+  regs() {
+    [[ "$(declare -p PROMPT_COMMAND)" == "declare -a"* && "${#PROMPT_COMMAND[@]}" == 3 && "${PROMPT_COMMAND[*]}" == "_ctx_hook keep && : user1 user2" ]] \
+      || fail "$1: PROMPT_COMMAND=(${PROMPT_COMMAND[*]})"
+  }
+else
+  PROMPT_COMMAND='user1;user2'
+  prompt() { eval "$PROMPT_COMMAND"; }
+  regs() { [ "$PROMPT_COMMAND" = '_ctx_hook keep && :;user1;user2' ] || fail "$1: PROMPT_COMMAND=$PROMPT_COMMAND"; }
+fi
+# indir DIR CMD...: CMD in another process with cwd DIR (a cd here would run zsh's chpwd hook).
+indir() { sh -c 'cd "$1" && shift && exec "$@"' _ "$@"; }
+# other DIR ARGS: ctx in another terminal (cwd DIR), with the real ctx-core.
+other() { CTX_CORE_BIN="$R/bin/ctx-core" CTX_QUIET=1 indir "$1" "$R/bin/ctx" "${@:2}" --eval bash >/dev/null 2>&1; }
+# snap STEP: what a prompt shows after STEP (paths relative to @T, notify without ESC).
+snap() {
+  local _a _e
+  _a="$(sed -n 's/^active=//p' "$CTX_DIR/config" | tail -n 1)"
+  _e="$(tr -d '\033' <"$T/err" | tr '\n' '|')"
+  printf 'SNAP %s active=%s aws=%s show=%s prof=%s wd=%s cfg=%s err=%s|\n' "$1" "${CTX_ACTIVE_PROFILE-<u>}" "${AWS_PROFILE-<u>}" \
+    "${CTX_PROMPT_SHOW-<u>}" "${CTX_PROMPT_PROFILE-<u>}" "${CTX_PROMPT_WORK_DIR-<u>}" "$_a" "$_e" | sed "s|$T|@T|g"
+}
+# stale: this shell's stamp is from a while ago (-nt has 1 s resolution in bash 3.2 and
+# zsh), the profiles older still: only the other terminal's config write is newer.
+stale() {
+  [ -n "${__CTX_STAMP-}" ] || return 0
+  touch -t 200001010000 "$CTX_DIR/profiles" "$CTX_DIR/profiles/"*.conf && touch -t 200001010001 "$__CTX_STAMP"
+}
+
+if [ "$V" = legacy ]; then
+  CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
+  typeset -f _ctx_profile_autoswitch >/dev/null || fail "legacy hook not installed"
+else
+  export CTX_CORE_BIN="$CORE"
+  # 4. An old rc block (CTX_CORE=off: the legacy hook), the same block after the
+  # upgrade (the lib evals activate) and an added eval line; then both again.
+  CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
+  typeset -f _ctx_profile_autoswitch >/dev/null || fail "legacy hook not installed"
+  source "$R/lib/ctx_autoswitch.bash"
+  eval "$("$CORE" activate "$SH")"
+  source "$R/lib/ctx_autoswitch.bash"
+  eval "$("$CORE" activate "$SH")"
+  typeset -f _ctx_profile_autoswitch >/dev/null 2>&1 && fail "legacy hook still defined"
+  regs "after sourcing"
+  grep -qx "activate $SH" "$LOG" || fail "the lib did not run the canary's activate"
+  settle
+  cd "$T/w/a/r" && prompt
+  delta 1 "cd into a and a prompt"
+  [ "$ran1 $ran2" = "1 1" ] || fail "user hooks ran $ran1/$ran2 times in one prompt"
+  [ "${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-}/${CTX_PROMPT_SHOW-}" = "a/pa/sa/1" ] \
+    || fail "enter: ${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-}/${CTX_PROMPT_SHOW-}"
+
+  # 1. Unchanged prompts: no ctx-core call; the guard is builtins only.
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 \
+    26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50; do prompt; done
+  delta 0 "50 unchanged prompts"
+  [ "$ran1 $ran2" = "51 51" ] || fail "user hooks ran $ran1/$ran2 times in 51 prompts"
+  _g="$(typeset -f _ctx_hook)"
+  _g="${_g%%-x *}"
+  case $_g in *' -nt '*) ;; *) fail "guard not found in: $_g" ;; esac
+  case $_g in *'$('*|*'`'*) fail "the guard forks: $_g" ;; esac
+  cd "$T" && prompt 2>/dev/null
+  [ -z "${CTX_ACTIVE_PROFILE+x}${A_SECRET+x}" ] || fail "leave a: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+fi
+
+# 2. Other terminals, each followed by one prompt here. f*: in an extra prompt path
+# (CTX_PROMPT_PROFILE is the machine-wide profile); m*: in a's folder, where the other
+# terminal's manual lock takes effect.
+CTX_AUTOSWITCH_NOTIFY=1
+settle
+{ cd "$T/x" && prompt; } 2>"$T/err"; delta 1 "cd x"; snap f1
+stale; other "$T/w/b" use b
+# A third shell's hook runs first: it has its own stamp and leaves ours alone.
+[ "$V" = legacy ] || __CTX_STATE= __CTX_STAMP= indir "$T/w/b" "$R/bin/ctx-core" hook-env "$SH" >/dev/null 2>&1
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's use b"; snap f2
+stale; other "$T" deactivate
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's deactivate"; snap f3
+{ cd "$T/w/a/r" && prompt; } 2>"$T/err"; delta 1 "cd into a"; snap m1  # zsh: the chpwd hook, too
+stale; other "$T/w/a/r" use b
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's use b in a"; snap m2
+prompt 2>"$T/err"; delta 0 "the next prompt"
+stale; other "$T" deactivate
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's deactivate"; snap m3
+unset CTX_AUTOSWITCH_NOTIFY
+[ "$V" != legacy ] || { echo OK; exit 0; }
+
+# 3. Leave a after its .conf was deleted: what the hook exported is unset.
+[ "${CTX_ACTIVE_PROFILE-}/${A_SECRET-}" = a/sa ] || fail "before the delete: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+mv "$CTX_DIR/profiles/a.conf" "$T/a.conf"
+cd "$T" && prompt 2>/dev/null
+[ -z "${A_SECRET+x}${AWS_PROFILE+x}${CTX_ACTIVE_PROFILE+x}${CTX_ACTIVATION_TRIGGER+x}" ] \
+  || fail "deleted profile left: A_SECRET=${A_SECRET-} AWS_PROFILE=${AWS_PROFILE-} CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE-}"
+[ "${CTX_PROMPT_SHOW-}" = 0 ] || fail "CTX_PROMPT_SHOW=${CTX_PROMPT_SHOW-}"
+grep -qx active=a "$CTX_DIR/config" && fail "the deleted profile is still active"
+mv "$T/a.conf" "$CTX_DIR/profiles/a.conf"
+cd "$T/w/a/r" && prompt
+[ "${CTX_ACTIVE_PROFILE-}/${A_SECRET-}" = a/sa ] || fail "re-enter: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+
+# 4. Re-sourcing the rc in the hooked shell: still one hook, no extra ctx-core run.
+source "$R/lib/ctx_autoswitch.bash"
+eval "$("$CORE" activate "$SH")"
+regs "after re-sourcing"
+settle
+_r=$ran1
+prompt
+delta 0 "a prompt after re-sourcing"
+[ $((ran1 - _r)) = 1 ] || fail "user hook ran $((ran1 - _r)) times after re-sourcing"
+[ "${CTX_ACTIVE_PROFILE-}/${A_SECRET-}" = a/sa ] || fail "after re-sourcing: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+cd "$T/w/b/r" && prompt
+delta 1 "switch to b"
+[ "${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-unset}" = b/pb/unset ] || fail "switch: ${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-unset}"
+echo OK
+EOF
+}
+
+# _hook_it_session_fish: the same with fish (the core hook only), run as
+# fish script R T. Prints the f* and m* SNAP lines and FISH-OK, or the failure.
+_hook_it_session_fish() {
+  cat <<'EOF'
+set -g R $argv[1]
+set -g T $argv[2]
+set -g CORE $T/log/ctx-core
+function fail; echo "fish: $argv"; exit 1; end
+function calls; if test -f $T/log/calls; wc -l <$T/log/calls | string trim; else; echo 0; end; end
+function settle; set -g base (calls); end
+function delta -a want what
+    set -l n (calls)
+    test (math $n - $base) = $want; or fail "$what: "(math $n - $base)" ctx-core calls, want $want"
+    set -g base $n
+end
+function prompt; emit fish_postexec; end
+set -g ran 0
+function user1 --on-event fish_postexec; set -g ran (math $ran + 1); end
+function other -a dir
+    env CTX_CORE_BIN=$R/bin/ctx-core CTX_QUIET=1 sh -c 'cd "$1" && shift && exec "$@" >/dev/null 2>&1' _ $dir $R/bin/ctx $argv[2..-1] --eval fish
+end
+function handlers; functions --handlers | string match '*_ctx_hook*' | count; end
+function v -a name; if set -q $name; echo $$name; else; echo '<u>'; end; end
+function snap
+    set -l a (sed -n 's/^active=//p' $CTX_DIR/config | tail -n 1)
+    printf 'SNAP %s active=%s aws=%s show=%s prof=%s wd=%s cfg=%s err=|\n' $argv[1] (v CTX_ACTIVE_PROFILE) (v AWS_PROFILE) \
+        (v CTX_PROMPT_SHOW) (v CTX_PROMPT_PROFILE) (v CTX_PROMPT_WORK_DIR) "$a" | string replace -a $T @T
+end
+function stale; touch -t 200001010000 $CTX_DIR/profiles $CTX_DIR/profiles/*.conf; and touch -t 200001010001 $__CTX_STAMP; end
+set -gx CTX_CORE_BIN $CORE
+
+# 4. The old block (legacy), the upgraded lib, an activate line; then both again.
+set -gx CTX_CORE off; source $R/lib/ctx_autoswitch.fish; set -e CTX_CORE
+functions -q _ctx_profile_autoswitch; or fail "legacy hook not installed"
+source $R/lib/ctx_autoswitch.fish
+set -g h (handlers)
+$CORE activate fish | source
+source $R/lib/ctx_autoswitch.fish
+$CORE activate fish | source
+functions -q _ctx_profile_autoswitch; and fail "legacy hook still defined"
+functions -q _ctx_profile_autoswitch_postexec; and fail "legacy postexec still defined"
+test $h -ge 1; and test (handlers) = $h; or fail "handlers: $h, then "(handlers)
+grep -qx "activate fish" $T/log/calls; or fail "the lib did not run the canary's activate"
+settle
+cd $T/w/a/r; prompt
+delta 1 "cd into a and a prompt"
+test $ran = 1; or fail "user hook ran $ran times"
+test "$CTX_ACTIVE_PROFILE/$AWS_PROFILE/$A_SECRET/$CTX_PROMPT_SHOW" = a/pa/sa/1; or fail "enter: $CTX_ACTIVE_PROFILE/$AWS_PROFILE/$A_SECRET"
+
+# 1. Unchanged prompts.
+for i in (seq 50); prompt; end
+delta 0 "50 unchanged prompts"
+test $ran = 51; or fail "user hook ran $ran times in 51 prompts"
+cd $T; prompt
+
+# 2. Other terminals (the notify output between the markers is checked by test.sh).
+set -g CTX_AUTOSWITCH_NOTIFY 1
+settle
+cd $T/x; prompt; delta 1 "cd x"; snap f1
+stale; other $T/w/b use b
+settle; prompt; delta 1 "the prompt after another terminal's use b"; snap f2
+stale; other $T deactivate
+settle; prompt; delta 1 "the prompt after another terminal's deactivate"; snap f3
+echo M-enter-start >&2
+cd $T/w/a/r; prompt; delta 1 "cd into a"; snap m1
+echo M-enter-end >&2
+stale; other $T/w/a/r use b
+settle
+echo M-reapply-start >&2
+prompt; delta 1 "the prompt after another terminal's use b in a"; snap m2
+echo M-reapply-end >&2
+stale; other $T deactivate
+settle; prompt; delta 1 "the prompt after another terminal's deactivate"; snap m3
+set -e CTX_AUTOSWITCH_NOTIFY
+
+# 3. Leave a deleted profile.
+mv $CTX_DIR/profiles/a.conf $T/a.conf
+cd $T; prompt
+set -q A_SECRET; or set -q AWS_PROFILE; or set -q CTX_ACTIVE_PROFILE; and fail "deleted profile left: $A_SECRET $AWS_PROFILE $CTX_ACTIVE_PROFILE"
+test "$CTX_PROMPT_SHOW" = 0; or fail "CTX_PROMPT_SHOW=$CTX_PROMPT_SHOW"
+mv $T/a.conf $CTX_DIR/profiles/a.conf
+cd $T/w/a/r; prompt
+test "$CTX_ACTIVE_PROFILE/$A_SECRET" = a/sa; or fail "re-enter: $CTX_ACTIVE_PROFILE/$A_SECRET"
+
+# 4. Re-source in the hooked shell.
+source $R/lib/ctx_autoswitch.fish
+$CORE activate fish | source
+test (handlers) = $h; or fail "handlers after re-sourcing: "(handlers)
+settle
+set -l r $ran
+prompt
+delta 0 "a prompt after re-sourcing"
+test (math $ran - $r) = 1; or fail "user hook ran "(math $ran - $r)" times"
+echo FISH-OK
+EOF
 }
 
 test_autoswitch_keeps_manual_lock() {
@@ -2713,6 +3065,7 @@ test_use_eval_exports
 test_shell_wrapper_applies_use
 test_autoswitch_exports_profile_env
 test_autoswitch_shim
+test_hook_integration
 test_autoswitch_keeps_manual_lock
 test_deactivate_without_secret_keys
 test_quiet_use_cloud_tools_succeed

@@ -670,6 +670,9 @@ func TestActivateBashPreexec(t *testing.T) {
 		// bash-preexec's documented setup: sourced last, after the glue.
 		"glue first": `source "$GLUE"; source "$BP"; tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }; precmd_functions+=(tool)
 `,
+		// The rc sourced again in the running shell (both orders).
+		"re-sourced": `source "$GLUE"; source "$BP"; tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }; precmd_functions+=(tool); source "$GLUE"; source "$BP"; source "$GLUE"
+`,
 	}
 	withArrayPromptCommand(scripts)
 	for key, argv := range activateShells(t) {
