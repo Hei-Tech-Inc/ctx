@@ -62,13 +62,10 @@ function ctx {
 # the command's status while errexit and the ERR trap ignore it).
 _ctx_hook() {
   local _ctx_st=$? _ctx_out _ctx_d="${CTX_DIR:-$HOME/.ctx}"
-  # Run from PROMPT_COMMAND while bash-preexec is loaded (sourced after this glue, as
-  # its docs ask) and installed or about to install at this prompt (its PROMPT_COMMAND
-  # holds __bp_precmd_invoke_cmd, or the __bp_install string): move to the front of
-  # precmd_functions, before the prompt tools. With __bp_delay_install nothing runs
-  # precmd_functions yet, so the hook stays in PROMPT_COMMAND until the install.
-  if [[ -n "${1-}" && -n "${__bp_imported-}${bash_preexec_imported-}" ]] &&
-    [[ "${PROMPT_COMMAND[*]:-}" == *__bp_precmd_invoke_cmd* || "${PROMPT_COMMAND[*]:-}" == *__bp_install* ]]; then
+  # Run from PROMPT_COMMAND while bash-preexec runs precmd_functions (sourced after
+  # this glue, as its docs ask, or installed later after __bp_delay_install): move to
+  # the front of precmd_functions, before the prompt tools.
+  if [[ -n "${1-}" ]] && _ctx_bp_live; then
     _ctx_register
   fi
   if [[ "$PWD" != "${__CTX_PWD-}" || ! -e "${__CTX_STAMP-}" || "$_ctx_d/config" -nt "$__CTX_STAMP" || "$_ctx_d/profiles" -nt "$__CTX_STAMP" ]]; then
@@ -87,6 +84,17 @@ _ctx_hook() {
   fi
   if [[ -n "${1-}" ]]; then return "$_ctx_st"; fi
   return 0
+}
+
+# _ctx_bp_live: true when bash-preexec is loaded and installed or about to install at
+# this prompt (PROMPT_COMMAND holds __bp_precmd_invoke_cmd, or its exact
+# __bp_install_string). With __bp_delay_install and no install yet nothing runs
+# precmd_functions, so the hook belongs in PROMPT_COMMAND. Builtins only.
+_ctx_bp_live() {
+  [[ -n "${__bp_imported-}${bash_preexec_imported-}" ]] || return 1
+  local _ctx_j="${PROMPT_COMMAND[*]:-}"
+  [[ "$_ctx_j" == *__bp_precmd_invoke_cmd* ]] ||
+    [[ -n "${__bp_install_string-}" && "$_ctx_j" == *"$__bp_install_string"* ]]
 }
 
 # _ctx_pc_strip CMD: CMD without the hook's names (ours and the legacy ones) as
@@ -111,10 +119,10 @@ _ctx_pc_strip() {
 
 # Registers _ctx_hook once, before the user's prompt commands (prompt tools then see
 # this prompt's CTX_PROMPT_*): first in bash-preexec's precmd_functions when
-# bash-preexec is loaded, else first in PROMPT_COMMAND (an element when it is an
+# bash-preexec runs them (_ctx_bp_live), else first in PROMPT_COMMAND (an element when it is an
 # array, bash 5.1+). Also drops it from starship's _PRESERVED_PROMPT_COMMAND (re-sourced
 # after starship). Every step tolerates errexit. _ctx_hook calls it again when
-# bash-preexec was loaded later.
+# bash-preexec was loaded or installed later.
 _ctx_register() {
   local _ctx_pc _ctx_c _ctx_f _ctx_arr=""
   local -a _ctx_new
@@ -146,7 +154,7 @@ _ctx_register() {
     done
     precmd_functions=(${_ctx_new[@]+"${_ctx_new[@]}"})
   fi
-  if [[ -n "${bash_preexec_imported:-}${__bp_imported:-}" ]]; then
+  if _ctx_bp_live; then
     precmd_functions=(_ctx_hook ${precmd_functions[@]+"${precmd_functions[@]}"})
   elif [[ -n "$_ctx_arr" ]]; then
     PROMPT_COMMAND=("_ctx_hook keep && :" ${PROMPT_COMMAND[@]+"${PROMPT_COMMAND[@]}"})

@@ -671,6 +671,7 @@ func TestActivateBashPreexec(t *testing.T) {
 		"glue first": `source "$GLUE"; source "$BP"; tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }; precmd_functions+=(tool)
 `,
 	}
+	withArrayPromptCommand(scripts)
 	for key, argv := range activateShells(t) {
 		if shellOf(key) != "bash" {
 			continue
@@ -678,6 +679,9 @@ func TestActivateBashPreexec(t *testing.T) {
 		for name, setup := range scripts {
 			t.Run(name+"/"+key, func(t *testing.T) {
 				t.Parallel()
+				if strings.HasSuffix(name, " array") && !bashArrayPromptCommand(t, argv) {
+					t.Skip("needs bash 5.1+")
+				}
 				td := t.TempDir()
 				env, _, log := activateFixture(t, td, "bash")
 				env = append(env, "BP="+bp)
@@ -697,6 +701,9 @@ echo M-alive active=$CTX_ACTIVE_PROFILE
 				i := strings.Index(out, "M-mark\n")
 				if i < 0 || !strings.HasPrefix(out[i+len("M-mark\n"):], "M-tool show=1\n") {
 					t.Errorf("tool did not see this prompt's CTX_PROMPT_SHOW: %q", out)
+				}
+				if strings.HasSuffix(name, " array") && !strings.Contains(out[max(i, 0):], "M-user") {
+					t.Errorf("the user's PROMPT_COMMAND element no longer runs: %q", out)
 				}
 				b, _ := os.ReadFile(log)
 				if n := strings.Count(string(b), "hook-env"); n > 3 {
@@ -738,10 +745,36 @@ src
 	}
 }
 
-// TestActivateBashPreexecDelayed sources bash-preexec with __bp_delay_install
-// after the glue: until the user installs it nothing runs precmd_functions,
-// so the hook stays in PROMPT_COMMAND and keeps working; after
-// __bp_install_after_session_init it moves first into precmd_functions.
+// arrayPromptCommand makes PROMPT_COMMAND an array with a user element.
+const arrayPromptCommand = `PROMPT_COMMAND=('echo M-user'); `
+
+// withArrayPromptCommand adds an " array" variant of each setup, run with
+// an array PROMPT_COMMAND (bash 5.1+) set before it.
+func withArrayPromptCommand(scripts map[string]string) {
+	names := make([]string, 0, len(scripts))
+	for name := range scripts {
+		names = append(names, name)
+	}
+	for _, name := range names {
+		scripts[name+" array"] = arrayPromptCommand + scripts[name]
+	}
+}
+
+// bashArrayPromptCommand reports whether the bash at argv runs an array
+// PROMPT_COMMAND (5.1+).
+func bashArrayPromptCommand(t *testing.T, argv []string) bool {
+	t.Helper()
+	out, err := exec.Command(argv[0], "-c", `(( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) && echo yes`).Output()
+	if err != nil && len(out) == 0 {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "yes"
+}
+
+// TestActivateBashPreexecDelayed sources bash-preexec with __bp_delay_install,
+// before or after the glue: until the user installs it nothing runs
+// precmd_functions, so the hook stays in PROMPT_COMMAND and keeps working;
+// after __bp_install_after_session_init it moves first into precmd_functions.
 func TestActivateBashPreexecDelayed(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs interactive bash")
@@ -750,18 +783,30 @@ func TestActivateBashPreexecDelayed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const tool = `tool() { echo "M-tool prof=${CTX_PROMPT_PROFILE-}"; }; precmd_functions+=(tool)`
+	scripts := map[string]string{
+		"glue first":         `source "$GLUE"; __bp_delay_install=1; source "$BP"; ` + tool + "\n",
+		"bash-preexec first": `__bp_delay_install=1; source "$BP"; ` + tool + `; source "$GLUE"` + "\n",
+	}
+	withArrayPromptCommand(scripts)
+	// Only bash-preexec's exact install string means an install is pending.
+	scripts["user command naming __bp_install"] = `PROMPT_COMMAND='echo M-__bp_install'; source "$GLUE"; __bp_delay_install=1; source "$BP"; ` + tool + "\n"
 	for key, argv := range activateShells(t) {
 		if shellOf(key) != "bash" {
 			continue
 		}
-		t.Run(key, func(t *testing.T) {
-			t.Parallel()
-			td := t.TempDir()
-			env, _, _ := activateFixture(t, td, "bash")
-			env = append(env, "BP="+bp)
-			out := interactiveShell(t, env, td, argv, `cd "$TD"
-source "$GLUE"; __bp_delay_install=1; source "$BP"; tool() { echo "M-tool prof=${CTX_PROMPT_PROFILE-}"; }; precmd_functions+=(tool)
-cd w/a
+		for name, setup := range scripts {
+			t.Run(name+"/"+key, func(t *testing.T) {
+				t.Parallel()
+				array := strings.HasSuffix(name, " array")
+				if array && !bashArrayPromptCommand(t, argv) {
+					t.Skip("needs bash 5.1+")
+				}
+				td := t.TempDir()
+				env, _, _ := activateFixture(t, td, "bash")
+				env = append(env, "BP="+bp)
+				out := interactiveShell(t, env, td, argv, `cd "$TD"
+`+setup+`cd w/a
 echo "M-before show=$CTX_PROMPT_SHOW prof=${CTX_PROMPT_PROFILE-} active=$CTX_ACTIVE_PROFILE"
 __bp_install_after_session_init
 cd ../b; echo M-mark
@@ -769,16 +814,20 @@ _n=0; for _f in "${precmd_functions[@]}"; do [ "$_f" = _ctx_hook ] && _n=$((_n+1
 echo "M-pc=$(declare -p PROMPT_COMMAND | grep -c _ctx_hook)"
 echo "M-after active=$CTX_ACTIVE_PROFILE"
 `)
-			for _, want := range []string{"M-before show=1 prof=a active=a", "M-pf0=_ctx_hook n=1", "M-pc=0", "M-after active=b"} {
-				if !strings.Contains(out, want) {
-					t.Errorf("no %q in %q", want, out)
+				for _, want := range []string{"M-before show=1 prof=a active=a", "M-pf0=_ctx_hook n=1", "M-pc=0", "M-after active=b"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("no %q in %q", want, out)
+					}
 				}
-			}
-			i := strings.Index(out, "M-mark\n")
-			if i < 0 || !strings.HasPrefix(out[i+len("M-mark\n"):], "M-tool prof=b\n") {
-				t.Errorf("tool did not see this prompt's CTX_PROMPT_PROFILE after the install: %q", out)
-			}
-		})
+				i := strings.Index(out, "M-mark\n")
+				if i < 0 || !strings.HasPrefix(out[i+len("M-mark\n"):], "M-tool prof=b\n") {
+					t.Errorf("tool did not see this prompt's CTX_PROMPT_PROFILE after the install: %q", out)
+				}
+				if array && !strings.Contains(out[max(i, 0):], "M-user") {
+					t.Errorf("the user's PROMPT_COMMAND element no longer runs: %q", out)
+				}
+			})
+		}
 	}
 }
 
