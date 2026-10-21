@@ -555,8 +555,15 @@ main() {
       [[ -z "$pname" ]] && die "Usage: ctx edit <profile>"
       profile_exists "$pname" || die "Profile '$pname' not found."
       # Like git: VISUAL, then EDITOR, then nano; the value may carry arguments.
-      local editor="${VISUAL:-${EDITOR:-nano}}"
-      sh -c "$editor \"\$@\"" sh "$CTX_PROFILES_DIR/${pname}.conf"
+      local editor="${VISUAL:-${EDITOR:-nano}}" rc=0
+      # Ctrl+C reaches the editor too; its own handling decides the exit code.
+      # ctx and the sh (dash on Debian/Ubuntu stays the editor's parent) catch
+      # SIGINT rather than die by it; a caught signal is default again in the
+      # editor. Not `exec $editor`: that breaks EDITOR="FOO=1 vim".
+      trap : INT
+      sh -c "trap : INT; $editor \"\$@\"" sh "$CTX_PROFILES_DIR/${pname}.conf" || rc=$?
+      trap 'exit 130' INT
+      return "$rc"
       ;;
     remove|rm|del)
       _ctx_core_forward remove "$@"

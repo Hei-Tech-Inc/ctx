@@ -13,7 +13,10 @@ import (
 
 // Edit runs `ctx edit <profile>`: it opens the profile's .conf in $VISUAL,
 // else $EDITOR, else nano, run like git runs it (sh -c '<editor> "$@"'), so
-// EDITOR="code -w" works. The editor gets the Term's stdin, stdout and stderr,
+// EDITOR="code -w" works. The sh catches SIGINT (trap : INT, which is default
+// again in the editor): Debian's dash stays the editor's parent and would
+// otherwise die by a Ctrl+C the editor handles. Not `exec <editor>`, which
+// breaks EDITOR="FOO=1 vim". The editor gets the Term's stdin, stdout and stderr,
 // and Edit returns its exit code. --dry-run does not apply: opening an editor
 // is the user's action. Edit does not prompt, so it installs no interrupt
 // handler; it only keeps Ctrl+C for the editor while it runs.
@@ -36,7 +39,7 @@ func Edit(t tui.Term, args []string) int {
 	if editor == "" {
 		editor = "nano"
 	}
-	cmd := exec.Command("sh", "-c", editor+` "$@"`, "sh", profile.Dir()+"/"+name+".conf")
+	cmd := exec.Command("sh", "-c", "trap : INT; "+editor+` "$@"`, "sh", profile.Dir()+"/"+name+".conf")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = t.In, t.Out, t.Err
 
 	// The terminal sends Ctrl+C to the editor too; ctx-core waits for it
