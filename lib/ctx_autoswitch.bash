@@ -4,6 +4,55 @@
 # Sets CTX_PROMPT_SHOW / CTX_PROMPT_WORK_DIR / CTX_PROMPT_PROFILE for prompts (see README).
 # Runs on every prompt: the no-switch path must stay builtin-only (no subprocesses).
 
+# ctx runs as a child process, so `ctx use` / `ctx deactivate` cannot change this shell's
+# environment by themselves. This function evals their --eval output; every other
+# subcommand goes straight to the binary. Global flags may come before the subcommand.
+ctx() {
+  local -a _ctx_pre=()
+  local _ctx_a _ctx_out _ctx_rc
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --quiet|-q|--no-gum|--dry-run|--json) _ctx_pre+=("$1"); shift ;;
+      *) break ;;
+    esac
+  done
+  case "${1:-}" in
+    use|deactivate) ;;
+    *) command ctx ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$@"; return ;;
+  esac
+  # --dry-run must not touch the shell; an explicit --eval means the caller evals it.
+  for _ctx_a in ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$@"; do
+    [[ "$_ctx_a" == -- ]] && break
+    case "$_ctx_a" in
+      --dry-run|--eval|--eval=*) command ctx ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$@"; return ;;
+    esac
+  done
+  _ctx_a="$1"
+  shift
+  _ctx_out="$(command ctx ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$_ctx_a" --eval bash "$@")"
+  _ctx_rc=$?
+  eval "$_ctx_out"
+  return "$_ctx_rc"
+}
+
+# True when the ctx executable (not this function) is on PATH.
+_ctx_as_have_bin() {
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    whence -p ctx >/dev/null 2>&1
+  else
+    type -P ctx >/dev/null 2>&1
+  fi
+}
+
+# Run ctx use for the hook and apply its exports to this shell. Returns ctx use's status.
+_ctx_as_use() {
+  local out rc
+  out="$(CTX_QUIET=1 CTX_AUTO_SWITCH=1 command ctx use --eval bash "$1" 2>/dev/null)"
+  rc=$?
+  eval "$out"
+  return "$rc"
+}
+
 # Last-wins KEY=value lookup (same result as grep | tail -1). Sets _ctx_kv.
 _ctx_as_kv_get() {
   local file="$1" key="$2" line
@@ -130,7 +179,7 @@ _ctx_prompt_update_exports() {
 }
 
 _ctx_profile_autoswitch() {
-  command -v ctx &>/dev/null || return 0
+  _ctx_as_have_bin || return 0
   local profiles_dir="${CTX_DIR:-$HOME/.ctx}/profiles"
   local active_conf="${CTX_DIR:-$HOME/.ctx}/config"
   [[ -d "$profiles_dir" ]] || return 0
@@ -253,19 +302,23 @@ _ctx_profile_autoswitch() {
   if [[ -n "$target" ]]; then
     if [[ -n "$current" && "$current" != "$target" ]]; then
       [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ← ${current} → ${target}${rst}" >&2
-      eval "$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)" || true
-      if CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null; then
+      eval "$(CTX_QUIET=1 command ctx deactivate --eval bash 2>/dev/null)" || true
+      if _ctx_as_use "$target"; then
         _ctx_applied=1
       else
         [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
       fi
     elif [[ -z "$current" ]]; then
       [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] → ${target}${rst}" >&2
-      if CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null; then
+      if _ctx_as_use "$target"; then
         _ctx_applied=1
       else
         [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
       fi
+    elif [[ "${CTX_ACTIVE_PROFILE:-}" != "$target" ]]; then
+      # Already active machine-wide (e.g. a new terminal): this shell still needs the exports.
+      _ctx_as_use "$target" || true
+      _ctx_applied=1
     else
       _ctx_applied=1
     fi
@@ -277,7 +330,7 @@ _ctx_profile_autoswitch() {
   else
     if [[ -n "$current" ]]; then
       [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ← ${current}${rst}" >&2
-      eval "$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)" || true
+      eval "$(CTX_QUIET=1 command ctx deactivate --eval bash 2>/dev/null)" || true
     fi
     unset CTX_ACTIVE_PROFILE 2>/dev/null || true
     unset CTX_ACTIVATION_TRIGGER 2>/dev/null || true

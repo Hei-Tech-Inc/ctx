@@ -2,6 +2,44 @@
 # Nearest .ctx from $PWD up to git root wins (not repo-root only).
 # Sets CTX_PROMPT_SHOW / CTX_PROMPT_WORK_DIR / CTX_PROMPT_PROFILE (see README).
 
+# ctx runs as a child process, so `ctx use` / `ctx deactivate` cannot change this shell's
+# environment by themselves. This function sources their --eval output; every other
+# subcommand goes straight to the binary. Global flags may come before the subcommand.
+function ctx --description 'ctx (applies use/deactivate to this shell)'
+  set -l pre
+  set -l rest $argv
+  while set -q rest[1]; and contains -- $rest[1] --quiet -q --no-gum --dry-run --json
+    set -a pre $rest[1]
+    set -e rest[1]
+  end
+  if not set -q rest[1]; or not contains -- $rest[1] use deactivate
+    command ctx $argv
+    return $status
+  end
+  # --dry-run must not touch the shell; an explicit --eval means the caller sources it.
+  for a in $argv
+    test "$a" = --; and break
+    if contains -- $a --dry-run --eval; or string match -q -- '--eval=*' $a
+      command ctx $argv
+      return $status
+    end
+  end
+  set -l sub $rest[1]
+  set -e rest[1]
+  set -l out (command ctx $pre $sub --eval fish $rest)
+  set -l rc $status
+  printf '%s\n' $out | source
+  return $rc
+end
+
+# Run ctx use for the hook and apply its exports to this shell. Returns ctx use's status.
+function _ctx_as_use -a target
+  set -l out (env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use --eval fish "$target" 2>/dev/null)
+  set -l rc $status
+  printf '%s\n' $out | source
+  return $rc
+end
+
 function _ctx_rel_depth_under -a p r
   set p (string trim -r / -- (string replace -r '^~' "$HOME" -- "$p"))
   set r (string trim -r / -- (string replace -r '^~' "$HOME" -- "$r"))
@@ -231,18 +269,22 @@ function _ctx_profile_autoswitch --on-variable PWD
     if test -n "$current"; and test "$current" != "$target"
       test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ← $current → $target\033[0m" >&2
       env CTX_QUIET=1 ctx deactivate --eval fish 2>/dev/null | source
-      if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+      if _ctx_as_use "$target"
         set _ctx_applied 1
       else
         test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
       end
     else if test -z "$current"
       test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] → $target\033[0m" >&2
-      if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+      if _ctx_as_use "$target"
         set _ctx_applied 1
       else
         test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
       end
+    else if test "$CTX_ACTIVE_PROFILE" != "$target"
+      # Already active machine-wide (e.g. a new terminal): this shell still needs the exports.
+      _ctx_as_use "$target"
+      set _ctx_applied 1
     else
       set _ctx_applied 1
     end
