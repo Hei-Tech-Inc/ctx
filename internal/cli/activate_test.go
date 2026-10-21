@@ -343,6 +343,7 @@ func activateFixture(t *testing.T, td, shell string) (env []string, fake, log st
 	// (<none> when the variable is absent), NUL-terminated.
 	testutil.Script(t, fake, "#!/bin/sh\nprintf '%s\\n' \"$*\" >>"+shellQ(log)+
 		"\n[ \"$1\" = hook-env ] && printf '%s\\0' \"${__CTX_SH_GH_TOKEN-<none>}\" >>"+shellQ(log+".env")+
+		"\n[ -n \"${CTX_FAKE_FAIL-}\" ] && exit 3"+
 		"\nexec "+shellQ(core)+" \"$@\"\n")
 	glue := filepath.Join(td, "glue."+shell)
 	hookWrite(t, glue, activateScript(shell, fake))
@@ -620,6 +621,29 @@ echo M-after
 			if n := strings.Count(out, "M-ERR") + strings.Count(out, "M-ZERR"); n != 1 || !strings.Contains(out, "M-after") {
 				t.Errorf("ERR trap fired %d times (want 1): %q", n, out)
 			}
+			// A failing ctx-core under errtrace (bash set -E) fires no ERR trap
+			// (bash 3.2 ran it inside the substitution); zsh TRAPZERR likewise.
+			failScript := `cd "$TD"
+set -E
+trap 'echo M-ERR' ERR
+source "$GLUE"
+export CTX_FAKE_FAIL=1
+cd w/a
+echo M-after
+`
+			if sh == "zsh" {
+				failScript = `cd "$TD"
+TRAPZERR() { echo M-ZERR; }
+source "$GLUE"
+export CTX_FAKE_FAIL=1
+cd w/a
+echo M-after
+`
+			}
+			out = interactiveShell(t, env, td, argv, failScript)
+			if n := strings.Count(out, "M-ERR") + strings.Count(out, "M-ZERR"); n != 0 || !strings.Contains(out, "M-after") {
+				t.Errorf("failing ctx-core fired the ERR trap %d times: %q", n, out)
+			}
 		})
 	}
 }
@@ -637,18 +661,12 @@ func TestActivateBashPreexec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Each setup line is one rc file: the hook runs only at the prompts after it.
 	scripts := map[string]string{
-		"bash-preexec first": `source "$BP"
-tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }
-precmd_functions+=(tool)
-source "$GLUE"
+		"bash-preexec first": `source "$BP"; tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }; precmd_functions+=(tool); source "$GLUE"
 `,
-		"glue first": `source "$GLUE"
-source "$BP"
-tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }
-precmd_functions+=(tool)
-true
-source "$GLUE"
+		// bash-preexec's documented setup: sourced last, after the glue.
+		"glue first": `source "$GLUE"; source "$BP"; tool() { echo "M-tool show=${CTX_PROMPT_SHOW-unset}"; }; precmd_functions+=(tool)
 `,
 	}
 	for key, argv := range activateShells(t) {
@@ -662,20 +680,20 @@ source "$GLUE"
 				env, _, log := activateFixture(t, td, "bash")
 				env = append(env, "BP="+bp)
 				out := interactiveShell(t, env, td, argv, `cd "$TD"
-`+setup+`echo "M-pf=${precmd_functions[*]}"
+`+setup+`cd w/a; echo M-mark
+_n=0; for _f in "${precmd_functions[@]}"; do [ "$_f" = _ctx_hook ] && _n=$((_n+1)); done; echo "M-pf0=${precmd_functions[0]} n=$_n"
 echo "M-pc=$(declare -p PROMPT_COMMAND | grep -c _ctx_hook)"
-cd w/a
 false
 echo M-alive active=$CTX_ACTIVE_PROFILE
 `)
-				// bash-preexec adds its own "precmd" entry.
-				for _, want := range []string{"M-pf=_ctx_hook precmd tool", "M-pc=0", "M-alive active=a"} {
+				for _, want := range []string{"M-pf0=_ctx_hook n=1", "M-pc=0", "M-alive active=a"} {
 					if !strings.Contains(out, want) {
 						t.Errorf("no %q in %q", want, out)
 					}
 				}
-				// The prompt after `cd w/a` already shows the profile to the tool.
-				if i := strings.Index(out, "M-pc="); i < 0 || !strings.Contains(out[i:], "M-tool show=1") {
+				// The first prompt after `cd w/a` already shows the profile to the tool.
+				i := strings.Index(out, "M-mark\n")
+				if i < 0 || !strings.HasPrefix(out[i+len("M-mark\n"):], "M-tool show=1\n") {
 					t.Errorf("tool did not see this prompt's CTX_PROMPT_SHOW: %q", out)
 				}
 				b, _ := os.ReadFile(log)
@@ -684,5 +702,36 @@ echo M-alive active=$CTX_ACTIVE_PROFILE
 				}
 			})
 		}
+	}
+}
+
+// TestActivatePreservedPromptCommand re-sources the glue after starship's
+// preserve mode (it moves PROMPT_COMMAND to _PRESERVED_PROMPT_COMMAND and
+// runs it from starship_precmd): the hook stays registered once.
+func TestActivatePreservedPromptCommand(t *testing.T) {
+	for key, argv := range activateShells(t) {
+		if shellOf(key) != "bash" {
+			continue
+		}
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			td := t.TempDir()
+			env, _, _ := activateFixture(t, td, "bash")
+			cmd := exec.Command(argv[0], append(append([]string{}, argv[1:]...), "-c", activatePrelude+`
+PROMPT_COMMAND=user1
+src
+_PRESERVED_PROMPT_COMMAND=$PROMPT_COMMAND
+starship_precmd() { eval "$_PRESERVED_PROMPT_COMMAND"; }
+PROMPT_COMMAND=starship_precmd
+src
+[ "$_PRESERVED_PROMPT_COMMAND" = user1 ] || fail "preserved: $_PRESERVED_PROMPT_COMMAND"
+[ "$PROMPT_COMMAND" = '_ctx_hook keep && :;starship_precmd' ] || fail "PROMPT_COMMAND=$PROMPT_COMMAND"
+`)...)
+			cmd.Dir = td
+			cmd.Env = env
+			if out, err := cmd.CombinedOutput(); err != nil || len(out) > 0 {
+				t.Errorf("%v: %s", err, out)
+			}
+		})
 	}
 }

@@ -1,7 +1,12 @@
-bash-preexec 0.5.0 (https://github.com/rcaloras/bash-preexec), MIT License
-(Copyright (c) 2017 Ryan Caloras and contributors; the full license text is
-the header of bash-preexec.sh, kept as distributed).
+bash-preexec 0.5.0 (https://github.com/rcaloras/bash-preexec), MIT License,
+Copyright (c) 2017 Ryan Caloras and contributors.
+
+The license text here is the MIT header at the top of bash-preexec.sh, as
+distributed by IntelliJ IDEA (upstream ships the license separately, as
+LICENSE.md).
 
 Vendored unmodified for TestActivateBashPreexec (the ctx activate glue under
-a real bash-preexec). Source of this copy: the bash-preexec.bash that
-IntelliJ IDEA's terminal plugin bundles (shell-integrations/bash), V0.5.0.
+a real bash-preexec). Source of this copy: the bash-preexec.bash bundled with
+IntelliJ IDEA's terminal plugin (shell-integrations/bash), marked V0.5.0;
+not compared byte for byte with the upstream 0.5.0 release.
+sha256 aa912d797671bfe2f96973ae2639cb44c2a88a54367bee5b57948e58ff7d947e

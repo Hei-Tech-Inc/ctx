@@ -61,15 +61,23 @@ function ctx {
 # caller's $? (PROMPT_COMMAND runs `_ctx_hook keep && :`, so later entries still see
 # the command's status while errexit and the ERR trap ignore it).
 _ctx_hook() {
-  local _ctx_st=$? _ctx_out _ctx_d="${CTX_DIR:-$HOME/.ctx}"
+  local _ctx_st=$? _ctx_out _ctx_e="" _ctx_d="${CTX_DIR:-$HOME/.ctx}"
+  # Run from PROMPT_COMMAND while bash-preexec is loaded (sourced after this glue, as
+  # its docs ask): move to the front of precmd_functions, before the prompt tools.
+  if [[ -n "${1-}" && -n "${__bp_imported-}${bash_preexec_imported-}" ]]; then
+    _ctx_register
+  fi
   if [[ "$PWD" != "${__CTX_PWD-}" || ! -e "${__CTX_STAMP-}" || "$_ctx_d/config" -nt "$__CTX_STAMP" || "$_ctx_d/profiles" -nt "$__CTX_STAMP" ]]; then
     if [[ -x @CTX_CORE@ ]]; then
+      # errtrace would run the user's ERR trap inside the substitution when it fails.
+      if [[ $- == *E* ]]; then _ctx_e=1; set +E; fi
       _ctx_out="$(__CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" \
         __CTX_SH_NOTIFY="${CTX_AUTOSWITCH_NOTIFY+=$CTX_AUTOSWITCH_NOTIFY}" \
         __CTX_SH_GH_TOKEN="${GH_TOKEN+=$GH_TOKEN}" \
         __CTX_SH_ACTIVE="${CTX_ACTIVE_PROFILE+=$CTX_ACTIVE_PROFILE}" \
         __CTX_SH_GH_PROFILE="${_CTX_GH_PROFILE+=$_CTX_GH_PROFILE}" \
         @CTX_CORE@ hook-env bash)" || :
+      if [[ -n "$_ctx_e" ]]; then set -E; fi
       eval "$_ctx_out" || :
       __CTX_PWD="$PWD"
     fi
@@ -101,8 +109,10 @@ _ctx_pc_strip() {
 # Registers _ctx_hook once, before the user's prompt commands (prompt tools then see
 # this prompt's CTX_PROMPT_*): first in bash-preexec's precmd_functions when
 # bash-preexec is loaded, else first in PROMPT_COMMAND (an element when it is an
-# array, bash 5.1+). Every step tolerates errexit.
-_ctx_activate() {
+# array, bash 5.1+). Also drops it from starship's _PRESERVED_PROMPT_COMMAND (re-sourced
+# after starship). Every step tolerates errexit. _ctx_hook calls it again when
+# bash-preexec was loaded later.
+_ctx_register() {
   local _ctx_pc _ctx_c _ctx_f _ctx_arr=""
   local -a _ctx_new
   _ctx_new=()
@@ -118,6 +128,10 @@ _ctx_activate() {
   else
     _ctx_pc_strip "${PROMPT_COMMAND:-}"
     PROMPT_COMMAND="$_ctx_pc"
+  fi
+  if [[ -n "${_PRESERVED_PROMPT_COMMAND:-}" ]]; then
+    _ctx_pc_strip "$_PRESERVED_PROMPT_COMMAND"
+    _PRESERVED_PROMPT_COMMAND="$_ctx_pc"
   fi
   _ctx_new=()
   if [[ -n "${precmd_functions+x}" ]]; then
@@ -138,6 +152,5 @@ _ctx_activate() {
   fi
   unset -f _ctx_profile_autoswitch _ctx_auto_switch 2>/dev/null
 }
-_ctx_activate
-unset -f _ctx_activate _ctx_pc_strip
+_ctx_register
 _ctx_hook
