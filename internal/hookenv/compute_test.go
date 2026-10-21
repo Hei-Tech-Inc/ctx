@@ -71,6 +71,7 @@ type step struct {
 	wantExports    map[string]string
 	wantUnsets     []string
 	wantState      State
+	noProfiles     bool // Input.Profiles is empty: every profile is deleted
 }
 
 func TestCompute(t *testing.T) {
@@ -162,7 +163,7 @@ func TestCompute(t *testing.T) {
 			wantState:   inB.with("/w/b/q"),
 		},
 		{
-			name: "deleted profile while active (Review Focus 3)",
+			name: "deleted profile while active (Review Focus 3)", noProfiles: true,
 			in: Input{PWD: "/tmp", Prev: State{PWD: "/w/gone", Target: "gone", Keys: []string{"G1", "G2", "CTX_ACTIVE_PROFILE", "CTX_ACTIVATION_TRIGGER"}},
 				Env: merge(map[string]string{"G1": "x", "G2": "y", "AWS_PROFILE": "pg", "CTX_ACTIVE_PROFILE": "gone", "CTX_ACTIVATION_TRIGGER": "auto"}),
 				Cfg: cfgOf("active=gone")},
@@ -170,6 +171,17 @@ func TestCompute(t *testing.T) {
 			wantExports:    map[string]string{"CTX_PROMPT_SHOW": "0"},
 			wantUnsets:     []string{"G1", "G2", "AWS_PROFILE", "CTX_ACTIVE_PROFILE", "CTX_ACTIVATION_TRIGGER"},
 			wantState:      State{PWD: "/tmp"},
+		},
+		{
+			name: "deleted current profile on switch: Prev.Keys and the fixed names unset",
+			in: Input{PWD: "/w/b/x", Prev: State{PWD: "/w/gone", Target: "gone", Keys: []string{"G1", "G2", "CTX_ACTIVE_PROFILE", "CTX_ACTIVATION_TRIGGER"}},
+				Env: merge(map[string]string{"G1": "x", "G2": "y", "AWS_PROFILE": "pg", "CTX_ACTIVE_PROFILE": "gone", "CTX_ACTIVATION_TRIGGER": "auto"}),
+				Cfg: cfgOf("active=gone", "autoswitch_notify=on"), PathProfile: "b", PathWD: "/w/b"},
+			use: useB, wantUse: "b", wantDeactivate: true,
+			wantNotify:  []string{nSwitch("gone", "b")},
+			wantExports: merge(map[string]string{"CTX_ACTIVE_PROFILE": "b"}, promptIn("b", "/w/b")),
+			wantUnsets:  []string{"G1", "G2", "AWS_PROFILE"},
+			wantState:   inB,
 		},
 		{
 			name: "user-set GH_TOKEN is left alone on enter",
@@ -279,31 +291,33 @@ func TestCompute(t *testing.T) {
 			t.Parallel()
 			in := c.in
 			in.Profiles = testProfiles
-			in.GH = gh
-			if c.name == "deleted profile while active (Review Focus 3)" {
+			if c.noProfiles {
 				in.Profiles = nil
 			}
-			out := Compute(in)
+			in.GH = gh
+			plan := Compute(in)
+			if plan.State.PWD != in.PWD {
+				t.Errorf("Plan.State = %#v, want the run's pwd before Finish", plan.State)
+			}
 			gotUse := ""
-			if out.Use != nil {
-				gotUse = out.Use.Target
-				if !out.Use.Quiet || !out.Use.AutoSwitch {
-					t.Errorf("Use opts = %+v, want quiet auto-switch", *out.Use)
+			var res UseResult
+			if plan.Use != nil {
+				gotUse = plan.Use.Target
+				if !plan.Use.Quiet || !plan.Use.AutoSwitch {
+					t.Errorf("Use opts = %+v, want quiet auto-switch", *plan.Use)
 				}
 				if c.use == nil {
 					t.Fatalf("unexpected Use %q", gotUse)
 				}
-				out = out.Complete(*c.use)
-				if out.Use == nil {
-					t.Errorf("Complete dropped Use")
-				}
+				res = *c.use
 			}
 			if gotUse != c.wantUse {
 				t.Errorf("Use = %q, want %q", gotUse, c.wantUse)
 			}
-			if out.Deactivate != c.wantDeactivate {
-				t.Errorf("Deactivate = %v, want %v", out.Deactivate, c.wantDeactivate)
+			if plan.Deactivate != c.wantDeactivate {
+				t.Errorf("Deactivate = %v, want %v", plan.Deactivate, c.wantDeactivate)
 			}
+			out := plan.Finish(res)
 			if !reflect.DeepEqual(out.Notify, c.wantNotify) {
 				t.Errorf("Notify = %q, want %q", out.Notify, c.wantNotify)
 			}
@@ -340,8 +354,11 @@ func TestCompute(t *testing.T) {
 				in2.Prev = out.State
 				in2.Env = apply(in.Env, out)
 				again := Compute(in2)
-				if again.Use != nil || again.Deactivate || len(again.Exports)+len(again.Unsets)+len(again.Notify) != 0 {
-					t.Errorf("second run not a no-op: %+v", again)
+				if again.Use != nil || again.Deactivate {
+					t.Errorf("second run plans side effects: %+v", again)
+				}
+				if o := again.Finish(UseResult{}); len(o.Exports)+len(o.Unsets)+len(o.Notify) != 0 || !stateEqual(o.State, out.State) {
+					t.Errorf("second run not a no-op: %+v", o)
 				}
 			}
 		})
@@ -380,13 +397,32 @@ func apply(env map[string]string, out Output) map[string]string {
 	return next
 }
 
-func TestComputeOnlyAppliesCompleteOnce(t *testing.T) {
-	out := Compute(Input{PWD: "/w/b", Env: map[string]string{}, Cfg: cfgOf(), PathProfile: "b", PathWD: "/w/b", Profiles: testProfiles})
-	if out.Use == nil {
+func TestPlanFinishIsSingleUse(t *testing.T) {
+	plan := Compute(Input{PWD: "/w/b", Env: map[string]string{}, Cfg: cfgOf(), PathProfile: "b", PathWD: "/w/b", Profiles: testProfiles})
+	if plan.Use == nil {
 		t.Fatal("want a pending use")
 	}
-	done := out.Complete(UseResult{})
-	if again := done.Complete(UseResult{Exports: [][2]string{{"X", "1"}}}); !reflect.DeepEqual(again.Exports, done.Exports) {
-		t.Errorf("second Complete changed the output")
+	if plan.State.PWD != "/w/b" || plan.State.Target != "b" {
+		t.Errorf("Plan.State before Finish = %#v, want pwd and target", plan.State)
 	}
+	_ = plan.Finish(UseResult{})
+	mustPanic(t, "second Finish", func() { plan.Finish(UseResult{}) })
+}
+
+func TestPlanFinishRejectsUnplannedResult(t *testing.T) {
+	plan := Compute(Input{PWD: "/tmp", Env: map[string]string{}, Cfg: cfgOf()})
+	if plan.Use != nil {
+		t.Fatal("want no use")
+	}
+	mustPanic(t, "a use result without a planned use", func() { plan.Finish(UseResult{Code: 1}) })
+}
+
+func mustPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Errorf("%s: no panic", what)
+		}
+	}()
+	f()
 }

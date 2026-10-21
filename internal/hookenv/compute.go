@@ -49,15 +49,46 @@ type UseResult struct {
 	Code    int
 }
 
-// Output is one hook run's result. Exports and Unsets are the net change to
-// the shell (disjoint; apply in any order) after every step, including the
-// pending Use when Complete has folded it in.
+// Plan is one hook run decided up to its side effects. The caller runs them
+// in the hook's order: (if Deactivate) ctx deactivate's side effects, then (if
+// Use) the quiet use, whose messages are dropped, then Finish with the use's
+// result. Finish is the only way to the Output, and it can be called once.
+type Plan struct {
+	// Use is the `ctx use` to run (nil: none).
+	Use *UseCall
+	// Deactivate asks for ctx deactivate's side effects (clear the
+	// machine-wide activation, drop the ssh key it added, unset the git
+	// identity under WORK_DIR). Its variables are unset by Finish's Output.
+	Deactivate bool
+	// State is the __CTX_STATE to keep should the run stop before Finish:
+	// this run's pwd and target, and the previous keys (still in the shell).
+	State State
+
+	fin  func(UseResult) Output
+	done bool
+}
+
+// Finish folds the use's result (the zero UseResult when Plan.Use is nil)
+// into the run and returns its Output: the use's exports, then (when it
+// succeeded, or always for a new terminal) CTX_ACTIVE_PROFILE,
+// CTX_ACTIVATION_TRIGGER=auto and GH_TOKEN; on failure the notify line. A
+// failed use is not retried: State records the target either way.
 //
-// The caller runs the side effects in the hook's order: (if Deactivate) ctx
-// deactivate's side effects, then (if Use) the quiet use, whose messages are
-// dropped, then Complete with its result exactly once. Complete's Notify holds
-// every line of the run (it may add the failure line), so the caller prints
-// Notify after Complete.
+// Finish panics when called twice, or with a result for a use that was not
+// planned: both are caller bugs that would print a wrong shell diff.
+func (p *Plan) Finish(r UseResult) Output {
+	if p.done {
+		panic("hookenv: Plan.Finish called twice")
+	}
+	if p.Use == nil && (r.Code != 0 || len(r.Exports) != 0) {
+		panic("hookenv: Plan.Finish got a use result, but no use was planned")
+	}
+	p.done = true
+	return p.fin(r)
+}
+
+// Output is one finished hook run. Exports and Unsets are the net change to
+// the shell (disjoint; apply in any order).
 type Output struct {
 	Exports [][2]string
 	Unsets  []string
@@ -66,15 +97,6 @@ type Output struct {
 	Notify []string
 	// State is the next __CTX_STATE.
 	State State
-	// Use is the `ctx use` to run (nil: none). Until Complete is called,
-	// Exports, Unsets and State do not include it.
-	Use *UseCall
-	// Deactivate asks for ctx deactivate's side effects (clear the
-	// machine-wide activation, drop the ssh key it added, unset the git
-	// identity under WORK_DIR). Its variables are already in Unsets.
-	Deactivate bool
-
-	pend *pending
 }
 
 // pending is a run waiting for its Use result.
@@ -104,7 +126,7 @@ var deactivateFixed = []string{
 }
 
 // Compute is one run of _ctx_profile_autoswitch (map §1.3–1.5).
-func Compute(in Input) Output {
+func Compute(in Input) *Plan {
 	cfg := in.Cfg
 	if cfg == nil {
 		cfg = ctxconfig.Parse(nil)
@@ -127,14 +149,18 @@ func Compute(in Input) Output {
 	show, pprof, proot := PromptScope(in.PWD, in.Env["HOME"], &pcfg, in.PathProfile, in.PathWD)
 
 	v := newView(in.Env)
+	done := func(plan *Plan, out Output) *Plan {
+		plan.fin = func(UseResult) Output { return out }
+		return plan
+	}
 	if in.Prev.PWD == in.PWD && in.Prev.Target == target {
 		promptOps(v, show, pprof, proot)
-		return Output{Exports: v.exports(), Unsets: v.unsets(), State: in.Prev}
+		return done(&Plan{State: in.Prev}, Output{Exports: v.exports(), Unsets: v.unsets(), State: in.Prev})
 	}
 
 	p := &pending{in: in, v: v, target: target, show: show, pprof: pprof, proot: proot}
 	p.notify = cfg.NotifyEnabled(in.Env["CTX_AUTOSWITCH_NOTIFY"])
-	out := Output{}
+	plan := &Plan{State: State{PWD: in.PWD, Target: target, Keys: in.Prev.Keys}}
 	say := func(s string) {
 		if p.notify {
 			p.notifyL = append(p.notifyL, dim+s+rst)
@@ -149,7 +175,7 @@ func Compute(in Input) Output {
 		}
 	}
 	deactivate := func() {
-		out.Deactivate = true
+		plan.Deactivate = true
 		for _, k := range deactivateNames(findProfile(in.Profiles, current)) {
 			v.unset(k)
 		}
@@ -165,9 +191,7 @@ func Compute(in Input) Output {
 		v.unset("CTX_ACTIVATION_TRIGGER")
 		p.ghToken("")
 		promptOps(v, show, pprof, proot)
-		out.Exports, out.Unsets, out.Notify = v.exports(), v.unsets(), p.notifyL
-		out.State = State{PWD: in.PWD}
-		return out
+		return done(plan, Output{Exports: v.exports(), Unsets: v.unsets(), Notify: p.notifyL, State: State{PWD: in.PWD}})
 	}
 
 	switch {
@@ -187,26 +211,16 @@ func Compute(in Input) Output {
 			p.keys = append(p.keys, in.Prev.Keys...)
 		}
 		p.finish(true)
-		out.Exports, out.Unsets, out.Notify, out.State = v.exports(), v.unsets(), p.notifyL, p.state()
-		return out
+		return done(plan, Output{Exports: v.exports(), Unsets: v.unsets(), Notify: p.notifyL, State: p.state()})
 	}
 	dropPrev()
-	out.Use = &UseCall{Target: target, Quiet: true, AutoSwitch: true}
-	out.Notify = append([]string(nil), p.notifyL...)
-	out.pend = p
-	return out
+	plan.Use = &UseCall{Target: target, Quiet: true, AutoSwitch: true}
+	plan.fin = p.complete
+	return plan
 }
 
-// Complete folds the pending Use's result into o: its exports, then (when it
-// succeeded, or always for a new terminal) CTX_ACTIVE_PROFILE,
-// CTX_ACTIVATION_TRIGGER=auto and GH_TOKEN; on failure the notify line. A
-// failed use is not retried: State records the target either way. Without a
-// pending Use it returns o unchanged.
-func (o Output) Complete(r UseResult) Output {
-	p := o.pend
-	if p == nil {
-		return o
-	}
+// complete folds the use's result in (see Plan.Finish).
+func (p *pending) complete(r UseResult) Output {
 	for _, kv := range r.Exports {
 		p.v.set(kv[0], kv[1])
 		p.keys = append(p.keys, kv[0])
@@ -216,9 +230,7 @@ func (o Output) Complete(r UseResult) Output {
 		p.notifyL = append(p.notifyL, dim+"[ctx] ctx use "+p.target+" failed — run: ctx use "+p.target+rst)
 	}
 	p.finish(ok || p.always)
-	o.Exports, o.Unsets, o.Notify, o.State = p.v.exports(), p.v.unsets(), p.notifyL, p.state()
-	o.pend = nil
-	return o
+	return Output{Exports: p.v.exports(), Unsets: p.v.unsets(), Notify: p.notifyL, State: p.state()}
 }
 
 // finish is the tail of the target branch: the applied exports and the prompt.

@@ -191,7 +191,7 @@ done
 	for _, s := range steps {
 		args = append(args, filepath.Join(td, s))
 	}
-	cmd := exec.Command("bash", args...)
+	cmd := exec.Command(systemBash(t), args...)
 	cmd.Dir = td
 	cmd.Env = append(append([]string{}, env...), "CTX_ROOT="+repoRoot())
 	var stderr bytes.Buffer
@@ -241,18 +241,20 @@ func goSession(t *testing.T, td string, baseEnv []string, steps []string) ([]sna
 				t.Fatal(err)
 			}
 			prev, _ := hookenv.Decode(state)
-			out := hookenv.Compute(hookenv.Input{
+			plan := hookenv.Compute(hookenv.Input{
 				PWD: pwd, Prev: prev, Env: env, Cfg: ctxconfig.Parse(data),
 				PathProfile: name, PathWD: wd, Profiles: loadProfiles(t, profilesDir),
 				GH: func(user string) (string, error) { return "tok-" + user + "\n", nil },
 			})
-			if out.Deactivate {
+			if plan.Deactivate {
 				runCore(t, core, pwd, env, "CTX_QUIET=1")("deactivate", "--eval", "bash")
 			}
-			if out.Use != nil {
-				stdout, code := runCore(t, core, pwd, env, "CTX_QUIET=1", "CTX_AUTO_SWITCH=1")("use", "--eval", "bash", out.Use.Target)
-				out = out.Complete(hookenv.UseResult{Exports: evalExports(t, stdout), Code: code})
+			var res hookenv.UseResult
+			if plan.Use != nil {
+				stdout, code := runCore(t, core, pwd, env, "CTX_QUIET=1", "CTX_AUTO_SWITCH=1")("use", "--eval", "bash", plan.Use.Target)
+				res = hookenv.UseResult{Exports: evalExports(t, stdout), Code: code}
 			}
+			out := plan.Finish(res)
 			for _, l := range out.Notify {
 				notify.WriteString(l + "\n")
 			}
@@ -320,7 +322,7 @@ func evalExports(t *testing.T, out string) [][2]string {
 	if len(names) == 0 {
 		return nil
 	}
-	cmd := exec.Command("bash", append([]string{"--norc", "-c", `eval "$1"; shift; for k; do printf '%s\0' "${!k}"; done`, "bash", out}, names...)...)
+	cmd := exec.Command(systemBash(t), append([]string{"--norc", "-c", `eval "$1"; shift; for k; do printf '%s\0' "${!k}"; done`, "bash", out}, names...)...)
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
 	b, err := cmd.Output()
 	if err != nil {
@@ -371,9 +373,7 @@ func TestComputeMatchesLegacyHook(t *testing.T) {
 	if testing.Short() {
 		t.Skip("differential test runs bash and ctx-core")
 	}
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not installed")
-	}
+	systemBash(t)
 	buildCore(t)
 	for _, c := range diffCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -398,6 +398,17 @@ func TestComputeMatchesLegacyHook(t *testing.T) {
 			}
 		})
 	}
+}
+
+// systemBash is the system's bash (/bin/bash, 3.2 on macOS), not whichever
+// bash comes first on PATH: the legacy hook must keep working there.
+func systemBash(t *testing.T) string {
+	t.Helper()
+	b := testutil.SystemTool("bash")
+	if b == "" {
+		t.Skip("no bash in the system dirs")
+	}
+	return b
 }
 
 func envDiff(a, b map[string]string) string {
