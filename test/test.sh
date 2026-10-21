@@ -230,6 +230,15 @@ test_cmd_workdir_prompt() {
     cd /
     out="$("$ROOT/bin/ctx" workdir-prompt)"
     [[ -z "$out" ]] || exit 1
+    # R5: the last prompt_extra_paths entry counts (no trailing colon needed).
+    mkdir -p "$td/x1" "$td/x2/sub"
+    printf 'prompt_extra_paths=%s:%s\n' "$td/x1" "$td/x2" >"$td/config"
+    cd "$td/x2/sub"
+    out="$("$ROOT/bin/ctx" workdir-prompt)"
+    [[ "$out" == "work_dir='WORK_DIR=$td/x2'" ]] || { echo "got: $out" >&2; exit 1; }
+    cd "$td/x1"
+    out="$("$ROOT/bin/ctx" workdir-prompt)"
+    [[ "$out" == "work_dir='WORK_DIR=$td/x1'" ]] || exit 1
     rm -rf "$td"
   ) || fail "cmd_workdir_prompt"
   pass "workdir-prompt"

@@ -1816,7 +1816,7 @@ cmd_workdir_prompt() {
         display_root="$piece"
         break
       fi
-    done < <(printf '%s' "$pex" | tr ':' '\n')
+    done < <(printf '%s:' "$pex" | tr ':' '\n')
   fi
 
   if [[ "$prompt_show" == "1" && -n "$display_root" ]]; then
