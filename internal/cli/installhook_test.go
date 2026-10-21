@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
 	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
 	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
@@ -214,10 +216,27 @@ type ihCase struct {
 	check   func(t *testing.T, home string, r cvRun)
 }
 
+// ihStamp is the backup stamp both sides use: install-hook backs up the rc
+// and then ~/.ssh/config, and under load the two can land in different
+// seconds on one side only, so each side's clock is frozen (Bash through a
+// `date` on PATH, Go through ctxconfig.Now).
+const ihStamp = "20260102-030405"
+
+// runIhCases must be called from a sequential top-level test: it pins
+// ctxconfig.Now until its parallel subtests are done.
 func runIhCases(t *testing.T, cases []ihCase) {
+	stamp, err := time.ParseInLocation("20060102-150405", ihStamp, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldNow := ctxconfig.Now
+	ctxconfig.Now = func() time.Time { return stamp }
+	t.Cleanup(func() { ctxconfig.Now = oldNow })
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			e := newIhEnv(t, c.mise, c.drop...)
+			var dateDir string
+			locked(func() { dateDir = testutil.FixedStampDate(t, ihStamp) })
 			env := []string{"SHELL=" + c.shell}
 			if c.dry {
 				env = append(env, "CTX_DRY_RUN=1")
@@ -232,7 +251,7 @@ func runIhCases(t *testing.T, cases []ihCase) {
 			if c.dry {
 				bargs = append([]string{"--dry-run"}, bargs...)
 			}
-			want := e.bash(t, env, bargs...)
+			want := e.bash(t, append(env, "PATH="+dateDir+string(os.PathListSeparator)+e.p.Getenv("PATH")), bargs...)
 			e.seed(t, c.files, c.tweak)
 			got := e.goRun(t, env, func(tm tui.Term) int { return InstallHook(tm, args) })
 			ihCompare(t, want, got)
