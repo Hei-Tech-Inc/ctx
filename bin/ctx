@@ -521,6 +521,11 @@ main() {
       _ctx_core_forward deactivate "$@"
       cmd_deactivate "$@"
       ;;
+    hook-env)
+      # Normally the activate glue runs ctx-core hook-env directly.
+      _ctx_core_forward hook-env "$@"
+      die "ctx hook-env needs ctx-core (CTX_CORE=off or ctx-core not found)"
+      ;;
     list|ls)
       if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward list --json; else _ctx_core_forward list; fi
       cmd_list
