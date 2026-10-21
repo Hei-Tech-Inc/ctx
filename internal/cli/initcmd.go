@@ -81,8 +81,8 @@ func Init(t tui.Term, args []string) int {
 	if rc != "" {
 		data, _ := os.ReadFile(rc)
 		has := func(s string) bool { return bytes.Contains(data, []byte(s)) }
-		activate, lib := autoswitchForms(string(data))
-		if !has("mise activate") || (!activate && !lib) {
+		activate, lib, paste := autoswitchForms(string(data))
+		if !has("mise activate") || (!activate && !lib && !paste) {
 			yes := dry
 			if !dry {
 				var err error

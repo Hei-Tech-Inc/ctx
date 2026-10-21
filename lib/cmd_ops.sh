@@ -1711,11 +1711,14 @@ cmd_doctor() {
 
     local as_forms as_form=""
     as_forms="$(_ctx_rc_autoswitch_forms "$shell_rc")"
-    grep -qF 'ctx auto-switch' "$shell_rc" 2>/dev/null && as_forms="${as_forms:0:1}l"
+    # (an old paste's header alone counts as a paste, as it always did here)
+    [[ "$as_forms" == ?- ]] && grep -qF 'ctx auto-switch' "$shell_rc" 2>/dev/null && as_forms="${as_forms:0:1}p"
     case "$as_forms" in
       al) as_form="ctx activate, and the ctx_autoswitch lib" ;;
+      ap) as_form="ctx activate, and a legacy inline paste" ;;
       a-) as_form="ctx activate" ;;
       -l) as_form="ctx_autoswitch lib → ctx activate when ctx-core is installed" ;;
+      -p) as_form="legacy inline paste — run ctx install-hook to upgrade" ;;
     esac
     if [[ -n "$as_form" ]]; then
       success "ctx profile autoswitch: installed in $shell_rc ($as_form)"
@@ -2051,12 +2054,19 @@ _ctx_rc_is_rule() {
 
 # Print the ctx autoswitch hook forms in rc file RC as two characters: "a" when it
 # has an `eval "$(ctx activate <shell>)"` (or ctx-core path) line, else "-"; then "l"
-# when it has the install-hook block, another line sourcing lib/ctx_autoswitch.*, or
-# an old paste of it, else "-". Go twin: autoswitchForms.
+# when it has the install-hook block or another (uncommented) line sourcing
+# lib/ctx_autoswitch.*, which with ctx-core installed runs ctx activate; else "p" when
+# it has only an old inline paste of the lib (no shim: always the legacy hook), else
+# "-". Go twin: autoswitchForms.
 _ctx_rc_autoswitch_forms() {
   local rc="$1" a="-" l="-"
   grep -qF -e 'ctx activate ' -e 'ctx-core activate ' "$rc" 2>/dev/null && a=a
-  grep -qF -e '_ctx_profile_autoswitch' -e '# BEGIN ctx profile autoswitch' -e 'ctx_autoswitch.' "$rc" 2>/dev/null && l=l
+  if grep -qF '# BEGIN ctx profile autoswitch' "$rc" 2>/dev/null ||
+     grep -qE '^[[:space:]]*([^#[:space:]].*)?ctx_autoswitch\.' "$rc" 2>/dev/null; then
+    l=l
+  elif grep -qF '_ctx_profile_autoswitch' "$rc" 2>/dev/null; then
+    l=p
+  fi
   printf '%s%s\n' "$a" "$l"
 }
 

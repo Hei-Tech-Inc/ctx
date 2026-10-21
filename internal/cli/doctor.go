@@ -141,15 +141,20 @@ func Doctor(t tui.Term, _ []string) int {
 			u.info("Run: ctx install-hook")
 			allOK = false
 		}
-		activate, lib := autoswitchForms(text)
-		lib = lib || strings.Contains(text, "ctx auto-switch")
-		if activate || lib {
+		activate, lib, paste := autoswitchForms(text)
+		// (an old paste's header alone counts as a paste, as it always did here)
+		paste = paste || (!lib && strings.Contains(text, "ctx auto-switch"))
+		if activate || lib || paste {
 			form := "ctx activate"
 			switch {
 			case activate && lib:
 				form = "ctx activate, and the ctx_autoswitch lib"
+			case activate && paste:
+				form = "ctx activate, and a legacy inline paste"
 			case lib:
 				form = "ctx_autoswitch lib → ctx activate when ctx-core is installed"
+			case paste:
+				form = "legacy inline paste — run ctx install-hook to upgrade"
 			}
 			u.success("ctx profile autoswitch: installed in " + rc + " (" + form + ")")
 		} else {

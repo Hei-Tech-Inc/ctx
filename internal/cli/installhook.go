@@ -294,14 +294,21 @@ func isRcRule(l string) bool {
 
 // autoswitchForms reports the ctx autoswitch hook forms in rc text: activate,
 // an `eval "$(ctx activate <shell>)"` (or ctx-core path) line; lib, the
-// install-hook block, another line sourcing lib/ctx_autoswitch.*, or an old
-// paste of it (which, with ctx-core installed, runs ctx activate too).
+// install-hook block or another (uncommented) line sourcing lib/ctx_autoswitch.*,
+// which with ctx-core installed runs ctx activate; paste, without lib, an old
+// inline paste of the lib (no shim: always the legacy hook).
 // Bash twin: _ctx_rc_autoswitch_forms.
-func autoswitchForms(text string) (activate, lib bool) {
+func autoswitchForms(text string) (activate, lib, paste bool) {
 	activate = strings.Contains(text, "ctx activate ") || strings.Contains(text, "ctx-core activate ")
-	lib = strings.Contains(text, "_ctx_profile_autoswitch") || strings.Contains(text, autoswitchBegin) ||
-		strings.Contains(text, "ctx_autoswitch.")
-	return activate, lib
+	lib = strings.Contains(text, autoswitchBegin)
+	for _, l := range strings.Split(text, "\n") {
+		// grep -E '^[[:space:]]*([^#[:space:]].*)?ctx_autoswitch\.'
+		if l = strings.TrimLeft(l, " \t\v\f\r"); !strings.HasPrefix(l, "#") && strings.Contains(l, "ctx_autoswitch.") {
+			lib = true
+		}
+	}
+	paste = !lib && strings.Contains(text, "_ctx_profile_autoswitch")
+	return activate, lib, paste
 }
 
 // autoswitchBlock is _ctx_autoswitch_block: the block install-hook appends,

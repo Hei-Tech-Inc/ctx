@@ -1201,7 +1201,7 @@ test_autoswitch_shim() {
       unset CTX_CORE_BIN CTX_ACTIVE_PROFILE CTX_AUTOSWITCH_NOTIFY GH_TOKEN _CTX_GH_PROFILE
       mkdir -p "$CTX_DIR/profiles" "$td/w/p/r" "$td/alone" "$td/syspath"
       printf 'secret_provider=file\n' >"$CTX_DIR/config"
-      printf 'PROFILE_NAME=p\nWORK_DIR=%s\n' "$td/w/p" >"$CTX_DIR/profiles/p.conf"
+      printf 'PROFILE_NAME=p\nWORK_DIR=%s\nAWS_PROFILE_NAME=pa\n' "$td/w/p" >"$CTX_DIR/profiles/p.conf"
       cp "$ROOT_DIR/lib/ctx_autoswitch.bash" "$td/alone/"
       for d in noexec fail empty log; do mkdir -p "$td/$d"; done
       printf '#!/bin/sh\nexit 0\n' >"$td/noexec/ctx-core"
@@ -1293,6 +1293,24 @@ test_autoswitch_shim() {
           cd "$T" && prompt 2>/dev/null
           [[ -z "${CTX_ACTIVE_PROFILE:-}" ]] || fail "after $m: leave: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
         done
+        # Core in p, flip to the legacy hook, leave p there, set a variable of
+        # the user, flip back: activate starts clean, without a stale
+        # __CTX_STATE that would "leave" p again, unset AWS_PROFILE and notify.
+        source "$R/lib/ctx_autoswitch.bash"
+        cd "$T/w/p/r" && prompt 2>/dev/null
+        [[ "${CTX_ACTIVE_PROFILE:-}" == p ]] || fail "flip: enter: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
+        [[ "${AWS_PROFILE:-}" == pa ]] || fail "flip: enter: AWS_PROFILE=${AWS_PROFILE:-}"
+        CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
+        cd "$T" && prompt 2>/dev/null
+        [[ -z "${CTX_ACTIVE_PROFILE:-}" ]] || fail "flip: legacy leave: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
+        export AWS_PROFILE=mine
+        source "$R/lib/ctx_autoswitch.bash"
+        CTX_AUTOSWITCH_NOTIFY=1
+        prompt 2>"$T/flip.err"
+        unset CTX_AUTOSWITCH_NOTIFY
+        [[ "${AWS_PROFILE-<unset>}" == mine ]] || fail "flip: AWS_PROFILE=${AWS_PROFILE-<unset>}, want mine"
+        ! grep -q "←" "$T/flip.err" || fail "flip: phantom leave: $(cat "$T/flip.err")"
+        unset AWS_PROFILE
         # bash 5.1+: an array PROMPT_COMMAND keeps the user entries across flips.
         if [[ -n "${BASH_VERSION:-}" ]] && (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
           PROMPT_COMMAND=(user1 user2)
@@ -1317,7 +1335,7 @@ test_autoswitch_shim() {
       unset CTX_CORE_BIN CTX_ACTIVE_PROFILE CTX_AUTOSWITCH_NOTIFY GH_TOKEN _CTX_GH_PROFILE
       mkdir -p "$CTX_DIR/profiles" "$td/w/p/r" "$td/fail" "$td/empty"
       printf 'secret_provider=file\n' >"$CTX_DIR/config"
-      printf 'PROFILE_NAME=p\nWORK_DIR=%s\n' "$td/w/p" >"$CTX_DIR/profiles/p.conf"
+      printf 'PROFILE_NAME=p\nWORK_DIR=%s\nAWS_PROFILE_NAME=pa\n' "$td/w/p" >"$CTX_DIR/profiles/p.conf"
       printf '#!/bin/sh\necho "function _ctx_hook; end"\nexit 1\n' >"$td/fail/ctx-core"
       printf '#!/bin/sh\nexit 0\n' >"$td/empty/ctx-core"
       chmod +x "$td/fail/ctx-core" "$td/empty/ctx-core"
@@ -1353,6 +1371,26 @@ test_autoswitch_shim() {
           emit fish_postexec
           test -z "$CTX_ACTIVE_PROFILE"; or fail "after $m: leave: $CTX_ACTIVE_PROFILE"
         end
+        # Core in p, legacy leaves p, the user sets AWS_PROFILE, core again:
+        # no stale __CTX_STATE "leave" (unsetting it, notifying) on the prompt.
+        source $lib
+        cd $CTX_T_TD/w/p/r
+        emit fish_postexec
+        test "$CTX_ACTIVE_PROFILE" = p; or fail "flip: enter: $CTX_ACTIVE_PROFILE"
+        test "$AWS_PROFILE" = pa; or fail "flip: enter: AWS_PROFILE=$AWS_PROFILE"
+        set -gx CTX_CORE off
+        source $lib
+        set -e CTX_CORE
+        cd $CTX_T_TD
+        emit fish_postexec
+        test -z "$CTX_ACTIVE_PROFILE"; or fail "flip: legacy leave: $CTX_ACTIVE_PROFILE"
+        set -gx AWS_PROFILE mine
+        source $lib
+        set -g CTX_AUTOSWITCH_NOTIFY 1
+        emit fish_postexec 2>$CTX_T_TD/flip.err
+        set -e CTX_AUTOSWITCH_NOTIFY
+        test "$AWS_PROFILE" = mine; or fail "flip: AWS_PROFILE=$AWS_PROFILE, want mine"
+        grep -q "←" $CTX_T_TD/flip.err; and fail "flip: phantom leave:" (cat $CTX_T_TD/flip.err)
       ' || exit 1
       rm -rf "$td"
     ) || fail "autoswitch lib shim (fish)"
