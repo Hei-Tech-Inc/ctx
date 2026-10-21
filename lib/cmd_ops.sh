@@ -924,14 +924,19 @@ cmd_clone() {
         break
       fi
     done
-    [[ -n "$idx" ]] || die "Could not find a repo URL in: ctx clone ... -- ${rest[*]}"
+    if [[ -z "$idx" ]]; then
+      local joined=""
+      [[ ${#rest[@]} -eq 0 ]] || joined="${rest[*]}" # no empty-array expansion: unbound on bash 3.2
+      die "Could not find a repo URL in: ctx clone ... -- $joined"
+    fi
     url="${rest[$idx]}"
   else
     [[ ${#rest[@]} -ge 1 ]] || die "Usage: ctx clone [-p|--profile <name>] <repo-url> [git-clone-args...]"
     url="${rest[0]}"
   fi
 
-  ctx_init_dirs
+  # --dry-run changes nothing, not even the ctx dirs.
+  [[ "${CTX_DRY_RUN:-0}" == "1" ]] || ctx_init_dirs
   if [[ -z "$prof" ]]; then
     prof="$(active_profile)"
   fi
@@ -966,25 +971,67 @@ cmd_clone() {
 
   # Do not pass the original <repo-url> to git again — a second arg is the target
   # directory, so we would create a folder named like the full URL.
+  local gargs=() _i
   if $seen_dd; then
-    local before=() after=() _i
     for ((_i = 0; _i < idx; _i++)); do
-      before+=("${rest[_i]}")
+      gargs+=("${rest[_i]}")
     done
+    gargs+=("$clone_url")
     for ((_i = idx + 1; _i < ${#rest[@]}; _i++)); do
-      after+=("${rest[_i]}")
+      gargs+=("${rest[_i]}")
     done
-    git clone "${before[@]}" "$clone_url" "${after[@]}"
   else
-    local after=()
+    gargs+=("$clone_url")
     for ((_i = 1; _i < ${#rest[@]}; _i++)); do
-      after+=("${rest[_i]}")
+      gargs+=("${rest[_i]}")
     done
-    git clone "$clone_url" "${after[@]}"
   fi
+
+  if [[ "${CTX_DRY_RUN:-0}" == "1" ]]; then
+    local shown="git clone" a
+    for a in "${gargs[@]}"; do
+      shown+=" $(printf '%q' "$a")"
+    done
+    dim "  [dry-run] would run: $shown"
+    return 0
+  fi
+  git clone "${gargs[@]}"
 }
 
 # ─── verify ───────────────────────────────────────────────────────────────────
+# The active github.com account in `gh auth status` output ($1): the one whose
+# block says "- Active account: true"; gh versions without that line list the
+# active account first. Account lines are "Logged in to github.com account USER"
+# (newer) or "... as USER" (older); "Failed to log in" is not a login.
+_ctx_gh_active_account() {
+  printf '%s\n' "$1" | awk '
+    { l = $0; t = l; sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
+    t ~ /^- Active account:/ {
+      if (cur > 0) {
+        v = t; sub(/^- Active account:/, "", v); gsub(/^[ \t]+|[ \t]+$/, "", v)
+        st[cur] = (v == "true") ? 1 : -1
+      }
+      next
+    }
+    l !~ /Logged in to / && l !~ /Failed to log in to / { next }
+    {
+      cur = 0
+      if (l ~ /Logged in to github\.com (account|as) /)
+        for (i = 1; i + 2 <= NF; i++)
+          if ($i == "github.com" && ($(i+1) == "account" || $(i+1) == "as") && $(i-1) == "to") {
+            n++; user[n] = $(i+2); cur = n; break
+          }
+    }
+    END {
+      known = 0
+      for (i = 1; i <= n; i++) {
+        if (st[i] == 1) { print user[i]; exit }
+        if (st[i] != 0) known = 1
+      }
+      if (!known && n > 0) print user[1]
+    }'
+}
+
 cmd_verify() {
   local name="${1:-}"
   ctx_init_dirs
@@ -1015,7 +1062,7 @@ cmd_verify() {
     fi
     if has ssh && [[ -f "$SSH_KEY_PATH" ]]; then
       local st
-      st=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T "git@${host}" 2>&1 || true)
+      st=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -T "git@${host}" 2>&1 || true)
       if echo "$st" | grep -qi "successfully authenticated"; then
         success "ssh -T git@${host}: OK"
       else
@@ -1030,8 +1077,7 @@ cmd_verify() {
 
   if [[ -n "${GITHUB_USER:-}" ]] && has gh; then
     local active_gh
-    active_gh=$(gh auth status 2>&1 | grep "Logged in to github.com account" \
-      | awk '{print $NF}' | tr -d '()' | head -1)
+    active_gh=$(_ctx_gh_active_account "$(gh auth status 2>&1)")
     if [[ "$active_gh" == "$GITHUB_USER" ]]; then
       success "gh active user matches: $GITHUB_USER"
     else
@@ -1049,11 +1095,136 @@ cmd_verify() {
     fi
   fi
 
-  $ok && success "Profile verification passed." || warn "Profile verification found issues."
+  if $ok; then success "Profile verification passed."; else warn "Profile verification found issues."; fi
   echo ""
+  $ok
 }
 
 # ─── uninstall ──────────────────────────────────────────────────────────────────
+# Physical path of an existing directory (cd -P + pwd -P: symlinks resolved
+# before any .., as the kernel does); fails when it cannot cd.
+_ctx_phys_dir() { (cd -P -- "$1" 2>/dev/null && pwd -P); }
+
+# Physical path of a file: symlinks of the last component followed (even to a
+# missing target), the directory resolved. Fails on a link loop or a missing dir.
+_ctx_phys_file() {
+  local p="$1" l i=0 d
+  while [[ -L "$p" ]]; do
+    [[ $i -ge 40 ]] && return 1
+    i=$((i + 1))
+    l="$(readlink "$p")" || return 1
+    case "$l" in /*) p="$l" ;; *) p="$(dirname "$p")/$l" ;; esac
+  done
+  d="$(_ctx_phys_dir "$(dirname "$p")")" || return 1
+  printf '%s/%s\n' "${d%/}" "$(basename "$p")"
+}
+
+# Whether path P has a . or .. component (empty components are fine).
+_ctx_has_dot_component() {
+  case "/$1/" in */./*|*/../*) return 0 ;; esac
+  return 1
+}
+
+# Whether directory CAND is PATH or one of its ancestors, by file identity
+# (-ef), never by string: case-insensitive file systems and symlinks make
+# equal directories with different spellings. A PATH that does not exist is
+# walked from its nearest existing ancestor; the walk is over physical paths.
+_ctx_holds() {
+  local cand="$1" d="$2" ph
+  while [[ ! -e "$d" && "$d" != / && "$d" != . ]]; do d="$(dirname "$d")"; done
+  ph="$(_ctx_phys_dir "$d")" || ph="$d"
+  while :; do
+    [[ "$ph" -ef "$cand" ]] && return 0
+    [[ "$ph" == / || "$ph" == . ]] && return 1
+    ph="$(dirname "$ph")"
+  done
+}
+
+# Whether `rm -rf DIR` is safe; KIND is lib (the install's lib dir) or data
+# (CTX_DIR for --purge); further args are install dirs a data dir must not
+# hold. On success it prints the physical path to delete (the caller deletes
+# that, never DIR as given); otherwise it prints why not and returns 1: a
+# newline in it, not absolute, a . or .. component, a symlink (trailing
+# slashes ignored), not a directory, /, $HOME or a directory holding it,
+# CTX_DIR's parent; a lib dir must be named ctx, hold core.sh, not hold
+# CTX_DIR and not be a git checkout; a data dir must be named .ctx or hold a
+# config file or profiles dir (R15), and not hold the install. Directories
+# are compared by identity (-ef), not by name.
+_ctx_rm_rf_ok() {
+  local dir="$1" kind="$2" p t keep
+  shift 2
+  case "$dir" in *$'\n'*) echo "it contains a newline"; return 1 ;; esac
+  case "$dir" in /*) ;; *) echo "it is not an absolute path"; return 1 ;; esac
+  _ctx_has_dot_component "$dir" && { echo "it has a . or .. component"; return 1; }
+  t="$dir"
+  while [[ "$t" == */ && "$t" != / ]]; do t="${t%/}"; done
+  [[ "$t" != / && -L "$t" ]] && { echo "it is a symlink"; return 1; }
+  [[ -d "$t" ]] || { echo "it is not a directory"; return 1; }
+  p="$(_ctx_phys_dir "$t")" || { echo "it cannot be resolved"; return 1; }
+  case "$p" in *$'\n'*) echo "it resolves to a path with a newline"; return 1 ;; esac
+  [[ "$p" -ef "$t" ]] || { echo "it cannot be resolved"; return 1; }
+  [[ "$p" -ef / ]] && { echo "it is /"; return 1; }
+  _ctx_holds "$p" "$HOME" && { echo "it is your home directory or holds it"; return 1; }
+  if [[ "$p" -ef "$CTX_DIR/.." || "$p" -ef "$(dirname "$CTX_DIR")" ]]; then
+    echo "it is the parent of CTX_DIR"; return 1
+  fi
+  if [[ "$kind" == lib ]]; then
+    [[ "$(basename "$p")" == ctx ]] || { echo "its name is not 'ctx'"; return 1; }
+    _ctx_holds "$p" "$CTX_DIR" && { echo "it holds CTX_DIR"; return 1; }
+    [[ -f "$p/core.sh" ]] || { echo "it has no core.sh"; return 1; }
+    [[ -e "$p/.git" ]] && { echo "it is a git checkout"; return 1; }
+  else
+    [[ "$(basename "$t")" == .ctx || -f "$p/config" || -d "$p/profiles" ]] \
+      || { echo "it does not look like a ctx data directory (no config or profiles)"; return 1; }
+    for keep in "$@"; do
+      _ctx_holds "$p" "$keep" && { echo "it holds the ctx install ($keep)"; return 1; }
+    done
+  fi
+  printf '%s\n' "$p"
+}
+
+# Print what to remove by hand after a refusal. Args: ctx path, lib dir ("" when
+# unknown), purge (true|false).
+_ctx_uninstall_manual() {
+  local bin="$1" lib="$2" purge="$3"
+  info "To uninstall by hand, remove:"
+  dim "  $bin"
+  [[ -e "$(dirname "$bin")/ctx-core" || -L "$(dirname "$bin")/ctx-core" ]] && dim "  $(dirname "$bin")/ctx-core"
+  if [[ -n "$lib" ]]; then
+    dim "  $lib"
+  else
+    dim "  its lib dir (the CTX_LIB= line in $bin, if any)"
+  fi
+  if $purge; then
+    dim "  $CTX_DIR"
+    dim "  Delete each profile's secrets first: ctx secret list <profile>, then ctx secret delete <profile> <KEY>."
+  fi
+}
+
+# Refuse: the error, then what to remove by hand (uses cmd_uninstall's ctx_bin,
+# install_lib and purge_data), exit 1.
+_ctx_uninstall_refuse() {
+  error "$1"
+  _ctx_uninstall_manual "$ctx_bin" "$install_lib" "$purge_data"
+  exit 1
+}
+
+# Secret keys left for profile P in provider PROV, one per line.
+# Fails when the store could not be listed.
+_ctx_uninstall_keys() {
+  local out
+  out="$(secret_list_with_provider "$1" "$2")" || return 1
+  printf '%s\n' "$out" | grep . || true
+}
+
+# ctx uninstall [--purge]. The ctx on PATH must be the running one, a regular
+# file with the installer's CTX_LIB="..." line, whose lib dir is this ctx's;
+# every path is checked (_ctx_rm_rf_ok) before the prompt, and any doubt is a
+# refusal with nothing removed and a list of what to remove by hand. What is
+# deleted is the checked physical path. Removes the guard (when on), ctx,
+# ctx-core next to it, the lib dir and, with --purge, each profile's secrets
+# (the store must be available; a key left behind, or a store that cannot be
+# listed, stops everything) and CTX_DIR.
 cmd_uninstall() {
   local purge_data=false
   while [[ $# -gt 0 ]]; do
@@ -1063,38 +1234,126 @@ cmd_uninstall() {
     esac
   done
 
-  bold "\n  ctx uninstall\n"
-  warn "This removes the ctx binary and library scripts from your install location."
-  $purge_data && warn "Also deletes ~/.ctx (profiles, secrets, backups)."
-  echo ""
-  ask_yn "Continue?" "n" || die "Aborted."
-
-  local ctx_bin lib_line install_lib
+  local ctx_bin bin lib_line install_lib="" lib="" data="" core_bin why me failed=0
   ctx_bin="$(command -v ctx 2>/dev/null || true)"
   [[ -z "$ctx_bin" ]] && die "ctx not found in PATH"
-
-  if [[ -f "$ctx_bin" ]]; then
-    lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
-    if [[ "$lib_line" =~ CTX_LIB=\"([^\"]+)\" ]]; then
-      install_lib="${BASH_REMATCH[1]}"
-    fi
+  if [[ -L "$ctx_bin" ]]; then
+    _ctx_uninstall_refuse "Refusing to uninstall: $ctx_bin is a symlink (to $(readlink "$ctx_bin")). Remove the link yourself, or put the installed ctx first on PATH."
   fi
-
-  rm -f "$ctx_bin" && success "Removed $ctx_bin"
-  if [[ -n "${install_lib:-}" && -d "$install_lib" ]]; then
-    rm -rf "$install_lib" && success "Removed $install_lib"
+  [[ -f "$ctx_bin" ]] || _ctx_uninstall_refuse "Refusing to uninstall: $ctx_bin is not a regular file."
+  me="$(_ctx_phys_file "$CTX_BIN/ctx" || true)"
+  bin="$(_ctx_phys_file "$ctx_bin" || true)"
+  [[ -n "$me" && "$bin" == "$me" && "$bin" -ef "$ctx_bin" ]] \
+    || _ctx_uninstall_refuse "Refusing to uninstall: the ctx on PATH ($ctx_bin) is not the one running ($CTX_BIN/ctx)."
+  lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
+  if [[ "$lib_line" =~ ^CTX_LIB=\"(/[^\"]*)\"$ ]]; then
+    install_lib="${BASH_REMATCH[1]}"
+  else
+    _ctx_uninstall_refuse "Refusing to uninstall: $ctx_bin has no installer CTX_LIB line (a source checkout?). Remove it by hand."
   fi
+  [[ "$(_ctx_phys_dir "$install_lib" || true)" == "$(_ctx_phys_dir "$CTX_LIB" || echo "?")" ]] \
+    || _ctx_uninstall_refuse "Refusing to uninstall: $ctx_bin names $install_lib, but this ctx runs from $CTX_LIB."
+  why="$(_ctx_rm_rf_ok "$install_lib" lib)" || _ctx_uninstall_refuse "Refusing to remove $install_lib: $why."
+  lib="$why"
+  local cdt="$CTX_DIR"
+  while [[ "$cdt" == */ && "$cdt" != / ]]; do cdt="${cdt%/}"; done
+  if $purge_data && [[ -e "$cdt" || -L "$cdt" ]]; then
+    why="$(_ctx_rm_rf_ok "$CTX_DIR" data "$(dirname "$bin")" "$lib")" || _ctx_uninstall_refuse "Refusing to remove $CTX_DIR: $why."
+    data="$why"
+  fi
+  core_bin="$(dirname "$bin")/ctx-core"
+  [[ -e "$core_bin" || -L "$core_bin" ]] || core_bin=""
 
+  local provider label profiles=() p keys k n left
   if $purge_data; then
-    rm -rf "$CTX_DIR" && success "Removed $CTX_DIR"
+    provider="$(ctx_effective_secret_provider)"
+    label="$(ctx_secret_store_label)"
+    ctx_secret_provider_available \
+      || _ctx_uninstall_refuse "Refusing to purge: the $label ($provider) is not available here, so the profiles' secrets cannot be deleted."
+    while IFS= read -r p; do [[ -n "$p" ]] && profiles+=("$p"); done < <(profile_list)
+  fi
+
+  bold "\n  ctx uninstall\n"
+  warn "This removes the ctx binary and library scripts from your install location."
+  $purge_data && warn "Also deletes $CTX_DIR (profiles, backups) and every profile's secrets in the $label."
+  dim "  $bin"
+  [[ -n "$core_bin" ]] && dim "  $core_bin"
+  dim "  $lib"
+  [[ -n "$data" ]] && dim "  $data"
+  echo ""
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    for p in "${profiles[@]+"${profiles[@]}"}"; do
+      if keys="$(_ctx_uninstall_keys "$provider" "$p")"; then
+        n="$(printf '%s' "$keys" | grep -c . || true)"
+        [[ "$n" -gt 0 ]] && dim "  [dry-run] would delete $n secret(s) of $p from the $label"
+      else
+        dim "  [dry-run] could not list the secrets of $p in the $label"
+      fi
+    done
+    _ctx_guard_installed && dim "  [dry-run] would run ctx guard uninstall"
+    dim "  [dry-run] would remove $bin"
+    [[ -n "$core_bin" ]] && dim "  [dry-run] would remove $core_bin"
+    dim "  [dry-run] would remove $lib"
+    [[ -n "$data" ]] && dim "  [dry-run] would remove $data"
+    echo ""
+    return 0
+  fi
+
+  ask_yn "Continue?" "n" || die "Aborted."
+
+  # Secrets first; the store is listed again after deleting, and any key left
+  # stops everything (the stores' delete commands do not report failures).
+  for p in "${profiles[@]+"${profiles[@]}"}"; do
+    if ! keys="$(_ctx_uninstall_keys "$provider" "$p")"; then
+      error "Could not list the secrets of $p in the $label"
+      failed=1
+      continue
+    fi
+    [[ -z "$keys" ]] && continue
+    while IFS= read -r k; do
+      secret_delete_with_provider "$provider" "$p" "$k" || true
+    done <<<"$keys"
+    if ! left="$(_ctx_uninstall_keys "$provider" "$p")"; then
+      error "Could not list the secrets of $p in the $label after deleting; cannot verify they are gone"
+      failed=1
+      continue
+    fi
+    n="$(printf '%s\n' "$keys" | grep -c .)"
+    [[ -n "$left" ]] && n=$((n - $(printf '%s\n' "$left" | grep -c .)))
+    [[ $n -gt 0 ]] && success "Deleted $n secret(s) of $p from the $label"
+    if [[ -n "$left" ]]; then
+      error "Could not delete from the $label for $p: $(printf '%s' "$left" | tr '\n' ' ')"
+      failed=1
+    fi
+  done
+  if [[ $failed -ne 0 ]]; then
+    info "Delete them with: ctx secret delete <profile> <KEY> (or in the $label), then run ctx uninstall --purge again."
+    die "Some secrets could not be deleted; nothing else was removed."
+  fi
+
+  _ctx_guard_installed && _ctx_guard_uninstall
+  if rm -f "$bin" 2>/dev/null; then success "Removed $bin"; else error "Could not remove $bin"; failed=1; fi
+  if [[ -n "$core_bin" ]]; then
+    if rm -f "$core_bin" 2>/dev/null; then success "Removed $core_bin"; else error "Could not remove $core_bin"; failed=1; fi
+  fi
+  if rm -rf "$lib" 2>/dev/null; then success "Removed $lib"; else error "Could not remove $lib"; failed=1; fi
+  if [[ -n "$data" ]]; then
+    if rm -rf "$data" 2>/dev/null; then success "Removed $data"; else error "Could not remove $data"; failed=1; fi
   fi
 
   echo ""
-  info "Remove ctx hook blocks from your shell rc if desired (search for 'ctx auto-switch')."
+  info "Remove the ctx blocks from your shell rc if desired (search for '# BEGIN ctx profile autoswitch')."
   echo ""
+  [[ $failed -eq 0 ]] || exit 1
 }
 
 # ─── upgrade ──────────────────────────────────────────────────────────────────
+# Download install.sh from CTX_UPGRADE_REPO (default: main on GitHub) and run it
+# with bash (CTX_UPGRADE_ONLY=1), aimed at the ctx on PATH when its CTX_LIB line
+# is the installer's CTX_LIB="/abs" form. --check compares CTX_VERSION with the
+# remote lib/core.sh. --dry-run prints what would be downloaded and run. The
+# temp file is removed on every path (die, Ctrl+C, installer failure).
 cmd_upgrade() {
   local repo="${CTX_UPGRADE_REPO:-https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main}"
   local url="${repo}/install.sh"
@@ -1103,9 +1362,10 @@ cmd_upgrade() {
   ctx_bin="$(command -v ctx 2>/dev/null || true)"
   [[ -z "$ctx_bin" ]] && die "ctx not found in PATH — install first: curl -fsSL ${url} | bash"
 
+  # Only the line install.sh writes: a source checkout's CTX_LIB="$(cd …" is not a path.
   if [[ -f "$ctx_bin" ]]; then
     lib_line="$(grep -m1 '^CTX_LIB=' "$ctx_bin" 2>/dev/null || true)"
-    if [[ "$lib_line" =~ CTX_LIB=\"([^\"]+)\" ]]; then
+    if [[ "$lib_line" =~ ^CTX_LIB=\"(/[^\"]*)\"$ ]]; then
       install_lib="${BASH_REMATCH[1]}"
       install_bin="$(dirname "$ctx_bin")"
     fi
@@ -1115,7 +1375,8 @@ cmd_upgrade() {
     bold "\n  ctx upgrade --check\n"
     dim "  Installed: ctx version $CTX_VERSION"
     local remote_ver="" rtmp
-    rtmp="$(mktemp)" || die "Could not create temp file"
+    rtmp="$(mktemp "${TMPDIR:-/tmp}/ctx-upgrade.XXXXXX")" || die "Could not create temp file"
+    _ctx_temp_guard "$rtmp"
     if command -v curl &>/dev/null; then
       curl -fsSL "${repo}/lib/core.sh" -o "$rtmp" 2>/dev/null || true
     elif command -v wget &>/dev/null; then
@@ -1124,7 +1385,7 @@ cmd_upgrade() {
     if [[ -s "$rtmp" ]]; then
       remote_ver="$(parse_ctx_version_from_core_sh_file "$rtmp")"
     fi
-    rm -f "$rtmp"
+    _ctx_temp_done
     if [[ -n "$remote_ver" ]]; then
       dim "  Remote main: ctx version $remote_ver"
       if [[ "$CTX_VERSION" == "$remote_ver" ]]; then
@@ -1146,17 +1407,36 @@ cmd_upgrade() {
     || dim "  Target: default install paths (see installer output)"
   echo ""
   info "Updates ctx binary + libraries only — ~/.ctx profiles, secrets, client dirs, and shell hooks are not modified."
+
+  local fetch=""
+  if command -v curl &>/dev/null; then
+    fetch=curl
+  elif command -v wget &>/dev/null; then
+    fetch=wget
+  fi
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    [[ -n "$fetch" ]] || die "Need curl or wget to download install.sh"
+    local env_desc
+    env_desc="CTX_REPO=$(printf '%q' "$repo") CTX_UPGRADE_ONLY=1"
+    [[ -n "${install_bin:-}" ]] && env_desc+=" CTX_INSTALL_BIN=$(printf '%q' "$install_bin")"
+    [[ -n "${install_lib:-}" ]] && env_desc+=" CTX_INSTALL_LIB=$(printf '%q' "$install_lib")"
+    dim "  [dry-run] would download $url with $fetch"
+    dim "  [dry-run] would run it with bash: $env_desc"
+    echo ""
+    return 0
+  fi
+
   ask_yn "Continue?" "y" || die "Aborted."
 
+  [[ -n "$fetch" ]] || die "Need curl or wget to download install.sh"
   local tmp
-  tmp="$(mktemp)" || die "Could not create temp file"
-  if command -v curl &>/dev/null; then
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-upgrade.XXXXXX")" || die "Could not create temp file"
+  _ctx_temp_guard "$tmp" # a die below, Ctrl+C or TERM removes it
+  if [[ "$fetch" == curl ]]; then
     curl -fsSL "$url" -o "$tmp" || die "Download failed: $url"
-  elif command -v wget &>/dev/null; then
-    wget -qO "$tmp" "$url" || die "Download failed: $url"
   else
-    rm -f "$tmp"
-    die "Need curl or wget to download install.sh"
+    wget -qO "$tmp" "$url" || die "Download failed: $url"
   fi
 
   # Normalise line endings — CRLF payloads make bash treat `\r` as part of tokens,
@@ -1165,8 +1445,9 @@ cmd_upgrade() {
     perl -0777 -pi -e 's/\r\n/\n/g; s/\r/\n/g' "$tmp" 2>/dev/null || true
   else
     local tmp2
-    tmp2="$(mktemp)" || die "Could not create temp file"
-    tr -d '\r' < "$tmp" > "$tmp2" && mv "$tmp2" "$tmp"
+    if tmp2="$(mktemp "${TMPDIR:-/tmp}/ctx-upgrade.XXXXXX")"; then
+      { tr -d '\r' <"$tmp" >"$tmp2" && mv -f "$tmp2" "$tmp"; } || rm -f "$tmp2"
+    fi
   fi
 
   export CTX_REPO="$repo"
@@ -1175,7 +1456,7 @@ cmd_upgrade() {
   [[ -n "${install_lib:-}" ]] && export CTX_INSTALL_LIB="$install_lib"
 
   bash "$tmp" || die "Upgrade installer failed"
-  rm -f "$tmp"
+  _ctx_temp_done
 
   unset CTX_UPGRADE_ONLY 2>/dev/null || true
 
@@ -1186,6 +1467,52 @@ cmd_upgrade() {
 }
 
 # ─── undo ─────────────────────────────────────────────────────────────────────
+# Make a fresh backup stamp dir and print it: $CTX_DIR/backups/<stamp>, or
+# <stamp>-2, -3… when that one exists (an undo in the same second as the
+# backup it restores must not write into it).
+_ctx_backup_new_dir() {
+  local base="${CTX_DIR}/backups" stamp d n=1
+  stamp="$(date '+%Y%m%d-%H%M%S')"
+  mkdir -p "$base" 2>/dev/null || return 1
+  d="$base/$stamp"
+  while ! mkdir "$d" 2>/dev/null; do
+    n=$((n + 1))
+    [[ $n -gt 99 ]] && return 1
+    d="$base/$stamp-$n"
+  done
+  printf '%s\n' "$d"
+}
+
+# Back SRC up into backup dir BDIR, like backup_file does into its stamp dir.
+_ctx_backup_into() {
+  local bdir="$1" src="$2"
+  cp -f "$src" "$bdir/$(basename "$src")" 2>/dev/null || return 1
+  echo "$src" >> "$bdir/manifest.txt"
+  log "Backed up $src → $bdir"
+}
+
+# Put SRC's content and mode at DST: written through a symlink, via a temp file
+# in the target's directory renamed over it, so a failure leaves DST as it was.
+_ctx_restore_file() {
+  local src="$1" dst="$2" real mode tmp
+  real="$(_ctx_phys_file "$dst")" || return 1
+  [[ -d "$real" ]] && return 1
+  mode="$(_ctx_file_mode "$src")" || return 1
+  tmp="$(mktemp "$(dirname "$real")/.ctx-undo.XXXXXX" 2>/dev/null)" || return 1
+  if cp "$src" "$tmp" 2>/dev/null && chmod "$mode" "$tmp" 2>/dev/null && mv -f "$tmp" "$real" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# ctx undo: restore the files of the latest backup. The backup keeps one copy
+# per basename, so when two manifest paths share a basename neither is
+# restored ("Ambiguous backup"); a path that is not absolute, has a . or ..
+# component, is not in the backup, or whose directory is gone is skipped too. The files are listed
+# before the prompt; the current versions go to a new backup first (so the
+# undo can be undone); a restored file gets the backup's mode. Exit 1 when any
+# file was skipped or failed.
 cmd_undo() {
   local latest; latest=$(latest_backup)
   [[ -z "$latest" ]] && die "No backups found in ${CTX_DIR}/backups"
@@ -1194,21 +1521,90 @@ cmd_undo() {
   bold "\n  Restoring from backup: $latest\n"
 
   [[ ! -f "$bdir/manifest.txt" ]] && die "Manifest not found at $bdir/manifest.txt"
+  [[ -r "$bdir/manifest.txt" ]] || die "Cannot read $bdir/manifest.txt"
+
+  local origs=() todo=() seen=$'\n' orig other fname same failed=0
+  while IFS= read -r orig || [[ -n "$orig" ]]; do
+    [[ -z "$orig" ]] && continue
+    case "$seen" in *$'\n'"$orig"$'\n'*) continue ;; esac
+    seen="$seen$orig"$'\n'
+    origs+=("$orig")
+  done < "$bdir/manifest.txt"
+
+  for orig in "${origs[@]+"${origs[@]}"}"; do
+    fname="$(basename "$orig")"
+    same=0
+    [[ "$fname" == manifest.txt ]] && same=1
+    for other in "${origs[@]}"; do
+      [[ "$other" != "$orig" && "$(basename "$other")" == "$fname" ]] && same=1
+    done
+    if [[ $same -eq 1 ]]; then
+      warn "Ambiguous backup for $orig: another file in it has the same name; skipped"
+      failed=1
+    elif [[ "$orig" != /* ]]; then
+      warn "Cannot restore $orig: not an absolute path; skipped"
+      failed=1
+    elif _ctx_has_dot_component "$orig"; then
+      warn "Cannot restore $orig: it has a . or .. component; skipped"
+      failed=1
+    elif [[ ! -f "$bdir/$fname" ]]; then
+      warn "Not in backup: $orig"
+      failed=1
+    elif [[ ! -d "$(dirname "$orig")" ]]; then
+      warn "Cannot restore $orig: $(dirname "$orig") no longer exists; skipped"
+      failed=1
+    else
+      dim "  $orig"
+      todo+=("$orig")
+    fi
+  done
+  [[ ${#todo[@]} -eq 0 ]] && die "Nothing to restore from $latest."
+  echo ""
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    for orig in "${todo[@]}"; do
+      [[ -f "$orig" ]] && dim "  [dry-run] would back up the current $orig"
+      dim "  [dry-run] would restore $orig"
+    done
+    echo ""
+    return 0
+  fi
 
   ask_yn "Restore these files?" "y" || die "Aborted."
 
-  while IFS= read -r orig; do
-    [[ -z "$orig" ]] && continue
-    local fname; fname=$(basename "$orig")
-    if [[ -f "$bdir/$fname" ]]; then
-      cp "$bdir/$fname" "$orig" && success "Restored: $orig"
-    else
-      warn "Not in backup: $orig"
+  # The backup dir is made before anything is restored.
+  local nb=""
+  for orig in "${todo[@]}"; do
+    if [[ -f "$orig" ]]; then
+      nb="$(_ctx_backup_new_dir)" || { error "Could not create a backup directory; nothing restored."; exit 1; }
+      break
     fi
-  done < "$bdir/manifest.txt"
+  done
+  for orig in "${todo[@]}"; do
+    if [[ -f "$orig" ]]; then
+      if ! _ctx_backup_into "$nb" "$orig"; then
+        error "Could not back up the current $orig; not restored"
+        failed=1
+        continue
+      fi
+    fi
+    if _ctx_restore_file "$bdir/$(basename "$orig")" "$orig"; then
+      success "Restored: $orig"
+    else
+      error "Could not restore $orig"
+      failed=1
+    fi
+  done
 
-  success "Undo complete."
-  echo ""
+  [[ -n "$nb" ]] && dim "  The replaced versions are in $nb (run ctx undo again to put them back)."
+  if [[ $failed -eq 0 ]]; then
+    success "Undo complete."
+    echo ""
+  else
+    warn "Undo finished, but some files were not restored."
+    echo ""
+    exit 1
+  fi
 }
 
 # ─── doctor ───────────────────────────────────────────────────────────────────
@@ -1372,7 +1768,11 @@ cmd_doctor() {
     [[ -n "${SSH_KEY_PATH:-}" && ! -f "$SSH_KEY_PATH" ]] && {
       warn "Profile '$pname': SSH key missing: $SSH_KEY_PATH"; ok=false
     }
-    $ok && success "Profile '$pname': ok"
+    if $ok; then
+      success "Profile '$pname': ok"
+    else
+      all_ok=false
+    fi
   done
 
   [[ $pc -eq 0 ]] && info "No profiles yet. Run: ctx setup"
@@ -1425,8 +1825,17 @@ cmd_workdir_prompt() {
 }
 
 # ─── init ─────────────────────────────────────────────────────────────────────
+# ctx init: create the ctx dirs, offer to install missing tools (install.sh
+# next to the lib dir, else brew) and the shell hooks. --dry-run asks nothing
+# and only says what it would do.
 cmd_init() {
-  ctx_init_dirs
+  local dry=0
+  [[ "${CTX_DRY_RUN:-0}" == 1 ]] && dry=1
+  if [[ $dry -eq 0 ]]; then
+    ctx_init_dirs
+  elif [[ ! -d "$CTX_PROFILES_DIR" || ! -d "$CTX_DIR/backups" || ! -f "$CTX_CONFIG" ]]; then
+    dim "  [dry-run] would create $CTX_DIR"
+  fi
   ctx_header "Setup check"
 
   echo ""
@@ -1434,21 +1843,31 @@ cmd_init() {
   echo ""
 
   # Check for missing deps and offer to install
-  local missing_tools=()
+  local missing_tools=() t
   has mise || missing_tools+=("mise")
   has gum  || missing_tools+=("gum")
   has gh   || missing_tools+=("gh")
 
   if [[ ${#missing_tools[@]} -gt 0 ]]; then
     warn "Missing tools: ${missing_tools[*]}"
-    if ask_yn "Install missing tools now?" "y"; then
+    if [[ $dry -eq 1 ]] || ask_yn "Install missing tools now?" "y"; then
       local installer
       installer="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/install.sh"
       if [[ -f "$installer" ]]; then
-        bash "$installer"
+        if [[ $dry -eq 1 ]]; then
+          dim "  [dry-run] would run bash $installer"
+        else
+          bash "$installer"
+        fi
       else
         for t in "${missing_tools[@]}"; do
-          has brew && brew install "$t" &>/dev/null && success "$t installed" || warn "$t: install manually"
+          if [[ $dry -eq 1 ]] && has brew; then
+            dim "  [dry-run] would run brew install $t"
+          elif [[ $dry -eq 0 ]] && has brew && brew install "$t" &>/dev/null; then
+            success "$t installed"
+          else
+            warn "$t: install manually"
+          fi
         done
       fi
     fi
@@ -1456,17 +1875,21 @@ cmd_init() {
 
   # Shell hook check
   local shell_rc=""
-  [[ "$SHELL" == *"zsh"*  ]] && shell_rc="$HOME/.zshrc"
-  [[ "$SHELL" == *"bash"* ]] && shell_rc="$HOME/.bashrc"
-  [[ "$SHELL" == *"fish"* ]] && shell_rc="$HOME/.config/fish/config.fish"
+  [[ "${SHELL:-}" == *"zsh"*  ]] && shell_rc="$HOME/.zshrc"
+  [[ "${SHELL:-}" == *"bash"* ]] && shell_rc="$HOME/.bashrc"
+  [[ "${SHELL:-}" == *"fish"* ]] && shell_rc="$HOME/.config/fish/config.fish"
 
   if [[ -n "$shell_rc" ]]; then
     if ! grep -q "mise activate" "$shell_rc" 2>/dev/null || \
        { ! grep -q '_ctx_profile_autoswitch' "$shell_rc" 2>/dev/null \
          && ! grep -q '# BEGIN ctx profile autoswitch' "$shell_rc" 2>/dev/null; }; then
-      ask_yn "Install shell hooks (mise + ctx auto-switch) to $shell_rc?" "y" \
-        && cmd_install_hook "$shell_rc" \
-        || info "Skipped. Run: ctx install-hook"
+      if [[ $dry -eq 1 ]]; then
+        cmd_install_hook "$shell_rc"
+      elif ask_yn "Install shell hooks (mise + ctx auto-switch) to $shell_rc?" "y"; then
+        cmd_install_hook "$shell_rc"
+      else
+        info "Skipped. Run: ctx install-hook"
+      fi
     else
       success "Shell hooks already installed"
     fi
@@ -1484,76 +1907,156 @@ cmd_init() {
 }
 
 # ─── install-hook ─────────────────────────────────────────────────────────────
-# Strip embedded/legacy autoswitch blocks from a shell rc (BEGIN/END or old full paste).
-_ctx_rc_strip_autoswitch() {
-  local rc="$1" t
-  [[ -f "$rc" ]] || return 0
-  t="$(mktemp)" || return 1
-  awk '
-    /^# BEGIN ctx profile autoswitch/ { skip=1; next }
-    /^# END ctx profile autoswitch/ { skip=0; next }
-    skip { next }
-    /^# ctx profile autoswitch/ { skip=1; next }
-    /^# ── ctx auto-switch/ { skip=1; next }
-    skip && /^# ─{25,}$/ { skip=0; next }
-    skip { next }
-    { print }
-  ' "$rc" > "$t" && mv "$t" "$rc"
+# The shell an rc file is for, from its name: fish (config.fish), zsh (a name
+# with "zsh" in it) or bash.
+_ctx_rc_shell() {
+  case "$1" in
+    config.fish|*/config.fish) echo fish ;;
+    *)
+      case "$(basename -- "$1")" in
+        *zsh*) echo zsh ;;
+        *)     echo bash ;;
+      esac
+      ;;
+  esac
 }
 
-cmd_install_hook() {
-  local shell_rc="${1:-}"
+# The headers of the full hook pastes ctx made from 970aa1a to a65d9a9 (the
+# whole ctx_autoswitch.bash or .fish appended to the rc), and of the pastes
+# before them (62d7522 to 970aa1a: install-hook's and install.sh's), exactly
+# as ctx wrote them; git history has no other.
+CTX_PASTE_HEADER_BASH="# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook"
+CTX_PASTE_HEADER_FISH="# ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)"
+CTX_LEGACY_HEADER_HOOK="# ── ctx auto-switch ───────────────────────────────────────────────────────────"
+CTX_LEGACY_HEADER_INSTALLER="# ── ctx auto-switch — added by ctx installer ─────────────────────────────────"
 
-  if [[ -z "$shell_rc" ]]; then
-    case "$SHELL" in
-      */zsh)  shell_rc="$HOME/.zshrc" ;;
-      */bash) shell_rc="$HOME/.bashrc" ;;
-      */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
-      *)      die "Unknown shell. Pass rc file: ctx install-hook ~/.zshrc" ;;
-    esac
+# The line two above a bash paste's final "fi" in every historic version
+# (970aa1a has the second, the others the first).
+# shellcheck disable=SC2016 # literal rc text
+CTX_PASTE_PROMPT_BASH='  PROMPT_COMMAND="_ctx_profile_autoswitch${PROMPT_COMMAND:+;$PROMPT_COMMAND}"'
+# shellcheck disable=SC2016
+CTX_PASTE_PROMPT_BASH_OLD='  PROMPT_COMMAND="${PROMPT_COMMAND//_ctx_auto_switch;/}"'
+
+# Print which full paste (bash or fish) ends at line L, given the two lines
+# before it (P1 right before); print nothing and return 1 when none does.
+# Every historic bash paste ends with one of the PROMPT_COMMAND lines above,
+# "  _ctx_profile_autoswitch", then "fi"; every fish paste ends "end", maybe a
+# blank line, then "_ctx_profile_autoswitch". A user's own `fi` elsewhere is
+# not such an end.
+_ctx_rc_paste_end() {
+  local p2="$1" p1="$2" l="$3"
+  if [[ "$l" == "fi" && "$p1" == "  _ctx_profile_autoswitch" &&
+    ( "$p2" == "$CTX_PASTE_PROMPT_BASH" || "$p2" == "$CTX_PASTE_PROMPT_BASH_OLD" ) ]]; then
+    printf 'bash'
+  elif [[ "$l" == _ctx_profile_autoswitch && ( "$p1" == "end" || ( -z "$p1" && "$p2" == "end" ) ) ]]; then
+    printf 'fish'
+  else
+    return 1
   fi
+}
 
-  # Backup first
-  backup_file "$shell_rc" || warn "Could not back up $shell_rc" >&2
-
-  # 1. mise activate
-  if ! grep -q "mise activate" "$shell_rc" 2>/dev/null && has mise; then
-    local activate_line
-    case "$(basename "$SHELL")" in
-      zsh)  activate_line='eval "$(mise activate zsh)"' ;;
-      bash) activate_line='eval "$(mise activate bash)"' ;;
-      fish) activate_line='mise activate fish | source' ;;
-      *)    activate_line='eval "$(mise activate)"' ;;
+# Print rc file RC without its ctx autoswitch blocks:
+#   - "# BEGIN ctx profile autoswitch" .. "# END ctx profile autoswitch";
+#   - a full hook paste (exact header above) through its end
+#     (_ctx_rc_paste_end), when such an end comes later in the file;
+#   - other legacy pastes (one of the exact headers above), which end at their
+#     closing "# ─────…" line (25 or more ─) or just before the next blank
+#     line (kept), whichever comes first; one with neither runs to the end of
+#     the file.
+# A line ending in CR is matched without it and printed as it was.
+# Returns 3 (output incomplete) when a BEGIN has no END or a BEGIN comes
+# inside an open BEGIN block, and 2 when writing the output failed.
+_ctx_rc_strip_autoswitch() {
+  local line l n=0 state=none last_bash=0 last_fish=0 pend="" p1="" p2="" b1 b2 k
+  # Lookahead: the last line where a full paste of each kind could end.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    l="${line%$'\r'}"
+    case "$l" in
+      fi | _ctx_profile_autoswitch)
+        k="$(_ctx_rc_paste_end "$p2" "$p1" "$l")" || k=""
+        [[ "$k" == bash ]] && last_bash=$n
+        [[ "$k" == fish ]] && last_fish=$n
+        ;;
     esac
-    { echo ""; echo "# mise-en-place — added by ctx"; echo "$activate_line"; } >> "$shell_rc"
-    success "mise activation added to $shell_rc"
-  fi
+    p2="$p1" p1="$l"
+  done <"$1"
+  n=0 p1="" p2=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    l="${line%$'\r'}"
+    b2="$p2" b1="$p1" # the two lines before this one, for a paste end
+    p2="$p1" p1="$l"
+    case "$state" in
+      begin)
+        case "$l" in
+          "# BEGIN ctx profile autoswitch"*) return 3 ;;
+          "# END ctx profile autoswitch"*) state=none ;;
+        esac
+        continue
+        ;;
+      paste)
+        case "$l" in
+          fi | _ctx_profile_autoswitch)
+            [[ "$(_ctx_rc_paste_end "$b2" "$b1" "$l")" == "$pend" ]] && state=none
+            ;;
+        esac
+        continue
+        ;;
+      legacy)
+        case "$l" in
+          "# BEGIN ctx profile autoswitch"*) state=begin ;;
+          "# END ctx profile autoswitch"*) state=none ;;
+          "") state=none; printf '%s\n' "$line" || return 2 ;;
+          *) _ctx_rc_is_rule "$l" && state=none ;;
+        esac
+        continue
+        ;;
+    esac
+    if [[ "$l" == "$CTX_PASTE_HEADER_BASH" && $last_bash -gt $n ]]; then
+      state=paste pend=bash
+      continue
+    fi
+    if [[ "$l" == "$CTX_PASTE_HEADER_FISH" && $last_fish -gt $n ]]; then
+      state=paste pend=fish
+      continue
+    fi
+    case "$l" in
+      "# BEGIN ctx profile autoswitch"*) state=begin ;;
+      "# END ctx profile autoswitch"*) ;;
+      "$CTX_PASTE_HEADER_BASH" | "$CTX_PASTE_HEADER_FISH" | "$CTX_LEGACY_HEADER_HOOK" | "$CTX_LEGACY_HEADER_INSTALLER") state=legacy ;;
+      *) printf '%s\n' "$line" || return 2 ;;
+    esac
+  done <"$1"
+  [[ "$state" != begin ]] || return 3
+}
 
-  # 2. ctx profile autoswitch — source lib (upgrades refresh behavior without re-pasting)
-  local _as_lib
-  _as_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Whether line L is "# " and 25 or more ─ (a legacy block's closing rule).
+_ctx_rc_is_rule() {
+  local r="${1#\# }"
+  [[ "$1" == "# "* && "$r" == "─────────────────────────"* && -z "${r//─/}" ]]
+}
 
-  _ctx_rc_strip_autoswitch "$shell_rc"
-
-  {
-    echo ""
-    echo "# BEGIN ctx profile autoswitch"
-    echo "# Sourced from ctx lib so upgrades (notify mute, etc.) apply without editing this file."
-    if [[ "$shell_rc" == *"/config.fish" ]]; then
-      [[ -f "$_as_lib/ctx_autoswitch.fish" ]] || die "Missing $_as_lib/ctx_autoswitch.fish — reinstall ctx."
-      echo "set -l _ctx_as_lib ''"
-      echo "for _ctx_as_cand in '$_as_lib' \$HOME/.local/lib/ctx /usr/local/lib/ctx /opt/homebrew/lib/ctx"
-      echo "  if test -f \"\$_ctx_as_cand/ctx_autoswitch.fish\""
-      echo "    set _ctx_as_lib \$_ctx_as_cand"
-      echo "    break"
-      echo "  end"
-      echo "end"
-      echo "if test -n \"\$_ctx_as_lib\""
-      echo "  source \"\$_ctx_as_lib/ctx_autoswitch.fish\""
-      echo "end"
-    else
-      [[ -f "$_as_lib/ctx_autoswitch.bash" ]] || die "Missing $_as_lib/ctx_autoswitch.bash — reinstall ctx."
-      cat <<EOF
+# The autoswitch block install-hook appends for SHELL_KIND (fish|bash|zsh),
+# sourcing ctx_autoswitch.* from LIB (or a standard lib dir).
+_ctx_autoswitch_block() {
+  local kind="$1" _as_lib="$2"
+  echo ""
+  echo "# BEGIN ctx profile autoswitch"
+  echo "# Sourced from ctx lib so upgrades (notify mute, etc.) apply without editing this file."
+  if [[ "$kind" == fish ]]; then
+    echo "set -l _ctx_as_lib ''"
+    echo "for _ctx_as_cand in '$_as_lib' \$HOME/.local/lib/ctx /usr/local/lib/ctx /opt/homebrew/lib/ctx"
+    echo "  if test -f \"\$_ctx_as_cand/ctx_autoswitch.fish\""
+    echo "    set _ctx_as_lib \$_ctx_as_cand"
+    echo "    break"
+    echo "  end"
+    echo "end"
+    echo "if test -n \"\$_ctx_as_lib\""
+    echo "  source \"\$_ctx_as_lib/ctx_autoswitch.fish\""
+    echo "end"
+  else
+    cat <<EOF
 _ctx_as_lib=""
 for _ctx_as_cand in "$_as_lib" "\${HOME}/.local/lib/ctx" "/usr/local/lib/ctx" "/opt/homebrew/lib/ctx"; do
   [[ -f "\${_ctx_as_cand}/ctx_autoswitch.bash" ]] && { _ctx_as_lib="\${_ctx_as_cand}"; break; }
@@ -1564,14 +2067,100 @@ if [[ -n "\${_ctx_as_lib}" ]]; then
 fi
 unset _ctx_as_lib _ctx_as_cand 2>/dev/null || true
 EOF
-    fi
-    echo "# END ctx profile autoswitch"
-  } >> "$shell_rc"
+  fi
+  echo "# END ctx profile autoswitch"
+}
+
+# ctx install-hook [RC]: add the mise activation (when mise is installed and
+# RC has none) and the ctx autoswitch block to RC (default: by $SHELL), and the
+# SSH Include. Every check comes before any change: the autoswitch lib must
+# exist, RC must be a readable, writable file (or not exist yet, in an existing
+# dir) whose BEGIN lines all have an END. RC is rewritten in one atomic
+# write-through (symlinks and mode kept); lines it keeps keep their line
+# endings (CRLF too), the appended lines end in LF. --dry-run says what it
+# would do and changes nothing.
+cmd_install_hook() {
+  local shell_rc="${1:-}"
+
+  if [[ -z "$shell_rc" ]]; then
+    case "${SHELL:-}" in
+      */zsh)  shell_rc="$HOME/.zshrc" ;;
+      */bash) shell_rc="$HOME/.bashrc" ;;
+      */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
+      *)      die "Unknown shell. Pass rc file: ctx install-hook ~/.zshrc" ;;
+    esac
+  fi
+
+  local kind _as_lib libfile target tmp mise_add=0 activate_line
+  kind="$(_ctx_rc_shell "$shell_rc")"
+  # ctx's lib dir: the block sources ctx_autoswitch.* from it.
+  _as_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  libfile="ctx_autoswitch.bash"
+  [[ "$kind" == fish ]] && libfile="ctx_autoswitch.fish"
+  [[ -f "$_as_lib/$libfile" ]] || die "Missing $_as_lib/$libfile — reinstall ctx."
+
+  [[ -d "$shell_rc" ]] && die "$shell_rc is a directory"
+  if [[ -e "$shell_rc" ]]; then
+    [[ -f "$shell_rc" && -r "$shell_rc" ]] || die "Cannot read $shell_rc"
+  fi
+  target="$(_ctx_link_target "$shell_rc")"
+  [[ -L "$target" ]] && die "Cannot write $shell_rc" # a link loop
+  if [[ -e "$target" ]]; then
+    [[ -w "$target" ]] || die "Cannot write $shell_rc"
+  else
+    [[ -d "$(dirname -- "$target")" ]] || die "Cannot write $shell_rc"
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-rc.XXXXXX")" || die "Cannot create a temporary file"
+  _ctx_temp_guard "$tmp" # a die below or Ctrl+C removes it
+  if [[ -f "$shell_rc" ]]; then
+    local st=0
+    _ctx_rc_strip_autoswitch "$shell_rc" >"$tmp" || st=$?
+    case $st in
+      0) ;;
+      3) die "Unterminated ctx block in $shell_rc; add the line '# END ctx profile autoswitch' or remove the '# BEGIN ctx profile autoswitch' line" ;;
+      *) die "Cannot write $shell_rc" ;;
+    esac
+  fi
+
+  if ! grep -q "mise activate" "$shell_rc" 2>/dev/null && has mise; then
+    mise_add=1
+    case "$kind" in
+      zsh)  activate_line='eval "$(mise activate zsh)"' ;;
+      fish) activate_line='mise activate fish | source' ;;
+      *)    activate_line='eval "$(mise activate bash)"' ;;
+    esac
+  fi
+
+  if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+    _ctx_temp_done
+    [[ -f "$shell_rc" ]] && dim "  [dry-run] would back up $shell_rc"
+    [[ $mise_add -eq 1 ]] && dim "  [dry-run] would add mise activation to $shell_rc"
+    dim "  [dry-run] would refresh the ctx profile autoswitch hook in $shell_rc"
+    grep -qF "Include $CTX_SSH_CONFIG" "$HOME/.ssh/config" 2>/dev/null \
+      || dim "  [dry-run] would add Include $CTX_SSH_CONFIG to $HOME/.ssh/config"
+    return 0
+  fi
+
+  # Backup first
+  backup_file "$shell_rc" || warn "Could not back up $shell_rc" >&2
+
+  # 1. mise activate; 2. ctx profile autoswitch — sources the lib, so upgrades
+  # refresh behavior without re-pasting. One write: all or nothing.
+  # Every write to the temp file is checked: a short one must not replace the rc.
+  if [[ $mise_add -eq 1 ]]; then
+    printf '\n# mise-en-place — added by ctx\n%s\n' "$activate_line" >>"$tmp" || die "Cannot write $shell_rc"
+  fi
+  local block
+  block="$(_ctx_autoswitch_block "$kind" "$_as_lib")" || die "Cannot write $shell_rc"
+  printf '%s\n' "$block" >>"$tmp" || die "Cannot write $shell_rc"
+  _ctx_write_through "$tmp" "$shell_rc" || die "Cannot write $shell_rc"
+  _ctx_temp_done
+  [[ $mise_add -eq 1 ]] && success "mise activation added to $shell_rc"
   success "ctx profile autoswitch hook refreshed in $shell_rc (sources lib)"
 
   # 3. Ensure SSH Include is wired up
-  ensure_ssh_include
-  success "SSH config isolated to $CTX_SSH_CONFIG"
+  ensure_ssh_include && success "SSH config isolated to $CTX_SSH_CONFIG"
 
   info "Reload your shell: source $shell_rc"
 }
@@ -1715,17 +2304,30 @@ cmd_agent_rules() {
     info "[dry-run] Would write ctx agent rules to $file"
     return 0
   fi
-  tmp="$(mktemp "${file}.XXXXXX")" || die "Cannot write next to $file"
-  if [[ -f "$file" ]]; then
+  # A name starting with "-" must not be read as an option by the tools below.
+  [[ "$file" == -* ]] && file="./$file"
+  [[ -d "$file" ]] && die "$file is a directory"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-agent-rules.XXXXXX")" || die "Cannot create a temporary file"
+  _ctx_temp_guard "$tmp" # a die below or Ctrl+C removes it
+  # Every write to the temp file is checked: a short one must not replace FILE.
+  local wfail=0
+  if [[ -e "$file" ]]; then
+    [[ -f "$file" && -r "$file" ]] || die "Cannot read $file"
     while IFS= read -r line || [[ -n "$line" ]]; do
       [[ "$line" == "$CTX_AGENT_RULES_BEGIN" ]] && { skip=1; continue; }
-      [[ "$line" == "$CTX_AGENT_RULES_END" ]] && { skip=0; continue; }
-      [[ $skip -eq 1 ]] || printf '%s\n' "$line"
-    done <"$file" >"$tmp"
-    if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp"; fi
+      if [[ $skip -eq 1 ]]; then
+        [[ "$line" == "$CTX_AGENT_RULES_END" ]] && skip=0
+        continue
+      fi
+      printf '%s\n' "$line" || { wfail=1; break; }
+    done <"$file" >"$tmp" || wfail=1
+    [[ $wfail -eq 0 ]] || die "Cannot write $file"
+    [[ $skip -eq 1 ]] && die "Unterminated ctx block in $file; add the END marker or remove the BEGIN line"
+    if [[ -s "$tmp" && -n "$(tail -n1 "$tmp")" ]]; then echo >>"$tmp" || die "Cannot write $file"; fi
   fi
-  _ctx_agent_rules_text >>"$tmp"
-  mv "$tmp" "$file"
+  _ctx_agent_rules_text >>"$tmp" || die "Cannot write $file"
+  _ctx_write_through "$tmp" "$file" || die "Cannot write $file"
+  _ctx_temp_done
   success "ctx agent rules written to $file"
 }
 

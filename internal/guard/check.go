@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/gitssh"
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
 	"github.com/Hei-Tech-Inc/ctx/internal/resolve"
 )
@@ -154,23 +155,6 @@ func urlHost(u string) string {
 	return ""
 }
 
-// cloneURLForProfile mirrors github_clone_url_for_profile with https_as_ssh=y.
-func cloneURLForProfile(prof, url string) string {
-	host := "github-" + prof
-	dotGit := func(p string) string { return strings.TrimSuffix(p, ".git") + ".git" }
-	switch {
-	case strings.HasPrefix(url, "git@github.com:"):
-		return "git@" + host + ":" + strings.TrimPrefix(url, "git@github.com:")
-	case strings.HasPrefix(url, "ssh://git@github.com/"):
-		p := strings.TrimPrefix(strings.TrimPrefix(url, "ssh://git@github.com/"), "/")
-		return "git@" + host + ":" + dotGit(p)
-	case strings.HasPrefix(url, "https://github.com/"):
-		p := strings.TrimPrefix(strings.TrimPrefix(url, "https://github.com/"), "/")
-		return "git@" + host + ":" + dotGit(p)
-	}
-	return url
-}
-
 func checkPush(prof, remote, url, dir string, c colors, stderr io.Writer) int {
 	host := urlHost(url)
 	switch {
@@ -203,7 +187,7 @@ func checkPush(prof, remote, url, dir string, c colors, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s!%s ctx guard: '%s' pushes via github.com, not github-%s, so profile '%s's SSH key may not be used.\n",
 			c.yellow, c.reset, remote, prof, prof)
 		fmt.Fprintf(stderr, "  Fix: ctx use %s   (routes github.com through github-%s for repos in its WORK_DIR)\n", prof, prof)
-		fmt.Fprintf(stderr, "   or: git remote set-url %s %s\n", remote, cloneURLForProfile(prof, url))
+		fmt.Fprintf(stderr, "   or: git remote set-url %s %s\n", remote, gitssh.CloneURLForProfile(prof, url))
 	}
 	return 0
 }

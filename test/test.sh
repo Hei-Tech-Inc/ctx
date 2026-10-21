@@ -864,6 +864,23 @@ test_install_builds_ctx_core() {
   pass "install.sh builds ctx-core next to the libs with the ctx version"
 }
 
+# Fake tools for a doctor run in DIR: every tool doctor probes (so it never reaches a real
+# az or gcloud on the machine, which can go to the network) and a bash that drops the -l of
+# doctor's `bash -lc` (a login shell's path_helper would put the machine's tool dirs first).
+# Use with PATH="DIR:/usr/bin:/bin".
+_t_doctor_tools() {
+  local d="$1" t real
+  real="$(command -v bash)"
+  mkdir -p "$d"
+  for t in git mise gum gh aws az gcloud kubectl; do
+    printf '#!/bin/sh\necho "%s 1.0"\n' "$t" >"$d/$t"
+    chmod +x "$d/$t"
+  done
+  printf '#!/bin/sh\nif [ "$1" = -lc ]; then exec "%s" -c "$2"; fi\nexec "%s" "$@"\n' "$real" "$real" >"$d/bash"
+  chmod +x "$d/bash"
+}
+
+# The Bash doctor (CTX_CORE=off); the Go one is covered by internal/cli/doctor_test.go.
 test_doctor_reports_ctx_core() {
   (
     set -euo pipefail
@@ -873,13 +890,53 @@ test_doctor_reports_ctx_core() {
     mkdir -p "$td/home" "$td/ctx"
     printf '#!/usr/bin/env bash\necho "ctx-core 9.9.9"\n' >"$td/ctx-core"
     chmod +x "$td/ctx-core"
-    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    _t_doctor_tools "$td/tools"
+    out="$(PATH="$td/tools:/usr/bin:/bin" HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
     [[ "$out" == *"ctx-core: 9.9.9 ($td/ctx-core)"* ]] || { echo "present: $out"; exit 1; }
-    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    [[ "$out" == *"Azure CLI: az 1.0"* && "$out" == *"gcloud: gcloud 1.0"* ]] || { echo "doctor did not use the fake cloud CLIs: $out"; exit 1; }
+    out="$(PATH="$td/tools:/usr/bin:/bin" HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
     [[ "$out" == *"ctx-core missing"*"ctx mcp unavailable"* ]] || { echo "missing: $out"; exit 1; }
   ) || fail "doctor reports ctx-core"
   pass "ctx doctor reports ctx-core version/path or a warning"
 }
+
+# R4: a profile warning must not be followed by "Everything looks good.". Everything else
+# is made healthy (fake tools, hooks, SSH, secret provider) so only the profile can warn.
+test_doctor_profile_warning_is_not_all_good() {
+  (
+    set -euo pipefail
+    local td out t
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    mkdir -p "$td/home/.ctx/profiles" "$td/home/.ssh" "$td/bin" "$td/work"
+    chmod 700 "$td/home/.ssh"
+    for t in git mise gum gh aws az gcloud kubectl; do
+      printf '#!/bin/sh\necho "%s 1.0"\n' "$t" >"$td/bin/$t"
+      chmod +x "$td/bin/$t"
+    done
+    # doctor probes versions with `bash -lc`; a login shell puts the machine's own tool dirs
+    # (path_helper) before the fakes, so this bash drops the -l.
+    printf '#!/bin/sh\nif [ "$1" = -lc ]; then exec /bin/bash -c "$2"; fi\nexec /bin/bash "$@"\n' >"$td/bin/bash"
+    chmod +x "$td/bin/bash"
+    printf '#!/bin/sh\necho "ctx-core 9.9.9"\n' >"$td/ctx-core"
+    chmod +x "$td/ctx-core"
+    printf 'eval "$(mise activate bash)"\n# BEGIN ctx profile autoswitch\n' >"$td/home/.bashrc"
+    printf 'Include %s\n' "$td/home/.ssh/ctx_config" >"$td/home/.ssh/config"
+    printf 'WORK_DIR=%s\n' "$td/work" >"$td/work.conf"
+    touch "$td/work/mise.toml"
+    local run='env HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/bash PATH="$td/bin:/usr/bin:/bin" CTX_CORE=off CTX_CORE_BIN="$td/ctx-core" CTX_SECRET_PROVIDER=file "$ROOT_DIR/bin/ctx" --no-gum doctor'
+    cp "$td/work.conf" "$td/home/.ctx/profiles/good.conf"
+    out="$(eval "$run" 2>&1 || true)"
+    [[ "$out" == *"Everything looks good."* ]] || { echo "healthy fixture is not all good: $out"; exit 1; }
+    printf 'WORK_DIR=%s\nSSH_KEY_PATH=%s\n' "$td/work" "$td/nokey" >"$td/home/.ctx/profiles/acme.conf"
+    out="$(eval "$run" 2>&1 || true)"
+    [[ "$out" == *"Profile 'acme': SSH key missing: $td/nokey"* ]] || { echo "no profile warning: $out"; exit 1; }
+    [[ "$out" != *"Everything looks good."* ]] || { echo "all good after a warning: $out"; exit 1; }
+    [[ "$out" == *"Fix the issues above."* ]] || { echo "no closing warning: $out"; exit 1; }
+  ) || fail "doctor profile warning is not all good"
+  pass "ctx doctor never says all good after a profile warning"
+}
+test_doctor_profile_warning_is_not_all_good
 
 # Coverage guard: with CTX_CORE enabled, make sure the suite really exercises the Go
 # path. Without it a missing or unfound bin/ctx-core silently turns the default-mode
@@ -902,11 +959,42 @@ test_ctx_core_is_exercised() {
     td="$(cd "$(mktemp -d)" && pwd -P)"
     trap 'rm -rf "$td"' EXIT
     mkdir -p "$td/home" "$td/ctx"
-    out="$(env -u CTX_CORE_BIN HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
-    [[ "$out" == *"($ROOT_DIR/bin/ctx-core)"* ]] || { echo "bin/ctx does not find the repo's bin/ctx-core: $out"; exit 1; }
+    # bin/ctx must find the repo's bin/ctx-core before any ctx-core on PATH and hand over to it:
+    # a ctx-core on PATH that records being asked would otherwise be consulted ("implements").
+    mkdir -p "$td/path"
+    printf '#!/bin/sh\necho asked >"%s/asked"\nexit 1\n' "$td" >"$td/path/ctx-core"
+    chmod +x "$td/path/ctx-core"
+    out="$(env -u CTX_CORE_BIN PATH="$td/path:$PATH" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" list --json 2>&1)" \
+      || { echo "ctx list --json failed: $out"; exit 1; }
+    [[ ! -e "$td/asked" ]] || { echo "bin/ctx consulted the ctx-core on PATH instead of $ROOT_DIR/bin/ctx-core"; exit 1; }
+    [[ "$("$ROOT_DIR/bin/ctx-core" version)" == "ctx-core "* ]] || { echo "bin/ctx-core version"; exit 1; }
     "$ROOT_DIR/bin/ctx-core" implements list --json >/dev/null || { echo "ctx-core implements list --json failed"; exit 1; }
+    "$ROOT_DIR/bin/ctx-core" implements doctor >/dev/null || { echo "ctx-core implements doctor failed"; exit 1; }
+    # bin/ctx must hand over to ctx-core: a wrapper around the real binary logs every call,
+    # and the forwarded commands must show up as "implements <cmd>" followed by "<cmd>".
+    printf '#!/bin/sh\necho "$*" >>"%s/core-calls"\nexec "%s" "$@"\n' "$td" "$ROOT_DIR/bin/ctx-core" >"$td/core"
+    chmod +x "$td/core"
+    : >"$td/core-calls"
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" list --json >/dev/null 2>&1 || { echo "list --json failed"; exit 1; }
+    _t_doctor_tools "$td/tools"
+    out="$(env PATH="$td/tools:/usr/bin:/bin" CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" --no-gum doctor 2>&1 || true)"
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" version >/dev/null 2>&1 || { echo "version failed"; exit 1; }
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" SHELL=/bin/zsh "$ROOT_DIR/bin/ctx" --no-gum --dry-run install-hook "$td/home/rc" </dev/null >/dev/null 2>&1 \
+      || { echo "install-hook --dry-run failed"; exit 1; }
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" SHELL=/bin/zsh "$ROOT_DIR/bin/ctx" --no-gum --dry-run init </dev/null >/dev/null 2>&1 \
+      || { echo "init --dry-run failed"; exit 1; }
+    # dry-run never downloads; the repo is a local path all the same
+    env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" CTX_UPGRADE_REPO="file://$td/none" "$ROOT_DIR/bin/ctx" --no-gum --dry-run upgrade </dev/null >/dev/null 2>&1 || true
+    local want
+    for want in 'implements list --json' 'list --json' 'implements doctor' 'doctor' 'implements ctx-version' 'ctx-version' \
+      "implements install-hook $td/home/rc" "install-hook $td/home/rc" 'implements init' 'init' 'implements upgrade' 'upgrade'; do
+      grep -qx -- "$want" "$td/core-calls" || { echo "ctx-core was not asked '$want'; calls: $(cat "$td/core-calls")"; exit 1; }
+    done
+    [[ "$out" == *"ctx-core: "*"($td/core)"* || "$out" == *"ctx-core: "*"/ctx-core)"* ]] || { echo "doctor does not report ctx-core: $out"; exit 1; }
+    [[ "$out" != *"ctx-core missing"* ]] || { echo "doctor says ctx-core is missing: $out"; exit 1; }
+    [[ "$out" == *"Azure CLI: az 1.0"* && "$out" == *"gcloud: gcloud 1.0"* ]] || { echo "doctor did not use the fake cloud CLIs: $out"; exit 1; }
   ) || fail "ctx-core coverage guard"
-  pass "bin/ctx finds the repo's bin/ctx-core and it implements the forwarded commands"
+  pass "bin/ctx finds the repo's bin/ctx-core before PATH and forwards list, doctor, version, install-hook, init and upgrade to it"
 }
 
 test_ctx_core_is_exercised
@@ -1512,6 +1600,148 @@ test_setup_no_secrets_bash32() {
   pass "setup with no secrets works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
 }
 
+test_edit_editor_with_args() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset EDITOR VISUAL CTX_NO_GUM
+    mkdir -p "$CTX_DIR/profiles" "$td/fake"
+    echo 'GIT_EMAIL=a@b.co' >"$CTX_DIR/profiles/acme.conf"
+    cat >"$td/fake/ed1" <<EOS
+#!/bin/sh
+{ printf 'ed'; printf ' [%s]' "\$@"; echo; } >>"$td/argv.log"
+EOS
+    cat >"$td/fake/ed2" <<EOS
+#!/bin/sh
+{ printf 'ed2'; printf ' [%s]' "\$@"; echo; } >>"$td/argv.log"
+EOS
+    mkdir "$td/sp ace"
+    cp "$td/fake/ed1" "$td/sp ace/ed"
+    chmod +x "$td/fake/ed1" "$td/fake/ed2" "$td/sp ace/ed"
+    : >"$td/argv.log"
+    EDITOR="$td/fake/ed1 -w" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme \
+      || { echo "edit failed"; exit 1; }
+    grep -qx "ed \[-w\] \[$CTX_DIR/profiles/acme.conf\]" "$td/argv.log" \
+      || { echo "EDITOR with args: $(cat "$td/argv.log")"; exit 1; }
+    : >"$td/argv.log"
+    VISUAL="$td/fake/ed2" EDITOR="$td/fake/ed1" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme \
+      || { echo "edit failed"; exit 1; }
+    out="$(cat "$td/argv.log")"
+    [[ "$out" == "ed2 [$CTX_DIR/profiles/acme.conf]" ]] || { echo "VISUAL should win: $out"; exit 1; }
+    : >"$td/argv.log"
+    EDITOR="\"$td/sp ace/ed\" -w" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme \
+      || { echo "edit failed"; exit 1; }
+    grep -qx "ed \[-w\] \[$CTX_DIR/profiles/acme.conf\]" "$td/argv.log" \
+      || { echo "quoted path with a space: $(cat "$td/argv.log")"; exit 1; }
+    # a failing editor: the exit status is the editor's
+    printf '#!/bin/sh\nexit 7\n' >"$td/fake/bad"; chmod +x "$td/fake/bad"
+    rc=0; EDITOR="$td/fake/bad" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum edit acme || rc=$?
+    [[ $rc -eq 7 ]] || { echo "exit status $rc, want 7"; exit 1; }
+    rm -rf "$td"
+  ) || fail "edit runs EDITOR/VISUAL like git"
+  pass "edit honors VISUAL, EDITOR with arguments"
+}
+
+test_clone_no_extra_args_bash32() {
+  (
+    set -euo pipefail
+    local td
+    [[ -x /bin/bash ]] || { pass "clone under /bin/bash (skipped: no /bin/bash)"; exit 0; }
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$CTX_DIR/profiles" "$td/fake"
+    echo 'GIT_EMAIL=a@b.co' >"$CTX_DIR/profiles/acme.conf"
+    printf '#!/bin/sh\n{ printf "git"; printf " [%%s]" "$@"; echo; } >>"%s/argv.log"\n' "$td" >"$td/fake/git"
+    chmod +x "$td/fake/git"
+    : >"$td/argv.log"
+    out="$(PATH="$td/fake:$PATH" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum clone -p acme git@gitlab.com:o/r.git 2>&1)" \
+      || { echo "clone failed: $out"; exit 1; }
+    ! grep -q 'unbound variable' <<<"$out" || { echo "unbound: $out"; exit 1; }
+    grep -qx 'git \[clone\] \[git@gitlab.com:o/r.git\]' "$td/argv.log" || { echo "argv: $(cat "$td/argv.log")"; exit 1; }
+    : >"$td/argv.log"
+    out="$(PATH="$td/fake:$PATH" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum clone -p acme -- git@gitlab.com:o/r.git 2>&1)" \
+      || { echo "clone -- failed: $out"; exit 1; }
+    grep -qx 'git \[clone\] \[git@gitlab.com:o/r.git\]' "$td/argv.log" || { echo "argv --: $(cat "$td/argv.log")"; exit 1; }
+    out="$(PATH="$td/fake:$PATH" CTX_CORE=off /bin/bash "$ROOT_DIR/bin/ctx" --no-gum clone -p acme -- 2>&1)" && { echo "clone -- without url succeeded: $out"; exit 1; }
+    [[ "$out" == *"Could not find a repo URL in: ctx clone ... -- "* && "$out" != *unbound* ]] || { echo "clone --: $out"; exit 1; }
+    rm -rf "$td"
+  ) || fail "clone with no extra git args under /bin/bash"
+  pass "clone with no extra args works on /bin/bash ($(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null))"
+}
+
+test_verify_gh_account_and_exit_code() {
+  (
+    set -euo pipefail
+    local td out rc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$HOME/.ssh" "$HOME/work" "$CTX_DIR/profiles" "$td/fake"
+    : >"$HOME/.ssh/id_acme"
+    printf 'Host github-acme\n  HostName github.com\n' >"$HOME/.ssh/ctx_config"
+    printf 'GIT_EMAIL=a@b.co\nGITHUB_USER=alice\nWORK_DIR=%s\nSSH_KEY_PATH=%s\n' "$HOME/work" "$HOME/.ssh/id_acme" >"$CTX_DIR/profiles/acme.conf"
+    # ssh hangs (sleeps) unless it is told never to prompt
+    cat >"$td/fake/ssh" <<'EOS'
+#!/bin/sh
+printf '%s\n' "$*" >>"$FAKE_LOG/ssh.log"
+case " $* " in *" BatchMode=yes "*) ;; *) sleep 30 ;; esac
+echo "Hi acme! You've successfully authenticated, but GitHub does not provide shell access."
+exit 1
+EOS
+    cat >"$td/fake/gh" <<'EOS'
+#!/bin/sh
+cat <<EOT
+github.com
+  X Failed to log in to github.com account carol (keyring)
+  - Active account: false
+  ✓ Logged in to github.com account ${GH_FIRST:-bob} (keyring)
+  - Active account: ${GH_FIRST_ACTIVE:-false}
+  ✓ Logged in to github.com account ${GH_SECOND:-alice} (keyring)
+  - Active account: ${GH_SECOND_ACTIVE:-true}
+EOT
+EOS
+    chmod +x "$td/fake/ssh" "$td/fake/gh"
+    export FAKE_LOG="$td" PATH="$td/fake:$PATH"
+
+    rc=0; out="$("$ROOT_DIR/bin/ctx" --no-gum verify acme </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 0 ]] || { echo "all ok: exit $rc: $out"; exit 1; }
+    [[ "$out" == *"gh active user matches: alice"* && "$out" == *"verification passed"* ]] || { echo "all ok: $out"; exit 1; }
+    grep -qx -- '-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -T git@github-acme' "$td/ssh.log" \
+      || { echo "ssh argv: $(cat "$td/ssh.log")"; exit 1; }
+
+    rc=0; out="$(GH_SECOND_ACTIVE=false GH_FIRST_ACTIVE=true "$ROOT_DIR/bin/ctx" --no-gum verify acme </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 1 ]] || { echo "gh mismatch: exit $rc, want 1: $out"; exit 1; }
+    [[ "$out" == *"gh active: 'bob', profile expects: 'alice'"* && "$out" == *"found issues"* ]] || { echo "gh mismatch: $out"; exit 1; }
+  ) || fail "verify reads the active gh account and exits 1 on failure"
+  pass "verify reads the active gh account and exits 1 on failure"
+}
+
+test_clone_dry_run() {
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$CTX_DIR/profiles" "$td/fake"
+    echo 'GIT_EMAIL=a@b.co' >"$CTX_DIR/profiles/acme.conf"
+    printf '#!/bin/sh\necho ran >>"%s/git.ran"\n' "$td" >"$td/fake/git"
+    chmod +x "$td/fake/git"
+    out="$(PATH="$td/fake:$PATH" "$ROOT_DIR/bin/ctx" --no-gum --dry-run clone -p acme git@github.com:o/r.git 'my dir' 2>&1)" \
+      || { echo "dry-run failed: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would run: git clone git@github-acme:o/r.git my\\ dir"* ]] || { echo "dry-run: $out"; exit 1; }
+    [[ ! -e "$td/git.ran" ]] || { echo "git ran"; exit 1; }
+    out="$(PATH="$td/fake:$PATH" "$ROOT_DIR/bin/ctx" --no-gum --dry-run clone -p ghost git@github.com:o/r.git 2>&1)" && { echo "ghost: $out"; exit 1; }
+    [[ ! -e "$td/git.ran" ]] || { echo "git ran"; exit 1; }
+  ) || fail "clone --dry-run prints the git command and changes nothing"
+  pass "clone --dry-run prints the git command and changes nothing"
+}
+
 test_setup_cancel_exits_130() {
   (
     set -euo pipefail
@@ -1637,6 +1867,512 @@ test_mise_hook_comment_no_injection() {
   pass "mise.toml hook comments flatten control characters"
 }
 
+
+# Octal mode of a file (GNU stat, else BSD stat).
+_t_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+
+test_undo_lists_backs_up_and_keeps_mode() {
+  (
+    set -euo pipefail
+    local td out rc b1 nb
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    unset CTX_NO_GUM
+    mkdir -p "$HOME/.ssh" "$CTX_DIR/backups"
+    b1="$CTX_DIR/backups/20200101-000000"
+    mkdir -p "$b1"
+    printf 'new git\n' >"$HOME/.gitconfig"
+    printf 'new secret\n' >"$HOME/.secret"; chmod 644 "$HOME/.secret"
+    printf 'old git\n' >"$b1/.gitconfig"
+    printf 'old secret\n' >"$b1/.secret"; chmod 600 "$b1/.secret"
+    printf 'gone\n' >"$b1/file.txt"
+    printf '%s\n' "$HOME/.gitconfig" "$HOME/.secret" "$HOME/gone/file.txt" "$HOME/.missing" >"$b1/manifest.txt"
+
+    # dry-run: lists, changes nothing, exits 0
+    out="$("$ROOT_DIR/bin/ctx" --no-gum --dry-run undo </dev/null 2>&1)" || { echo "dry-run exit: $out"; exit 1; }
+    [[ "$out" == *"  $HOME/.gitconfig"* && "$out" == *"[dry-run] would restore $HOME/.secret"* ]] || { echo "dry-run: $out"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "new git" && "$(ls "$CTX_DIR/backups")" == 20200101-000000 ]] || { echo "dry-run changed files"; exit 1; }
+
+    rc=0; out="$(printf 'y\n' | "$ROOT_DIR/bin/ctx" --no-gum undo 2>&1)" || rc=$?
+    [[ $rc -eq 1 ]] || { echo "exit $rc, want 1 (skipped files): $out"; exit 1; }
+    [[ "$out" == *"Cannot restore $HOME/gone/file.txt: $HOME/gone no longer exists; skipped"* ]] || { echo "gone dir: $out"; exit 1; }
+    [[ "$out" == *"Not in backup: $HOME/.missing"* ]] || { echo "missing: $out"; exit 1; }
+    # the list comes before the prompt
+    [[ "$out" == *"  $HOME/.secret"*"Restore these files?"* ]] || { echo "list before prompt: $out"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "old git" && "$(cat "$HOME/.secret")" == "old secret" ]] || { echo "not restored"; exit 1; }
+    [[ "$(_t_mode "$HOME/.secret")" == 600 ]] || { echo "mode $(_t_mode "$HOME/.secret"), want 600"; exit 1; }
+    [[ ! -e "$HOME/gone" ]] || { echo "created gone/"; exit 1; }
+    nb="$(ls -1t "$CTX_DIR/backups" | head -1)"
+    [[ "$nb" != 20200101-000000 && "$(cat "$CTX_DIR/backups/$nb/.gitconfig")" == "new git" ]] || { echo "no pre-restore backup: $nb"; exit 1; }
+    [[ "$out" == *"The replaced versions are in $CTX_DIR/backups/$nb"* ]] || { echo "backup hint: $out"; exit 1; }
+
+    # the undo can be undone
+    printf 'y\n' | "$ROOT_DIR/bin/ctx" --no-gum undo >/dev/null 2>&1 || { echo "second undo failed"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "new git" && "$(_t_mode "$HOME/.secret")" == 644 ]] || { echo "undo of undo"; exit 1; }
+  ) || fail "undo lists files, backs up the current versions and keeps the backup's mode"
+  pass "undo lists files, backs up the current versions and keeps the backup's mode"
+}
+
+test_undo_ambiguous_and_same_second() {
+  (
+    set -euo pipefail
+    local td out rc b1 fake
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx"
+    unset CTX_NO_GUM
+    mkdir -p "$HOME/.ssh" "$CTX_DIR" "$td/fake"
+    b1="$CTX_DIR/backups/20261020-101010"
+    mkdir -p "$b1"
+    printf 'ssh now\n' >"$HOME/.ssh/config"
+    printf 'ctx now\n' >"$CTX_DIR/config"
+    printf 'git now\n' >"$HOME/.gitconfig"
+    printf 'one of them\n' >"$b1/config"
+    printf 'git old\n' >"$b1/.gitconfig"
+    printf '%s\n' "$HOME/.ssh/config" "$CTX_DIR/config" "$HOME/.gitconfig" "$HOME/.gitconfig" >"$b1/manifest.txt"
+    # a date frozen at the backup's own stamp: the new backup must not land in it
+    printf '#!/bin/sh\nif [ "$1" = "+%%Y%%m%%d-%%H%%M%%S" ]; then echo 20261020-101010; exit 0; fi\nexec /bin/date "$@"\n' >"$td/fake/date"
+    chmod +x "$td/fake/date"
+    rc=0; out="$(printf 'y\n' | PATH="$td/fake:$PATH" "$ROOT_DIR/bin/ctx" --no-gum undo 2>&1)" || rc=$?
+    [[ $rc -eq 1 ]] || { echo "exit $rc: $out"; exit 1; }
+    [[ "$out" == *"Ambiguous backup for $HOME/.ssh/config"* && "$out" == *"Ambiguous backup for $CTX_DIR/config"* ]] || { echo "ambiguous: $out"; exit 1; }
+    [[ "$(cat "$HOME/.ssh/config")" == "ssh now" && "$(cat "$CTX_DIR/config")" == "ctx now" ]] || { echo "ambiguous file overwritten"; exit 1; }
+    [[ "$(cat "$HOME/.gitconfig")" == "git old" ]] || { echo "gitconfig not restored"; exit 1; }
+    [[ "$(grep -c . "$b1/manifest.txt")" -eq 4 ]] || { echo "restored backup was written into"; exit 1; }
+    # Bash's date is frozen (-2 suffix); Go's clock is not, so accept any new dir.
+    fake="$(ls -1t "$CTX_DIR/backups" | head -1)"
+    [[ "$fake" != 20261020-101010 ]] || { echo "pre-restore backup went into the restored dir"; exit 1; }
+    [[ "${CTX_CORE:-}" != off ]] || [[ "$fake" == 20261020-101010-2 ]] || { echo "same-second dir: $fake"; exit 1; }
+    fake="$CTX_DIR/backups/$fake"
+    [[ "$(cat "$fake/.gitconfig")" == "git now" && "$(cat "$fake/manifest.txt")" == "$HOME/.gitconfig" ]] || { echo "same-second backup dir: $(ls "$CTX_DIR/backups")"; exit 1; }
+    [[ "$(echo "$out" | grep -c "Restored: $HOME/.gitconfig")" -eq 1 ]] || { echo "duplicate manifest line restored twice: $out"; exit 1; }
+  ) || fail "undo skips same-name files and never writes into the backup it restores"
+  pass "undo skips same-name files and never writes into the backup it restores"
+}
+
+# _t_fake_install DIR: a ctx install like install.sh makes (bin/ctx with the
+# CTX_LIB line rewritten, lib/ctx with the scripts). ctx-core goes next to the
+# binary: the real build when there is one and CTX_CORE is not off (so the Go
+# command runs), else a stub that implements nothing.
+_t_fake_install() {
+  local d="$1"
+  mkdir -p "$d/bin" "$d/lib/ctx"
+  sed "9s|^CTX_LIB=.*|CTX_LIB=\"$d/lib/ctx\"|" "$ROOT_DIR/bin/ctx" >"$d/bin/ctx"
+  chmod 755 "$d/bin/ctx"
+  cp "$ROOT_DIR"/lib/*.sh "$ROOT_DIR"/lib/*.bash "$ROOT_DIR"/lib/*.fish "$d/lib/ctx/"
+  if [[ "${CTX_CORE:-}" != off && -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    cp "$ROOT_DIR/bin/ctx-core" "$d/bin/ctx-core"
+  else
+    printf '#!/bin/sh\nexit 1\n' >"$d/bin/ctx-core"
+    chmod 755 "$d/bin/ctx-core"
+  fi
+}
+
+test_uninstall_removes_install_and_purges() {
+  (
+    set -euo pipefail
+    local td out p
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_GLOBAL="$td/home/.gitconfig" GIT_CONFIG_NOSYSTEM=1
+    export CTX_SECRET_PROVIDER=file PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+    unset CTX_NO_GUM CTX_CORE_BIN
+    p="$td/prefix"
+    _t_fake_install "$p"
+    mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/acme"
+    printf 'PROFILE_NAME=acme\n' >"$CTX_DIR/profiles/acme.conf"
+    printf 's3cret' >"$CTX_DIR/secrets/acme/API_KEY"
+    export PATH="$p/bin:$PATH"
+    [[ "$(command -v ctx)" == "$p/bin/ctx" ]] || { echo "ctx on PATH: $(command -v ctx)"; exit 1; }
+
+    out="$(ctx --no-gum --dry-run uninstall --purge </dev/null 2>&1)" || { echo "dry-run: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would remove $p/lib/ctx"* && "$out" == *"[dry-run] would delete 1 secret(s) of acme from the file store"* ]] || { echo "dry-run: $out"; exit 1; }
+    [[ -f "$p/bin/ctx" && -d "$p/lib/ctx" && -d "$CTX_DIR" ]] || { echo "dry-run removed files"; exit 1; }
+
+    out="$(printf 'n\n' | ctx --no-gum uninstall 2>&1)" && { echo "No should fail: $out"; exit 1; }
+    [[ -f "$p/bin/ctx" ]] || { echo "No removed files"; exit 1; }
+
+    # a secret that cannot be deleted stops everything
+    chmod 500 "$CTX_DIR/secrets/acme"
+    out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" && { echo "left secret should fail: $out"; exit 1; }
+    [[ "$out" == *"Could not delete from the file store for acme: API_KEY"* && -f "$p/bin/ctx" && -d "$CTX_DIR" ]] \
+      || { echo "secret failure: $out"; exit 1; }
+    chmod 700 "$CTX_DIR/secrets/acme"
+    # a store that cannot be listed stops everything too
+    chmod 000 "$CTX_DIR/secrets/acme"
+    out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" && { echo "unlistable store should fail: $out"; exit 1; }
+    [[ "$out" == *"Could not list the secrets of acme in the file store"* && -f "$p/bin/ctx" && -d "$CTX_DIR" ]] \
+      || { echo "list failure: $out"; exit 1; }
+    chmod 700 "$CTX_DIR/secrets/acme"
+
+    out="$(printf 'y\n' | ctx --no-gum uninstall --purge 2>&1)" || { echo "uninstall: $out"; exit 1; }
+    [[ ! -e "$p/bin/ctx" && ! -e "$p/bin/ctx-core" && ! -e "$p/lib/ctx" && ! -e "$CTX_DIR" ]] || { echo "left behind: $(find "$td" | head -20)"; exit 1; }
+    [[ -d "$p/lib" && -d "$HOME" ]] || { echo "removed too much"; exit 1; }
+    [[ "$out" == *"Deleted 1 secret(s) of acme from the file store"* ]] || { echo "secrets: $out"; exit 1; }
+    [[ "$out" == *"# BEGIN ctx profile autoswitch"* ]] || { echo "hint: $out"; exit 1; }
+  ) || fail "uninstall removes ctx, ctx-core and the lib dir; --purge the data and secrets"
+  pass "uninstall removes ctx, ctx-core and the lib dir; --purge the data and secrets"
+}
+
+test_uninstall_refuses_unsafe_paths() {
+  (
+    set -euo pipefail
+    local td out rc p before
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_GLOBAL="$td/home/.gitconfig" GIT_CONFIG_NOSYSTEM=1
+    export PATH="/usr/bin:/bin:/usr/sbin:/sbin" CTX_SECRET_PROVIDER=file # never the real install
+    unset CTX_NO_GUM CTX_CORE_BIN
+    p="$td/prefix"
+    _t_fake_install "$p"
+    mkdir -p "$CTX_DIR/profiles" "$td/links" "$td/checkout/bin" "$td/checkout/.git" "$td/x" "$td/z/home"
+    ln -s "$p/bin/ctx" "$td/links/ctx"
+    cp "$ROOT_DIR/bin/ctx" "$td/checkout/bin/ctx"; cp -R "$ROOT_DIR/lib" "$td/checkout/lib"
+    # z/l/../home is z/home (a ctx dir) lexically, but HOME for the kernel (l -> x).
+    ln -s "$td/x" "$td/z/l"; : >"$td/z/home/config"
+    ln -s "$CTX_DIR" "$HOME/link.ctx"
+    before="$(cd "$td" && find . | LC_ALL=C sort)"
+    # _refuse ANSWER WANT CTX PATH-DIR [VAR=value...]: a refusal before any
+    # prompt, the list of what to remove by hand, and no change. Inside the
+    # sandbox it answers y (typed ahead: the refusal must come before any
+    # deletion); a CTX_DIR outside it answers n, so a missing guard would stop
+    # at the prompt instead of deleting (CTX_DIR=/).
+    _refuse() {
+      local answer="$1" want="$2" bin="$3" pre="$4"; shift 4
+      rc=0; out="$(printf '%s\n' "$answer" | env PATH="$pre:$PATH" "$@" "$bin" --no-gum uninstall --purge 2>&1)" || rc=$?
+      [[ $rc -eq 1 && "$out" == *"$want"* ]] || { echo "want refusal '$want', exit $rc: $out"; exit 1; }
+      [[ "$out" != *"Continue?"* ]] || { echo "asked before refusing: $out"; exit 1; }
+      local on_path; on_path="$(PATH="$pre:$PATH" command -v ctx)"
+      [[ "$out" == *"To uninstall by hand, remove:"$'\n'"  $on_path"$'\n'*"ctx secret delete <profile> <KEY>"* ]] \
+        || { echo "manual list: $out"; exit 1; }
+      [[ "$(cd "$td" && find . | LC_ALL=C sort)" == "$before" ]] || { echo "files changed after: $want"; exit 1; }
+    }
+    _refuse y "is a symlink" "$td/links/ctx" "$td/links"
+    _refuse y "no installer CTX_LIB line" "$td/checkout/bin/ctx" "$td/checkout/bin"
+    _refuse y "is not the one running" "$td/checkout/bin/ctx" "$p/bin"
+    _refuse n "Refusing to remove /: it is /" "$p/bin/ctx" "$p/bin" CTX_DIR=/
+    _refuse y "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME"
+    _refuse y "does not look like a ctx data directory" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/checkout"
+    _refuse y "it has a . or .. component" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/z/l/../home"
+    _refuse y "it is a symlink" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME/link.ctx//"
+    _refuse y "the pass password store (pass) is not available here" "$p/bin/ctx" "$p/bin" CTX_SECRET_PROVIDER=pass
+    # a data dir that holds the install; a newline in CTX_DIR; and, on a
+    # case-insensitive file system (macOS default), HOME spelled another way
+    mkdir -p "$p/profiles" "$HOME/profiles" "$HOME/nl"$'\n'
+    before="$(cd "$td" && find . | LC_ALL=C sort)"
+    _refuse y "it holds the ctx install ($p/bin)" "$p/bin/ctx" "$p/bin" CTX_DIR="$p"
+    _refuse y "it contains a newline" "$p/bin/ctx" "$p/bin" CTX_DIR="$HOME/nl"$'\n'
+    if [[ -e "$td/HOME" ]]; then
+      _refuse y "Refusing to remove $td/HOME: it is your home directory or holds it" "$p/bin/ctx" "$p/bin" CTX_DIR="$td/HOME"
+    fi
+    # a hand-edited CTX_LIB pointing at HOME (with the scripts in it, so ctx runs)
+    cp "$ROOT_DIR"/lib/*.sh "$HOME/"
+    sed -i.bak "9s|^CTX_LIB=.*|CTX_LIB=\"$HOME\"|" "$p/bin/ctx" && rm -f "$p/bin/ctx.bak"
+    before="$(cd "$td" && find . | LC_ALL=C sort)"
+    _refuse y "Refusing to remove $HOME: it is your home directory" "$p/bin/ctx" "$p/bin"
+  ) || fail "uninstall refuses symlinks, checkouts, .., /, HOME and odd data dirs"
+  pass "uninstall refuses symlinks, checkouts, .., /, HOME and odd data dirs"
+}
+
+test_install_hook_keeps_rc() {
+  (
+    set -euo pipefail
+    local td out rc rule before want
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'chmod -R u+w "$td" 2>/dev/null; rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/bash
+    mkdir -p "$HOME/.ssh" "$HOME/dots" "$td/fake"
+    printf '#!/bin/sh\nexit 0\n' >"$td/fake/mise"; chmod +x "$td/fake/mise"
+    export PATH="$td/fake:$PATH"
+    rule='# ─────────────────────────────────────────────'
+    _hook() { "$ROOT_DIR/bin/ctx" --no-gum install-hook "$@" </dev/null 2>&1; }
+
+    # a legacy pasted block ends at its closing rule: what follows stays
+    printf 'top\n%s\n_ctx_auto_switch() { :; }\n%s\nafter=1\n\nlast=2\n' '# ── ctx auto-switch ───────────────────────────────────────────────────────────' "$rule" >"$HOME/.zshrc"
+    out="$(_hook "$HOME/.zshrc")" || { echo "legacy rule: $out"; exit 1; }
+    grep -q '^after=1$' "$HOME/.zshrc" && grep -q '^last=2$' "$HOME/.zshrc" || { echo "lost the rest: $(cat "$HOME/.zshrc")"; exit 1; }
+    ! grep -q '_ctx_auto_switch()' "$HOME/.zshrc" || { echo "legacy kept: $(cat "$HOME/.zshrc")"; exit 1; }
+    # the mise line follows the rc file's shell (zsh), not $SHELL (bash)
+    grep -qx 'eval "$(mise activate zsh)"' "$HOME/.zshrc" || { echo "mise line: $(cat "$HOME/.zshrc")"; exit 1; }
+    [[ "$(grep -c '^# BEGIN ctx profile autoswitch$' "$HOME/.zshrc")" == 1 ]] || { echo "block count"; exit 1; }
+
+    # a legacy block without a closing rule ends at the next blank line
+    printf 'top\n%s\nold=1\n\nkeep=1\n' '# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook' >"$HOME/.bashrc"
+    out="$(_hook "$HOME/.bashrc")" || { echo "legacy blank: $out"; exit 1; }
+    grep -q '^keep=1$' "$HOME/.bashrc" && ! grep -q '^old=1$' "$HOME/.bashrc" || { echo "blank end: $(cat "$HOME/.bashrc")"; exit 1; }
+    grep -qx 'eval "$(mise activate bash)"' "$HOME/.bashrc" || { echo "bash mise line"; exit 1; }
+    # rerun: one block, the mise line once
+    out="$(_hook "$HOME/.bashrc")" || { echo "rerun: $out"; exit 1; }
+    [[ "$(grep -c '^# BEGIN ctx profile autoswitch$' "$HOME/.bashrc")" == 1 && "$(grep -c 'mise activate' "$HOME/.bashrc")" == 1 ]] \
+      || { echo "rerun: $(cat "$HOME/.bashrc")"; exit 1; }
+
+    # a partial old paste: a later user `fi` is not its end (only "  _ctx_profile_autoswitch" + "fi" is)
+    printf 'export A=1\n%s\n# stub\n_ctx_profile_autoswitch() { :; }\nPROMPT_COMMAND=x\n\nexport MYVAR=keep\nalias ll=ls\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n' \
+      '# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook' >"$HOME/.partial"
+    out="$(_hook "$HOME/.partial")" || { echo "partial paste: $out"; exit 1; }
+    want=$'export A=1\n\nexport MYVAR=keep\nalias ll=ls\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n'
+    [[ "$(head -8 "$HOME/.partial")"$'\n' == "$want" ]] || { echo "partial paste lost user lines: $(cat "$HOME/.partial")"; exit 1; }
+    # a leftover header, body gone, above a user block that ends like a paste (no PROMPT_COMMAND line)
+    printf 'export A=1\n%s\n\nexport MYVAR=keep\nif [ -n "$X" ]; then\n  _ctx_profile_autoswitch\nfi\nexport AFTER=1\n' \
+      '# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook' >"$HOME/.leftover"
+    out="$(_hook "$HOME/.leftover")" || { echo "leftover header: $out"; exit 1; }
+    want=$'export A=1\n\nexport MYVAR=keep\nif [ -n "$X" ]; then\n  _ctx_profile_autoswitch\nfi\nexport AFTER=1'
+    [[ "$(head -7 "$HOME/.leftover")" == "$want" ]] || { echo "leftover header lost user lines: $(cat "$HOME/.leftover")"; exit 1; }
+    # a comment that only starts like a legacy header is the user's
+    printf '# ctx profile autoswitch notes\nmine=1\n' >"$HOME/.notes"
+    out="$(_hook "$HOME/.notes")" || { echo "notes: $out"; exit 1; }
+    [[ "$(head -2 "$HOME/.notes")" == $'# ctx profile autoswitch notes\nmine=1' ]] || { echo "user comment removed: $(cat "$HOME/.notes")"; exit 1; }
+
+    # BEGIN without END: refused, nothing changed, no backup
+    printf 'a\n# BEGIN ctx profile autoswitch\nb\n' >"$HOME/.zshrc"
+    rm -rf "$CTX_DIR/backups"
+    rc=0; out="$(_hook "$HOME/.zshrc")" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Unterminated ctx block in $HOME/.zshrc"* ]] || { echo "unterminated: $rc $out"; exit 1; }
+    [[ "$(cat "$HOME/.zshrc")" == $'a\n# BEGIN ctx profile autoswitch\nb' && ! -d "$CTX_DIR/backups" ]] || { echo "unterminated changed"; exit 1; }
+
+    # symlinked rc: the link stays, the target is written, its mode kept; CRLF lines stay
+    printf 'one\r\n# BEGIN ctx profile autoswitch\r\nold\r\n# END ctx profile autoswitch\r\ntwo\r\n' >"$HOME/dots/zshrc"
+    chmod 640 "$HOME/dots/zshrc"
+    ln -sf dots/zshrc "$HOME/.zshrc"
+    out="$(_hook "$HOME/.zshrc")" || { echo "symlink: $out"; exit 1; }
+    [[ -L "$HOME/.zshrc" && "$(readlink "$HOME/.zshrc")" == dots/zshrc ]] || { echo "link replaced"; exit 1; }
+    [[ "$(_t_mode "$HOME/dots/zshrc")" == 640 ]] || { echo "mode $(_t_mode "$HOME/dots/zshrc")"; exit 1; }
+    [[ "$(head -1 "$HOME/dots/zshrc")" == $'one\r' && "$(grep -c $'\r$' "$HOME/dots/zshrc")" == 2 ]] && grep -q $'^two\r$' "$HOME/dots/zshrc" || { echo "crlf: $(od -c "$HOME/dots/zshrc" | head)"; exit 1; }
+    ! grep -q '^old' "$HOME/dots/zshrc" || { echo "old block kept"; exit 1; }
+
+    # read-only rc: refused, untouched
+    printf 'ro\n' >"$HOME/ro.zshrc"; chmod 444 "$HOME/ro.zshrc"
+    rc=0; out="$(_hook "$HOME/ro.zshrc")" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Cannot write $HOME/ro.zshrc"* && "$(cat "$HOME/ro.zshrc")" == ro ]] || { echo "read-only: $rc $out"; exit 1; }
+
+    # a read-only ~/.ssh/config: the rc step still succeeds, but no "SSH config isolated" after the warning
+    printf 'Host a\n' >"$HOME/.ssh/config"; chmod 400 "$HOME/.ssh/config"
+    out="$(_hook "$HOME/.zshrc.ssh")" || { echo "ro ssh config: $out"; exit 1; }
+    [[ "$out" == *"Could not add Include"* && "$out" != *"SSH config isolated"* && "$out" == *"Reload your shell"* ]] \
+      || { echo "ro ssh config out: $out"; exit 1; }
+    chmod 600 "$HOME/.ssh/config"; rm -f "$HOME/.ssh/config"
+
+    # config.fish gets the fish mise line and the fish block
+    mkdir -p "$HOME/.config/fish"
+    out="$(_hook "$HOME/.config/fish/config.fish")" || { echo "fish: $out"; exit 1; }
+    grep -qx 'mise activate fish | source' "$HOME/.config/fish/config.fish" || { echo "fish mise"; exit 1; }
+    grep -q 'ctx_autoswitch.fish' "$HOME/.config/fish/config.fish" || { echo "fish block"; exit 1; }
+
+    # dry-run: says what it would do, changes nothing
+    printf 'x\n' >"$HOME/.zshrc.dry"
+    before="$(cd "$HOME" && find . -exec ls -ld {} + | LC_ALL=C sort; cat "$HOME/.zshrc.dry")"
+    out="$("$ROOT_DIR/bin/ctx" --no-gum --dry-run install-hook "$HOME/.zshrc.dry" </dev/null 2>&1)" || { echo "dry: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would add mise activation to $HOME/.zshrc.dry"* && "$out" == *"[dry-run] would refresh the ctx profile autoswitch hook in $HOME/.zshrc.dry"* ]] || { echo "dry out: $out"; exit 1; }
+    [[ "$(cd "$HOME" && find . -exec ls -ld {} + | LC_ALL=C sort; cat "$HOME/.zshrc.dry")" == "$before" ]] || { echo "dry-run changed files"; exit 1; }
+    # init --dry-run asks nothing and changes nothing
+    out="$("$ROOT_DIR/bin/ctx" --no-gum --dry-run init </dev/null 2>&1)" || { echo "init dry: $out"; exit 1; }
+    [[ "$out" != *"?"*"[Y/n]"* && "$out" == *"[dry-run] would"* ]] || { echo "init dry out: $out"; exit 1; }
+    [[ "$(cd "$HOME" && find . -exec ls -ld {} + | LC_ALL=C sort; cat "$HOME/.zshrc.dry")" == "$before" ]] || { echo "init dry-run changed files"; exit 1; }
+
+    # a missing autoswitch lib stops it before any edit
+    mkdir -p "$td/inst/bin"; cp "$ROOT_DIR/bin/ctx" "$td/inst/bin/"; cp -R "$ROOT_DIR/lib" "$td/inst/lib"
+    rm -f "$td/inst/lib/ctx_autoswitch.bash"
+    printf 'keep\n' >"$HOME/.nolib"; rm -rf "$CTX_DIR/backups"
+    # the copy has no ctx-core next to it: point it at the repo's (when that mode runs)
+    local core=()
+    [[ "${CTX_CORE:-}" != off && -x "$ROOT_DIR/bin/ctx-core" ]] && core=(CTX_CORE_BIN="$ROOT_DIR/bin/ctx-core")
+    rc=0; out="$(env "${core[@]+"${core[@]}"}" "$td/inst/bin/ctx" --no-gum install-hook "$HOME/.nolib" </dev/null 2>&1)" || rc=$?
+    want="Missing $td/inst/lib/ctx_autoswitch.bash — reinstall ctx."
+    [[ $rc -eq 1 && "$out" == *"$want"* && "$out" != *"mise activation added"* ]] || { echo "missing lib: $rc $out"; exit 1; }
+    [[ "$(cat "$HOME/.nolib")" == keep && ! -d "$CTX_DIR/backups" ]] || { echo "missing lib edited: $(cat "$HOME/.nolib")"; exit 1; }
+  ) || fail "install-hook keeps the rest of the rc file, its link and mode"
+  pass "install-hook keeps the rest of the rc file, its link and mode"
+}
+
+test_rc_writes_checked() {
+  (
+    set -euo pipefail
+    local td out rc i sum
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/zsh TMPDIR="$td/tmp"
+    mkdir -p "$HOME/.ssh" "$TMPDIR"
+    for i in $(seq 1 300); do printf 'export LINE_%03d=xxxxxxxxxxxxxxxxx\n' "$i"; done >"$HOME/.zshrc"
+    cp "$HOME/.zshrc" "$HOME/AGENTS.md"
+    sum="$(cksum <"$HOME/.zshrc")"
+    # A short write into the temp file (TMPDIR full) must not replace the ~9 KB
+    # file: exit 1, file as it was, no temp left. Modelled by a 4 KiB soft file
+    # size limit (SIGXFSZ ignored) for the shell, while cp and cat lift it again,
+    # as writes to the target's own file system would still succeed.
+    local tool
+    mkdir -p "$td/lift"
+    for tool in cp cat; do
+      printf '#!/bin/bash\nulimit -S -f unlimited\nexec %s "$@"\n' "$(command -v "$tool")" >"$td/lift/$tool"
+      chmod +x "$td/lift/$tool"
+    done
+    export PATH="$td/lift:$PATH"
+    rc=0; out="$(trap '' XFSZ; ulimit -S -f 4; "$ROOT_DIR/bin/ctx" --no-gum install-hook "$HOME/.zshrc" </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Cannot write $HOME/.zshrc"* ]] || { echo "install-hook short write: exit $rc: $out"; exit 1; }
+    [[ "$(cksum <"$HOME/.zshrc")" == "$sum" ]] || { echo "rc changed after a failed write"; exit 1; }
+    rc=0; out="$(cd "$HOME" && trap '' XFSZ; ulimit -S -f 4; "$ROOT_DIR/bin/ctx" --no-gum agent-rules --write AGENTS.md </dev/null 2>&1)" || rc=$?
+    [[ $rc -eq 1 && "$out" == *"Cannot write AGENTS.md"* ]] || { echo "agent-rules short write: exit $rc: $out"; exit 1; }
+    [[ "$(cksum <"$HOME/AGENTS.md")" == "$sum" ]] || { echo "AGENTS.md changed after a failed write"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp files left: $(ls -A "$TMPDIR")"; exit 1; }
+    local left
+    left="$(cd "$HOME" && find . -mindepth 1 -maxdepth 1 ! -name .zshrc ! -name AGENTS.md ! -name .ssh ! -name .ctx)"
+    [[ -z "$left" ]] || { echo "temp next to target: $left"; exit 1; }
+    # a refusal (die) also removes the temp file
+    printf '# BEGIN ctx profile autoswitch\n' >"$HOME/.zshrc"
+    "$ROOT_DIR/bin/ctx" --no-gum install-hook "$HOME/.zshrc" </dev/null >/dev/null 2>&1 && { echo "unterminated accepted"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp left after die: $(ls -A "$TMPDIR")"; exit 1; }
+  ) || fail "install-hook and agent-rules never replace a file after a short write"
+  pass "install-hook and agent-rules never replace a file after a short write"
+}
+
+# upgrade against a file:// repo (never the network): a fake curl logs every call and refuses
+# anything but file:// URLs; the stub installer records its env and exits CTX_TEST_INSTALL_EXIT.
+test_upgrade_dry_run_and_temp_cleanup() {
+  (
+    set -euo pipefail
+    local td out p real
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" TMPDIR="$td/tmp" PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+    unset CTX_NO_GUM CTX_CORE_BIN CTX_INSTALL_BIN CTX_INSTALL_LIB
+    mkdir -p "$HOME" "$TMPDIR" "$td/repo/lib" "$td/fake"
+    real="$(command -v curl)" || { echo "curl is needed for this test"; exit 1; }
+    p="$td/prefix"
+    _t_fake_install "$p"
+    cat >"$td/fake/curl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$td/curl.log"
+case "\$*" in *file://*) exec "$real" "\$@" ;; esac
+echo "test curl: refusing a non-file URL" >&2
+exit 99
+EOF
+    chmod 755 "$td/fake/curl"
+    # CRLF payloads: the installer only runs once normalized
+    printf '%s\r\n' 'printf "ran %s %s %s %s\n" "$CTX_REPO" "$CTX_UPGRADE_ONLY" "${CTX_INSTALL_BIN:-}" "${CTX_INSTALL_LIB:-}" >>"$CTX_TEST_RAN"' \
+      'exit "${CTX_TEST_INSTALL_EXIT:-0}"' >"$td/install.sh"
+    cp "$td/install.sh" "$td/repo/install.sh"
+    printf 'CTX_VERSION="9.9.9"\r\n' >"$td/repo/lib/core.sh"
+    export CTX_UPGRADE_REPO="file://$td/repo" CTX_TEST_RAN="$td/ran"
+    [[ "$CTX_UPGRADE_REPO" == file://* ]] || exit 1
+    export PATH="$td/fake:$p/bin:$PATH"
+    [[ "$(command -v ctx)" == "$p/bin/ctx" ]] || { echo "ctx on PATH: $(command -v ctx)"; exit 1; }
+
+    out="$(ctx --no-gum --dry-run upgrade </dev/null 2>&1)" || { echo "dry-run: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would download file://$td/repo/install.sh with curl"* ]] || { echo "dry-run download: $out"; exit 1; }
+    [[ "$out" == *"[dry-run] would run it with bash: CTX_REPO=file://$td/repo CTX_UPGRADE_ONLY=1 CTX_INSTALL_BIN=$p/bin CTX_INSTALL_LIB=$p/lib/ctx"* ]] \
+      || { echo "dry-run run: $out"; exit 1; }
+    [[ "$out" != *"Continue?"* && ! -e "$td/ran" && ! -e "$td/curl.log" ]] || { echo "dry-run did something: $out"; exit 1; }
+
+    out="$(printf 'y\n' | CTX_TEST_INSTALL_EXIT=3 ctx --no-gum upgrade 2>&1)" && { echo "installer failure should fail: $out"; exit 1; }
+    [[ "$out" == *"Upgrade installer failed"* ]] || { echo "installer failure: $out"; exit 1; }
+    [[ "$(cat "$td/ran")" == "ran file://$td/repo 1 $p/bin $p/lib/ctx" ]] || { echo "installer env: $(cat "$td/ran")"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp left after installer failure: $(ls -A "$TMPDIR")"; exit 1; }
+
+    rm "$td/repo/install.sh"
+    out="$(printf 'y\n' | ctx --no-gum upgrade 2>&1)" && { echo "download failure should fail: $out"; exit 1; }
+    [[ "$out" == *"Download failed: file://$td/repo/install.sh"* ]] || { echo "download failure: $out"; exit 1; }
+    [[ -z "$(ls -A "$TMPDIR")" ]] || { echo "temp left after download failure: $(ls -A "$TMPDIR")"; exit 1; }
+
+    cp "$td/install.sh" "$td/repo/install.sh"
+    rm -f "$td/ran"
+    out="$(printf 'y\n' | ctx --no-gum upgrade 2>&1)" || { echo "upgrade: $out"; exit 1; }
+    [[ "$out" == *"Upgrade finished."* && -s "$td/ran" && -z "$(ls -A "$TMPDIR")" ]] || { echo "upgrade: $out"; exit 1; }
+
+    out="$(ctx --no-gum upgrade --check </dev/null 2>&1)" || { echo "check: $out"; exit 1; }
+    [[ "$out" == *"Remote main: ctx version 9.9.9"* && "$out" == *"Update available"* && -z "$(ls -A "$TMPDIR")" ]] \
+      || { echo "check: $out"; exit 1; }
+    ! grep -v 'file://' "$td/curl.log" || { echo "curl reached for a non-file URL"; exit 1; }
+  ) || fail "upgrade honors --dry-run and removes its temp file"
+  pass "upgrade honors --dry-run and removes its temp file"
+}
+
+test_installer_runs_install_hook() {
+  (
+    set -euo pipefail
+    local td out p
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" SHELL=/bin/zsh
+    mkdir -p "$HOME/dots" "$HOME/.ssh"
+    p="$td/prefix"
+    _t_fake_install "$p"
+    printf 'user=1\n%s\nold() { :; }\n# ──────────────────────────────\nafter=2\n' '# ── ctx auto-switch ───────────────────────────────────────────────────────────' >"$HOME/dots/zshrc"
+    chmod 640 "$HOME/dots/zshrc"
+    ln -s dots/zshrc "$HOME/.zshrc"
+    # install.sh's hook step runs the installed ctx install-hook (R18)
+    out="$(CTX_INSTALL_SOURCE_ONLY=1 CTX_INSTALLED_BIN="$p/bin/ctx" bash -c 'source "$1"; install_ctx_hook' _ "$ROOT_DIR/install.sh" 2>&1)" \
+      || { echo "hook step: $out"; exit 1; }
+    [[ -L "$HOME/.zshrc" && "$(readlink "$HOME/.zshrc")" == dots/zshrc && "$(_t_mode "$HOME/dots/zshrc")" == 640 ]] || { echo "link or mode lost"; exit 1; }
+    grep -qx 'user=1' "$HOME/dots/zshrc" && grep -qx 'after=2' "$HOME/dots/zshrc" && ! grep -q 'old()' "$HOME/dots/zshrc" \
+      || { echo "rc: $(cat "$HOME/dots/zshrc")"; exit 1; }
+    grep -qF "\"$p/lib/ctx\"" "$HOME/dots/zshrc" || { echo "block does not source the installed lib: $(cat "$HOME/dots/zshrc")"; exit 1; }
+    # ctx cannot run: the manual command, exit 0, rc untouched
+    cp "$HOME/dots/zshrc" "$td/before"
+    out="$(CTX_INSTALL_SOURCE_ONLY=1 CTX_INSTALLED_BIN="$td/nope/ctx" bash -c 'source "$1"; install_ctx_hook' _ "$ROOT_DIR/install.sh" 2>&1)" \
+      || { echo "missing ctx must not fail the installer: $out"; exit 1; }
+    [[ "$out" == *"Run: ctx install-hook $HOME/.zshrc"* ]] || { echo "no manual command: $out"; exit 1; }
+    cmp -s "$td/before" "$HOME/dots/zshrc" || { echo "rc changed"; exit 1; }
+  ) || fail "install.sh installs the hook with the installed ctx install-hook"
+  pass "install.sh installs the hook with the installed ctx install-hook"
+}
+
+# install.sh downloads bin and lib from CTX_REPO when the environment sets it
+# (ctx upgrade exports it for CTX_UPGRADE_REPO and forks).
+test_installer_honors_ctx_repo() {
+  (
+    set -euo pipefail
+    local td out real f
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" SHELL=/bin/zsh TMPDIR="$td/tmp"
+    mkdir -p "$HOME" "$TMPDIR" "$td/fork/bin" "$td/fork/lib" "$td/inst" "$td/fake" "$td/p/bin" "$td/p/lib"
+    real="$(command -v curl)" || { echo "curl is needed for this test"; exit 1; }
+    cp "$ROOT_DIR/bin/ctx" "$td/fork/bin/ctx"
+    printf '# from the fork\n' >>"$td/fork/bin/ctx"
+    for f in core.sh cmd_import.sh cmd_ops.sh ctx_autoswitch.bash ctx_autoswitch.fish; do cp "$ROOT_DIR/lib/$f" "$td/fork/lib/$f"; done
+    # install.sh alone (no bin/ and lib/ beside it), so it downloads
+    cp "$ROOT_DIR/install.sh" "$td/inst/install.sh"
+    cat >"$td/fake/curl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$td/curl.log"
+case "\$*" in *file://*) exec "$real" "\$@" ;; esac
+echo "test curl: refusing a non-file URL" >&2
+exit 99
+EOF
+    printf '#!/bin/sh\necho "test wget: refused" >&2\nexit 99\n' >"$td/fake/wget"
+    chmod 755 "$td/fake/curl" "$td/fake/wget"
+    out="$(env PATH="$td/fake:/usr/bin:/bin" CTX_REPO="file://$td/fork" CTX_RELEASE_BASE="file://$td/no-release" \
+      CTX_UPGRADE_ONLY=1 CTX_INSTALL_BIN="$td/p/bin" CTX_INSTALL_LIB="$td/p/lib/ctx" bash "$td/inst/install.sh" </dev/null 2>&1)" \
+      || { echo "install: $out"; exit 1; }
+    grep -qx -- "-fsSL file://$td/fork/bin/ctx -o .*" "$td/curl.log" || { echo "bin/ctx not fetched from CTX_REPO: $(cat "$td/curl.log")"; exit 1; }
+    grep -q "file://$td/fork/lib/cmd_ops.sh " "$td/curl.log" || { echo "lib not fetched from CTX_REPO: $(cat "$td/curl.log")"; exit 1; }
+    ! grep -v 'file://' "$td/curl.log" || { echo "curl reached for a non-file URL"; exit 1; }
+    [[ "$(tail -1 "$td/p/bin/ctx")" == '# from the fork' ]] || { echo "installed ctx is not the fork's: $out"; exit 1; }
+  ) || fail "install.sh downloads from CTX_REPO when it is set"
+  pass "install.sh downloads from CTX_REPO when it is set"
+}
+
+test_temp_guard_restores_traps() {
+  (
+    set -euo pipefail
+    local before after f
+    trap 'echo outer-exit' EXIT
+    trap 'echo outer-term' TERM
+    before="$(trap -p EXIT; trap -p TERM)"
+    f="$(mktemp)"
+    _ctx_temp_guard "$f"
+    [[ "$(trap -p EXIT)" == *'_ctx_guarded_tmp'* ]] || { echo "guard trap not set"; exit 1; }
+    _ctx_temp_done
+    after="$(trap -p EXIT; trap -p TERM)"
+    [[ "$after" == "$before" && ! -e "$f" ]] || { echo "traps not restored: $after"; exit 1; }
+    trap - EXIT TERM
+    # no trap before: none after
+    _ctx_temp_guard "$(mktemp)"; _ctx_temp_done
+    [[ -z "$(trap -p EXIT; trap -p TERM)" ]] || { echo "left a trap: $(trap -p EXIT)"; exit 1; }
+  ) >/dev/null || fail "_ctx_temp_done puts the EXIT and TERM traps back"
+  pass "_ctx_temp_done puts the EXIT and TERM traps back"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -1693,4 +2429,18 @@ test_setup_keygen_failure_dies
 test_mise_hook_comment_no_injection
 test_setup_batch_checks_before_side_effects
 test_setup_cfg_quoted_bash32
+test_edit_editor_with_args
+test_clone_no_extra_args_bash32
+test_verify_gh_account_and_exit_code
+test_clone_dry_run
+test_undo_lists_backs_up_and_keeps_mode
+test_undo_ambiguous_and_same_second
+test_uninstall_removes_install_and_purges
+test_uninstall_refuses_unsafe_paths
+test_install_hook_keeps_rc
+test_rc_writes_checked
+test_installer_runs_install_hook
+test_installer_honors_ctx_repo
+test_temp_guard_restores_traps
+test_upgrade_dry_run_and_temp_cleanup
 echo "All tests passed."

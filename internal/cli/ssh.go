@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/atomicfile"
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
 	"github.com/Hei-Tech-Inc/ctx/internal/gitssh"
 )
@@ -138,30 +139,25 @@ func gitconfigRemoveInclude(identityFile string, warn gitssh.Warn) error {
 
 // writeThrough atomically replaces the file path points to (following a
 // symlink) with data, keeping that file's mode, like `cat tmp > file` does.
+// A file that does not exist yet gets mode 0600.
 func writeThrough(path string, data []byte) error {
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		path = real
-	}
-	mode := os.FileMode(0o600)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".")
-	if err != nil {
-		return err
-	}
-	_, werr := tmp.Write(data)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr == nil {
-		werr = os.Chmod(tmp.Name(), mode)
-	}
-	if werr == nil {
-		werr = os.Rename(tmp.Name(), path)
-	}
-	if werr != nil {
-		os.Remove(tmp.Name())
-	}
-	return werr
+	return writeThroughMode(path, data, 0o600)
+}
+
+// writeTemp writes data into the temp file; tests replace it to inject failures.
+var writeTemp = func(f *os.File, data []byte) error {
+	_, err := f.Write(data)
+	return err
+}
+
+// writeThroughMode is writeThrough with newMode for a file that does not exist
+// yet (atomicfile.WriteThrough: the target is replaced only by a rename of a
+// complete temp file in its directory, so a failed write leaves it as it was).
+func writeThroughMode(path string, data []byte, newMode os.FileMode) error {
+	return atomicfile.WriteThrough(path, data, func(old os.FileMode, existed bool) os.FileMode {
+		if existed {
+			return old
+		}
+		return newMode
+	}, writeTemp)
 }

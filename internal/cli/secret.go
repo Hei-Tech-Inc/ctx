@@ -13,20 +13,7 @@ import (
 )
 
 // ttyColors reports whether w is a terminal; Bash colors only then (`[[ -t 1 ]]`).
-func ttyColors(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	st, err := f.Stat()
-	if err != nil || st.Mode()&os.ModeCharDevice == 0 {
-		return false
-	}
-	if null, err := os.Stat(os.DevNull); err == nil && os.SameFile(st, null) {
-		return false
-	}
-	return true
-}
+func ttyColors(w io.Writer) bool { return tui.TTYColors(w) }
 
 // echoE returns what `echo -e` prints for s (see tui.EchoE).
 func echoE(s string) string { return tui.EchoE(s) }

@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"time"
 
 	"golang.org/x/term"
@@ -100,33 +99,6 @@ func (u ui) setupDie(err error) int {
 	return u.die(err.Error())
 }
 
-// onInterrupt handles SIGINT (Ctrl+C at a plain prompt, a scan or a tool)
-// until the returned stop runs: it puts the terminal back as it was (a hidden
-// read may have echo off), prints the cancel line, kills the running
-// detectors and exits 130, as Bash's INT trap does. Rich prompts read Ctrl+C
-// as a key (tui.ErrCancelled), so it does not reach this handler.
-func onInterrupt(t tui.Term) (stop func()) {
-	restore := tui.SaveTTY(t.In)
-	sig := make(chan os.Signal, 1)
-	done := make(chan struct{})
-	signal.Notify(sig, os.Interrupt)
-	go func() {
-		select {
-		case <-sig:
-			restore()
-			_, _ = io.WriteString(t.Err, "\n")
-			code := t.Cancelled()
-			setup.KillScans()
-			os.Exit(code)
-		case <-done:
-		}
-	}()
-	return func() {
-		signal.Stop(sig)
-		close(done)
-	}
-}
-
 // SetupIn runs `ctx setup|import|add`, mirroring cmd_import in
 // lib/cmd_import.sh: -h/--help prints the reference (setup.Help); without
 // --config it runs the interactive wizard (setupWizard). With --config it
@@ -134,7 +106,7 @@ func onInterrupt(t tui.Term) (stop func()) {
 // preconditions, the account scan, resolution, mkdir of WORK_DIR and
 // ssh-keygen, then the shared tail (finishSetup).
 func SetupIn(t tui.Term, args []string) int {
-	defer onInterrupt(t)()
+	defer OnInterrupt(t, setup.KillScans)()
 	u := termUI(t)
 	f, msg := parseSetup(args)
 	if f.help {

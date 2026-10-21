@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Hei-Tech-Inc/ctx/internal/ghacct"
 )
 
 // Detected is what the wizard found on the machine, each list in the order
@@ -106,20 +108,7 @@ func detectSSHKeys(home string) []string {
 }
 
 func detectGH(timeout time.Duration) []string {
-	var out []string
-	for _, l := range strings.Split(runTool(timeout, true, "gh", "auth", "status"), "\n") {
-		f := strings.Fields(l)
-		for i := 1; i+2 < len(f); i++ {
-			if f[i] == "github.com" && f[i-1] == "to" && (f[i+1] == "account" || f[i+1] == "as") {
-				// awk's pattern: "Logged in to github.com (account|as) ".
-				if strings.Contains(l, "Logged in to github.com account ") || strings.Contains(l, "Logged in to github.com as ") {
-					out = append(out, f[i+2])
-				}
-				break
-			}
-		}
-	}
-	return out
+	return ghacct.Parse(runTool(timeout, true, "gh", "auth", "status"))
 }
 
 func detectAWS(home string) []string {

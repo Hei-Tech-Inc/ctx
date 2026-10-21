@@ -12,10 +12,12 @@ import (
 // gcloud, kubectl and gh in /usr/bin). Run for real, cloud CLIs write logs
 // and telemetry under HOME, call the network and can prompt, so tests must
 // never reach them: SystemPath leaves them out, and a test that wants one
-// puts a fake first on PATH.
+// puts a fake first on PATH. The downloaders curl and wget are left out too,
+// so no test reaches the network by accident; a fake that must download for
+// real (from a local server) runs the one SystemTool finds.
 var ExternalTools = []string{
 	"az", "gcloud", "gsutil", "bq", "kubectl", "gh", "aws", "gum", "mise",
-	"direnv", "pass", "brew", "ctx", "ctx-core",
+	"direnv", "pass", "brew", "ctx", "ctx-core", "curl", "wget",
 }
 
 // systemDirs are searched in PATH order: the first dir holding a name wins.
@@ -35,14 +37,27 @@ var (
 // uses it calls CleanupSystemPath from its TestMain after m.Run.
 func SystemPath(t *testing.T) string {
 	t.Helper()
-	sysOnce.Do(func() { sysDir, sysErr = buildSystemPath() })
+	sysOnce.Do(func() { sysDir, sysErr = buildSystemPath(systemDirs) })
 	if sysErr != nil {
 		t.Fatalf("SystemPath: %v", sysErr)
 	}
 	return sysDir
 }
 
-func buildSystemPath() (string, error) {
+// SystemTool is the path of name in the system dirs (the first one, as PATH
+// would find it), even when SystemPath leaves it out, or "" when there is
+// none. Only fakes that guard what they pass on should run it.
+func SystemTool(name string) string {
+	for _, d := range systemDirs {
+		p := filepath.Join(d, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			return p
+		}
+	}
+	return ""
+}
+
+func buildSystemPath(systemDirs []string) (string, error) {
 	dir, err := os.MkdirTemp("", "ctx-syspath-")
 	if err != nil {
 		return "", err
