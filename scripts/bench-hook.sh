@@ -10,10 +10,11 @@
 # Before timing, a canary ctx-core that logs every call checks that 50 unchanged prompts
 # run no ctx-core at all (both modes; the legacy hook never calls it there either).
 #
-# Usage: scripts/bench-hook.sh [--assert FACTOR]
+# Usage: scripts/bench-hook.sh [--assert FACTOR]   (FACTOR: a positive integer)
 # Prints the numbers. With --assert, or in CI (CI set; FACTOR 5 there), it fails unless
 # activate stays within the budget times FACTOR: unchanged <= 4 ms, enter/leave <= 25 ms,
-# switch <= 30 ms (bash and zsh; fish is reported only). Needs bin/ctx-core (go build -o
+# switch <= 30 ms (bash and zsh; fish timings are reported only, but its canary must
+# pass). A session that exits non-zero prints its stderr. Needs bin/ctx-core (go build -o
 # bin/ctx-core ./cmd/ctx-core) and a bash with EPOCHREALTIME (5.0+) for the bash rows.
 set -euo pipefail
 
@@ -26,6 +27,10 @@ elif [[ -n "${1:-}" ]]; then
   exit 2
 elif [[ -n "${CI:-}" ]]; then
   factor=5
+fi
+if [[ -n "$factor" && ! "$factor" =~ ^[1-9][0-9]*$ ]]; then
+  echo "bench-hook: --assert FACTOR must be a positive integer, got '$factor'" >&2
+  exit 2
 fi
 [[ -x "$ROOT/bin/ctx-core" ]] || { echo "bench-hook: build bin/ctx-core first (go build -o bin/ctx-core ./cmd/ctx-core)" >&2; exit 1; }
 
@@ -131,7 +136,17 @@ EOF
 
 budget_us() { case "$1" in unchanged) echo 4000 ;; enter/leave) echo 25000 ;; switch) echo 30000 ;; esac; }
 ms() { printf '%d.%03d' $(($1 / 1000)) $(($1 % 1000)); }
-
+# session CORE N: runs one session of $sh/$mode (via run) into out, its stderr into
+# $T/err. When it exits non-zero it prints that stderr and returns 1, so the caller
+# reports the row (under set -e a bare failing $(…) would end the bench silently).
+session() {
+  local rc=0
+  out="$(cd "$T" && "${run[@]}" "$ROOT" "$T" "$mode" "$1" "$2" 2>"$T/err")" || rc=$?
+  ((rc != 0)) || return 0
+  echo "bench-hook: $sh $mode session ($2) exited $rc; its stderr:" >&2
+  sed 's/^/  /' "$T/err" >&2
+  return 1
+}
 
 failed=0
 printf '%-5s %-8s %-12s %10s\n' shell mode case ms
@@ -142,12 +157,13 @@ for shp in ${shells[@]+"${shells[@]}"}; do
     n=10
     # The legacy fish hook forks per profile and per config key: fewer rounds.
     [[ "$sh/$mode" != fish/legacy ]] || n=3
-    out="$(cd "$T" && "${run[@]}" "$ROOT" "$T" "$mode" "$T/log/ctx-core" canary 2>/dev/null)"
+    session "$T/log/ctx-core" canary || true
     if [[ "$out" != "CANARY 0" ]]; then
       echo "FAIL: $sh $mode: 50 unchanged prompts ran ctx-core: ${out:-no output}" >&2
       failed=1
     fi
-    out="$(cd "$T" && "${run[@]}" "$ROOT" "$T" "$mode" "$ROOT/bin/ctx-core" "$n" 2>/dev/null)"
+    ok=1
+    session "$ROOT/bin/ctx-core" "$n" || ok=0
     while read -r c v; do
       [[ -n "$c" ]] || continue
       printf '%-5s %-8s %-12s %10s\n' "$sh" "$mode" "$c" "$(ms "$v")"
@@ -159,7 +175,16 @@ for shp in ${shells[@]+"${shells[@]}"}; do
         fi
       fi
     done <<<"$out"
-    [[ -n "$out" ]] || { echo "FAIL: $sh $mode: no timings" >&2; failed=1; }
+    if [[ -z "$out" || "$ok" == 0 ]]; then
+      why="no timings"
+      [[ -z "$out" ]] || why="session failed"
+      if [[ "$sh" == fish ]]; then
+        echo "fish $mode: $why (fish timings are report-only)" >&2
+      else
+        echo "FAIL: $sh $mode: $why" >&2
+        failed=1
+      fi
+    fi
   done
 done
 exit "$failed"

@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
 )
 
 // quoteValues covers every ASCII byte class, leading-only escapes, UTF-8 and
@@ -90,6 +92,7 @@ func TestQuoteEvalRoundTrip(t *testing.T) {
 	for _, sh := range []string{"bash", "zsh"} {
 		path, err := exec.LookPath(sh)
 		if err != nil {
+			testutil.ShellMissing(t, sh)
 			continue
 		}
 		for _, loc := range []string{"C", "en_US.UTF-8"} {

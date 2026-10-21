@@ -279,6 +279,8 @@ func sessionShells(t *testing.T) map[string][]string {
 	}
 	if z := testutil.SystemTool("zsh"); z != "" {
 		out["zsh"] = []string{z, "-f"}
+	} else {
+		testutil.ShellMissing(t, "zsh")
 	}
 	return out
 }
@@ -626,6 +628,7 @@ func applyFish(t *testing.T, out string, env, locals map[string]string) {
 func TestHookEnvFishSession(t *testing.T) {
 	fish, err := exec.LookPath("fish")
 	if err != nil {
+		testutil.ShellMissing(t, "fish")
 		t.Skip("fish not installed")
 	}
 	t.Parallel()
@@ -710,6 +713,7 @@ func TestHookQuoteEvals(t *testing.T) {
 	for _, sh := range []string{"bash", "zsh"} {
 		bin := testutil.SystemTool(sh)
 		if bin == "" {
+			testutil.ShellMissing(t, sh)
 			continue
 		}
 		var script strings.Builder

@@ -1476,6 +1476,11 @@ test_hook_integration() {
       if [[ "$v" == legacy ]]; then
         want="$got"
         [[ -n "$want" ]] || fail "hook integration ($sh): no legacy snapshots"
+        # Absolute anchors, so the reference itself cannot drift: after another
+        # terminal's `use b` the extra-path prompt shows b; its deactivate puts this
+        # shell back on a, with the notify.
+        grep -q '^SNAP f2 .* prof=b ' <<<"$want" || fail "hook integration ($sh): legacy f2 lacks prof=b:"$'\n'"$want"
+        grep -q '^SNAP m3 .* err=.*→ a' <<<"$want" || fail "hook integration ($sh): legacy m3 lacks the → a notify:"$'\n'"$want"
       elif [[ "$got" != "$want" ]]; then
         fail "hook integration ($sh, $v): another terminal's change differs from the legacy hook:"$'\n'"legacy:"$'\n'"$want"$'\n'"core:"$'\n'"$got"
       fi
@@ -1488,7 +1493,7 @@ test_hook_integration() {
       _hook_it_fixture
       _hook_it_session_fish >"$td/session.fish"
       cd "$td"
-      fish --no-config "$td/session.fish" "$ROOT_DIR" "$td" 2>"$td/err" || true
+      fish --no-config "$td/session.fish" "$ROOT_DIR" "$td" 2>"$td/err" || echo "fish exited $?; stderr: $(cat "$td/err")"
       # The notify output of a step is the stderr between its markers (event handlers
       # write to the shell's own stderr, whatever a redirection on `emit` says): entering
       # a notifies, re-applying the other terminal's lock does not (as legacy, m1 and m2).
@@ -1597,10 +1602,19 @@ else
     26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50; do prompt; done
   delta 0 "50 unchanged prompts"
   [ "$ran1 $ran2" = "51 51" ] || fail "user hooks ran $ran1/$ran2 times in 51 prompts"
+  # The guard as the shell loaded it: _ctx_hook from after its header to the ctx-core
+  # check (-x), plus _ctx_bp_live (bash), which it calls on every prompt. No $( or
+  # backtick, no pipe (| once || is removed), no ( subshell and so no <( either.
+  # What this cannot see: an external command run by name (it forks with none of these
+  # characters, and the canary only logs ctx-core), and the body of any other helper
+  # the guard calls (only _ctx_bp_live is checked).
   _g="$(typeset -f _ctx_hook)"
+  _g="${_g#*'{'}"
   _g="${_g%%-x *}"
+  _h="$(typeset -f _ctx_bp_live 2>/dev/null)" && _g="$_g ${_h#*'{'}"
   case $_g in *' -nt '*) ;; *) fail "guard not found in: $_g" ;; esac
-  case $_g in *'$('*|*'`'*) fail "the guard forks: $_g" ;; esac
+  case $_g in *'$('*|*'`'*|*'('*) fail "the guard forks: $_g" ;; esac
+  case ${_g//'||'/} in *'|'*) fail "the guard pipes: $_g" ;; esac
   cd "$T" && prompt 2>/dev/null
   [ -z "${CTX_ACTIVE_PROFILE+x}${A_SECRET+x}" ] || fail "leave a: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
 fi
@@ -1733,8 +1747,10 @@ set -e CTX_AUTOSWITCH_NOTIFY
 # 3. Leave a deleted profile.
 mv $CTX_DIR/profiles/a.conf $T/a.conf
 cd $T; prompt
-set -q A_SECRET; or set -q AWS_PROFILE; or set -q CTX_ACTIVE_PROFILE; and fail "deleted profile left: $A_SECRET $AWS_PROFILE $CTX_ACTIVE_PROFILE"
+set -q A_SECRET; or set -q AWS_PROFILE; or set -q CTX_ACTIVE_PROFILE; or set -q CTX_ACTIVATION_TRIGGER
+and fail "deleted profile left: A_SECRET=$A_SECRET AWS_PROFILE=$AWS_PROFILE CTX_ACTIVE_PROFILE=$CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER=$CTX_ACTIVATION_TRIGGER"
 test "$CTX_PROMPT_SHOW" = 0; or fail "CTX_PROMPT_SHOW=$CTX_PROMPT_SHOW"
+grep -qx active=a $CTX_DIR/config; and fail "the deleted profile is still active"
 mv $T/a.conf $CTX_DIR/profiles/a.conf
 cd $T/w/a/r; prompt
 test "$CTX_ACTIVE_PROFILE/$A_SECRET" = a/sa; or fail "re-enter: $CTX_ACTIVE_PROFILE/$A_SECRET"

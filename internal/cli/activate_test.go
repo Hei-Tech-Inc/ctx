@@ -74,6 +74,8 @@ func activateShells(t *testing.T) map[string][]string {
 	}
 	if z := testutil.SystemTool("zsh"); z != "" {
 		out["zsh"] = []string{z, "-f"}
+	} else {
+		testutil.ShellMissing(t, "zsh")
 	}
 	return out
 }
@@ -88,6 +90,8 @@ func TestActivateSyntax(t *testing.T) {
 	shells := activateShells(t)
 	if f, err := exec.LookPath("fish"); err == nil {
 		shells["fish"] = []string{f, "--no-config"}
+	} else {
+		testutil.ShellMissing(t, "fish")
 	}
 	for key, argv := range shells {
 		td := t.TempDir()
@@ -436,6 +440,7 @@ func logPromptTime(t *testing.T, l string) {
 func TestActivateFish(t *testing.T) {
 	fish, err := exec.LookPath("fish")
 	if err != nil {
+		testutil.ShellMissing(t, "fish")
 		t.Skip("fish not installed")
 	}
 	t.Parallel()
