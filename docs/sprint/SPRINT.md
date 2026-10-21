@@ -60,7 +60,7 @@ Update this file when an item ships (check the box, link PR or commit).
 | E4b | `setup` wizard with its `import`/`add` aliases, plus `Ask`/`PickOne`/`Spin` | L | [x] | `internal/setup`, `internal/gitssh`, `internal/shquote`; `--extend` fixed |
 | E4c | Remaining Bash-only commands: `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `completion`, `help`, `version` | L | [x] | `internal/ghacct`, `internal/atomicfile`; fixes listed in CHANGELOG; Bash stays as fallback |
 | E5 | Shell hook via `ctx hook-env` | M | [ ] | Move the autoswitch logic (`lib/ctx_autoswitch.bash`/`.fish`) into `ctx-core`; the rc stub calls it |
-| E6 | Drop Bash | L | [ ] | Needs a new version source (today `CTX_VERSION` in `lib/core.sh`, also read by `upgrade --check`); `install.sh` file list (no `lib/*.sh`); `CTX_REPO` in `install.sh` line 11 must honor the environment (`${CTX_REPO:-…}`) so forks and `CTX_UPGRADE_REPO` reach the downloads |
+| E6 | Drop Bash | L | [ ] | Needs a new version source (today `CTX_VERSION` in `lib/core.sh`, also read by `upgrade --check`); `install.sh` file list (no `lib/*.sh`) |
 
 Known follow-ups (found in E2): the Bash `prompt_extra_paths` handling never checks the last entry; Go mirrors it for parity. Fix both together in a later phase.
 

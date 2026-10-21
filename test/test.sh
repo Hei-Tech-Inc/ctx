@@ -2283,6 +2283,42 @@ test_installer_runs_install_hook() {
   pass "install.sh installs the hook with the installed ctx install-hook"
 }
 
+# install.sh downloads bin and lib from CTX_REPO when the environment sets it
+# (ctx upgrade exports it for CTX_UPGRADE_REPO and forks).
+test_installer_honors_ctx_repo() {
+  (
+    set -euo pipefail
+    local td out real f
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td/home" SHELL=/bin/zsh TMPDIR="$td/tmp"
+    mkdir -p "$HOME" "$TMPDIR" "$td/fork/bin" "$td/fork/lib" "$td/inst" "$td/fake" "$td/p/bin" "$td/p/lib"
+    real="$(command -v curl)" || { echo "curl is needed for this test"; exit 1; }
+    cp "$ROOT_DIR/bin/ctx" "$td/fork/bin/ctx"
+    printf '# from the fork\n' >>"$td/fork/bin/ctx"
+    for f in core.sh cmd_import.sh cmd_ops.sh ctx_autoswitch.bash ctx_autoswitch.fish; do cp "$ROOT_DIR/lib/$f" "$td/fork/lib/$f"; done
+    # install.sh alone (no bin/ and lib/ beside it), so it downloads
+    cp "$ROOT_DIR/install.sh" "$td/inst/install.sh"
+    cat >"$td/fake/curl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$td/curl.log"
+case "\$*" in *file://*) exec "$real" "\$@" ;; esac
+echo "test curl: refusing a non-file URL" >&2
+exit 99
+EOF
+    printf '#!/bin/sh\necho "test wget: refused" >&2\nexit 99\n' >"$td/fake/wget"
+    chmod 755 "$td/fake/curl" "$td/fake/wget"
+    out="$(env PATH="$td/fake:/usr/bin:/bin" CTX_REPO="file://$td/fork" CTX_RELEASE_BASE="file://$td/no-release" \
+      CTX_UPGRADE_ONLY=1 CTX_INSTALL_BIN="$td/p/bin" CTX_INSTALL_LIB="$td/p/lib/ctx" bash "$td/inst/install.sh" </dev/null 2>&1)" \
+      || { echo "install: $out"; exit 1; }
+    grep -qx -- "-fsSL file://$td/fork/bin/ctx -o .*" "$td/curl.log" || { echo "bin/ctx not fetched from CTX_REPO: $(cat "$td/curl.log")"; exit 1; }
+    grep -q "file://$td/fork/lib/cmd_ops.sh " "$td/curl.log" || { echo "lib not fetched from CTX_REPO: $(cat "$td/curl.log")"; exit 1; }
+    ! grep -v 'file://' "$td/curl.log" || { echo "curl reached for a non-file URL"; exit 1; }
+    [[ "$(tail -1 "$td/p/bin/ctx")" == '# from the fork' ]] || { echo "installed ctx is not the fork's: $out"; exit 1; }
+  ) || fail "install.sh downloads from CTX_REPO when it is set"
+  pass "install.sh downloads from CTX_REPO when it is set"
+}
+
 test_temp_guard_restores_traps() {
   (
     set -euo pipefail
@@ -2371,6 +2407,7 @@ test_uninstall_refuses_unsafe_paths
 test_install_hook_keeps_rc
 test_rc_writes_checked
 test_installer_runs_install_hook
+test_installer_honors_ctx_repo
 test_temp_guard_restores_traps
 test_upgrade_dry_run_and_temp_cleanup
 echo "All tests passed."
