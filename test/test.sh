@@ -1066,36 +1066,44 @@ test_use_eval_exports() {
 }
 
 test_shell_wrapper_applies_use() {
-  local sh
-  for sh in bash zsh; do
-    command -v "$sh" >/dev/null 2>&1 || continue
-    (
-      set -euo pipefail
-      local td
-      _use_eval_fixture
-      cd "$td"
-      # shellcheck disable=SC2016
-      "$sh" -c '
-        source "$1/lib/ctx_autoswitch.bash"
-        ctx --no-gum use demo >/dev/null 2>&1 || { echo "use failed"; exit 1; }
-        [[ "$AWS_PROFILE" == demo-prod && "$API_KEY" == "$CTX_TEST_SECRET" && "$CTX_ACTIVE_PROFILE" == demo ]] || { echo "use: AWS=${AWS_PROFILE:-}"; exit 1; }
-        ctx deactivate >/dev/null 2>&1
-        [[ -z "${AWS_PROFILE+x}${API_KEY+x}${CTX_ACTIVE_PROFILE+x}" ]] || { echo "deactivate left vars"; exit 1; }
-        ctx -q use demo || { echo "-q use failed"; exit 1; }
-        [[ "$AWS_PROFILE" == demo-prod ]] || { echo "-q use: AWS unset"; exit 1; }
-        ctx deactivate >/dev/null 2>&1
-        ctx --dry-run use demo >/dev/null 2>&1 || true
-        [[ -z "${AWS_PROFILE+x}" ]] || { echo "--dry-run use changed the shell"; exit 1; }
-        [[ "$(ctx list 2>&1)" == "$(command ctx list 2>&1)" ]] || { echo "list passthrough"; exit 1; }
-        ctx version | grep -q "^ctx version" || { echo "version passthrough"; exit 1; }
-        ctx use nosuch >/dev/null 2>&1 && { echo "bad profile exit 0"; exit 1; }
-        ctx nosuchcmd >/dev/null 2>&1 && { echo "bad command exit 0"; exit 1; }
-        exit 0
-      ' _ "$ROOT_DIR" || exit 1
-      rm -rf "$td"
-    ) || fail "shell wrapper ($sh)"
+  local sh glue
+  # legacy: lib/ctx_autoswitch.bash; activate: the glue of ctx-core activate (when built).
+  for glue in legacy activate; do
+    if [[ "$glue" == activate && ! -x "$ROOT_DIR/bin/ctx-core" ]]; then continue; fi
+    for sh in bash zsh; do
+      command -v "$sh" >/dev/null 2>&1 || continue
+      (
+        set -euo pipefail
+        local td
+        _use_eval_fixture
+        cd "$td"
+        # shellcheck disable=SC2016
+        "$sh" -c '
+          if [[ "$2" == activate ]]; then
+            eval "$("$1/bin/ctx-core" activate "$3")"
+          else
+            source "$1/lib/ctx_autoswitch.bash"
+          fi
+          ctx --no-gum use demo >/dev/null 2>&1 || { echo "use failed"; exit 1; }
+          [[ "$AWS_PROFILE" == demo-prod && "$API_KEY" == "$CTX_TEST_SECRET" && "$CTX_ACTIVE_PROFILE" == demo ]] || { echo "use: AWS=${AWS_PROFILE:-}"; exit 1; }
+          ctx deactivate >/dev/null 2>&1
+          [[ -z "${AWS_PROFILE+x}${API_KEY+x}${CTX_ACTIVE_PROFILE+x}" ]] || { echo "deactivate left vars"; exit 1; }
+          ctx -q use demo || { echo "-q use failed"; exit 1; }
+          [[ "$AWS_PROFILE" == demo-prod ]] || { echo "-q use: AWS unset"; exit 1; }
+          ctx deactivate >/dev/null 2>&1
+          ctx --dry-run use demo >/dev/null 2>&1 || true
+          [[ -z "${AWS_PROFILE+x}" ]] || { echo "--dry-run use changed the shell"; exit 1; }
+          [[ "$(ctx list 2>&1)" == "$(command ctx list 2>&1)" ]] || { echo "list passthrough"; exit 1; }
+          ctx version | grep -q "^ctx version" || { echo "version passthrough"; exit 1; }
+          ctx use nosuch >/dev/null 2>&1 && { echo "bad profile exit 0"; exit 1; }
+          ctx nosuchcmd >/dev/null 2>&1 && { echo "bad command exit 0"; exit 1; }
+          exit 0
+        ' _ "$ROOT_DIR" "$glue" "$sh" || exit 1
+        rm -rf "$td"
+      ) || fail "shell wrapper ($glue, $sh)"
+    done
   done
-  pass "ctx shell wrapper applies use/deactivate to the current shell (bash, zsh)"
+  pass "ctx shell wrapper applies use/deactivate to the current shell (bash, zsh; legacy hook and ctx activate)"
 }
 
 test_autoswitch_exports_profile_env() {

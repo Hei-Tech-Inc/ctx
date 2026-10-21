@@ -521,6 +521,10 @@ main() {
       _ctx_core_forward deactivate "$@"
       cmd_deactivate "$@"
       ;;
+    activate)
+      _ctx_core_forward activate "$@"
+      die "ctx activate needs ctx-core (CTX_CORE=off or ctx-core not found)"
+      ;;
     hook-env)
       # Normally the activate glue runs ctx-core hook-env directly.
       _ctx_core_forward hook-env "$@"

@@ -27,7 +27,7 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|hook-env|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor|install-hook|init|upgrade> [args]\n"
+const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|activate|hook-env|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor|install-hook|init|upgrade> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry gets the arguments after the command and reports whether
@@ -44,6 +44,7 @@ var implemented = map[string]func(args []string) bool{
 	"secret":         func(a []string) bool { return secretSubs[first(a)] },
 	"config":         func(a []string) bool { return configSubs[first(a)] },
 	"deactivate":     func([]string) bool { return true },
+	"activate":       func([]string) bool { return true },
 	"hook-env":       func([]string) bool { return true },
 	"use":            func([]string) bool { return true },
 	"remove":         func([]string) bool { return true },
@@ -150,6 +151,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cli.Config(stdout, stderr, args[1:])
 	case "deactivate":
 		return cli.Deactivate(stdout, stderr, args[1:])
+	case "activate":
+		return cli.Activate(osTerm(stdout, stderr), args[1:])
 	case "hook-env":
 		return cli.HookEnv(osTerm(stdout, stderr), args[1:])
 	case "use":
