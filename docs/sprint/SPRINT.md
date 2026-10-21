@@ -68,6 +68,7 @@ Notes for E6 (from E5):
 - Dropping the legacy hook drops its quirks too: it edits only the first element of an array `PROMPT_COMMAND`, and the fish hook matches `prompt_extra_paths` as globs.
 - fish is verified only in CI (`go test` and `test.sh` install it there); it is not installed on the dev Mac.
 - The hook's guard uses `-nt` on the config and the profiles folder. bash 3.2 and zsh compare whole seconds, so a change in the same second as this shell's stamp is picked up only at the next `cd` or change.
+- The guard watches the profiles folder's mtime, not each `.conf`: an in-place edit of a profile (e.g. a `WORK_DIR` change from an editor that writes in place) is picked up at the next `cd`. ctx's own writes are atomic renames, so they are seen. The legacy hook re-read profiles every prompt.
 - A `ctx use` in another terminal that lands while this shell's `hook-env` is running (about 8 ms) can be missed until the next `cd` or config write. Optional fix: stamp the config's own mtime after a run that wrote it.
 
 ## Backlog (requested 2026-10-20)
