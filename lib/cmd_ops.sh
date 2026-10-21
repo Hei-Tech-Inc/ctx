@@ -2054,10 +2054,10 @@ _ctx_rc_is_rule() {
 
 # Print the ctx autoswitch hook forms in rc file RC as two characters: "a" when it
 # has an `eval "$(ctx activate <shell>)"` (or ctx-core path) line, else "-"; then "l"
-# when it has the install-hook block or another (uncommented) line sourcing
-# lib/ctx_autoswitch.*, which with ctx-core installed runs ctx activate; else "p" when
-# it has only an old inline paste of the lib (no shim: always the legacy hook), else
-# "-". Go twin: autoswitchForms.
+# when it has the install-hook block or an uncommented line mentioning
+# lib/ctx_autoswitch.* (taken as sourcing it, which with ctx-core installed runs ctx
+# activate); else "p" when it has only an old inline paste of the lib (no shim:
+# always the legacy hook), else "-". Go twin: autoswitchForms.
 _ctx_rc_autoswitch_forms() {
   local rc="$1" a="-" l="-"
   grep -qF -e 'ctx activate ' -e 'ctx-core activate ' "$rc" 2>/dev/null && a=a

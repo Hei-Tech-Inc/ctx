@@ -157,7 +157,7 @@ for shp in ${shells[@]+"${shells[@]}"}; do
     n=10
     # The legacy fish hook forks per profile and per config key: fewer rounds.
     [[ "$sh/$mode" != fish/legacy ]] || n=3
-    session "$T/log/ctx-core" canary || true
+    session "$T/log/ctx-core" canary || out="FAILED:$out"
     if [[ "$out" != "CANARY 0" ]]; then
       echo "FAIL: $sh $mode: 50 unchanged prompts ran ctx-core: ${out:-no output}" >&2
       failed=1

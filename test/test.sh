@@ -1607,7 +1607,9 @@ else
   # backtick, no pipe (| once || is removed), no ( subshell and so no <( either.
   # What this cannot see: an external command run by name (it forks with none of these
   # characters, and the canary only logs ctx-core), and the body of any other helper
-  # the guard calls (only _ctx_bp_live is checked).
+  # the guard calls (only _ctx_bp_live is checked). And it can over-match: the ( check
+  # also rejects non-forking [[ ( … ) ]] grouping and $((…)) arithmetic, so a failure
+  # here means look at the guard, not that it forks.
   _g="$(typeset -f _ctx_hook)"
   _g="${_g#*'{'}"
   _g="${_g%%-x *}"

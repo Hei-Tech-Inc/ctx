@@ -294,9 +294,10 @@ func isRcRule(l string) bool {
 
 // autoswitchForms reports the ctx autoswitch hook forms in rc text: activate,
 // an `eval "$(ctx activate <shell>)"` (or ctx-core path) line; lib, the
-// install-hook block or another (uncommented) line sourcing lib/ctx_autoswitch.*,
-// which with ctx-core installed runs ctx activate; paste, without lib, an old
-// inline paste of the lib (no shim: always the legacy hook).
+// install-hook block or an uncommented line mentioning lib/ctx_autoswitch.*
+// (taken as sourcing it, which with ctx-core installed runs ctx activate);
+// paste, without lib, an old inline paste of the lib (no shim: always the
+// legacy hook).
 // Bash twin: _ctx_rc_autoswitch_forms.
 func autoswitchForms(text string) (activate, lib, paste bool) {
 	activate = strings.Contains(text, "ctx activate ") || strings.Contains(text, "ctx-core activate ")

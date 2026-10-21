@@ -119,10 +119,10 @@ _ctx_pc_strip() {
 
 # Registers _ctx_hook once, before the user's prompt commands (prompt tools then see
 # this prompt's CTX_PROMPT_*): first in bash-preexec's precmd_functions when
-# bash-preexec runs them (_ctx_bp_live), else first in PROMPT_COMMAND (an element when it is an
-# array, bash 5.1+). Also drops it from starship's _PRESERVED_PROMPT_COMMAND (re-sourced
-# after starship). Every step tolerates errexit. _ctx_hook calls it again when
-# bash-preexec was loaded or installed later.
+# bash-preexec runs them (_ctx_bp_live), else first in PROMPT_COMMAND (an element
+# when it is an array, bash 5.1+). Also drops it from starship's
+# _PRESERVED_PROMPT_COMMAND (re-sourced after starship). Every step tolerates
+# errexit. _ctx_hook calls it again when bash-preexec was loaded or installed later.
 _ctx_register() {
   local _ctx_pc _ctx_c _ctx_f _ctx_arr=""
   local -a _ctx_new
