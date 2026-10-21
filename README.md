@@ -418,7 +418,7 @@ Limits:
 
 ## Auto-switch
 
-The shell hook (`ctx install-hook` / `install.sh`) adds a block to your rc file that sources **`lib/ctx_autoswitch.bash`** (bash/zsh) or **`lib/ctx_autoswitch.fish`** (fish) from ctx's lib dir, so upgrades apply without editing the rc. When `ctx-core` is installed, that file runs **`ctx activate <shell>`**: a small hook that calls **`ctx hook-env`** only when `$PWD` changed or `~/.ctx/config` or a profile changed (a `ctx use` in another terminal), so a plain prompt runs no extra process. Without `ctx-core`, or with **`CTX_CORE=off`** set when the rc runs, the file runs the original shell hook instead. Both behave the same.
+The shell hook (`ctx install-hook` / `install.sh`) adds a block to your rc file that sources **`lib/ctx_autoswitch.bash`** (bash/zsh) or **`lib/ctx_autoswitch.fish`** (fish) from ctx's lib dir, so upgrades apply without editing the rc. When `ctx-core` is installed, that file runs **`ctx activate <shell>`**: a small hook that calls **`ctx hook-env`** only when `$PWD` changed or `~/.ctx/config` or a profile changed (a `ctx use` in another terminal), so a plain prompt runs no extra process. Without `ctx-core`, or with **`CTX_CORE=off`** set when the rc runs, the file runs the original shell hook instead. Both behave the same, apart from the fixes listed in the CHANGELOG.
 
 You can also skip the block and add the hook yourself, after `mise activate`:
 
@@ -427,7 +427,7 @@ eval "$(ctx activate zsh)"     # ~/.zshrc  (bash: eval "$(ctx activate bash)" in
 ctx activate fish | source     # ~/.config/fish/config.fish
 ```
 
-Loading both, or re-sourcing your rc, still registers one hook. `ctx doctor` accepts either form and says which one your rc uses. The hook:
+This line needs `ctx-core`: with `CTX_CORE=off` or without `ctx-core`, `ctx activate` prints an error and no hook, so keep the block if you want the shell-hook fallback. Loading both, or re-sourcing your rc, still registers one hook. `ctx doctor` accepts either form and says which one your rc uses; an old inline paste of the hook is flagged, run `ctx install-hook` to replace it. The hook:
 
 - Picks the profile whose **`WORK_DIR`** is the **longest path prefix** of `$PWD` (nested clients supported).
 - Prefers a **sibling profile** when a broad `WORK_DIR` covers `…/clients` and `…/clients/<name>.conf` exists.
