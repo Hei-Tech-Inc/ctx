@@ -193,6 +193,11 @@ func ihCompare(t *testing.T, want, got cvRun) {
 const (
 	ihRule  = "# ─────────────────────────────────────────────────────────────────────────────\n"
 	ihBlock = "# BEGIN ctx profile autoswitch\nold block\n# END ctx profile autoswitch\n"
+	// The exact headers of the pastes before 970aa1a (install-hook's and
+	// install.sh's); R17 removes a block only under one of these lines.
+	ihLegacyHook      = "# ── ctx auto-switch ───────────────────────────────────────────────────────────"
+	ihLegacyInstaller = "# ── ctx auto-switch — added by ctx installer ─────────────────────────────────"
+	ihPasteBash       = "# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook"
 )
 
 type ihCase struct {
@@ -310,7 +315,7 @@ func TestInstallHookMatchesBash(t *testing.T) {
 		{name: "block in the middle", shell: "/bin/zsh", files: with(sshOK, ".zshrc", "a\n"+ihBlock+"b\n"), vacuous: "refreshed"},
 		{name: "two blocks and a lone END", shell: "/bin/zsh", files: with(sshOK, ".zshrc", ihBlock+"m\n# END ctx profile autoswitch\n"+ihBlock), vacuous: "refreshed"},
 		{name: "legacy paste with closing rule", shell: "/bin/zsh",
-			files:   with(sshOK, ".zshrc", "top\n# ── ctx auto-switch ────\n_ctx_auto_switch() { :; }\nmore() { :; }\n"+ihRule+"after=1\n"),
+			files:   with(sshOK, ".zshrc", "top\n"+ihLegacyHook+"\n_ctx_auto_switch() { :; }\nmore() { :; }\n"+ihRule+"after=1\n"),
 			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
 				s := readHomeFile(t, home, ".zshrc")
 				if !strings.HasPrefix(s, "top\nafter=1\n\n# BEGIN") {
@@ -318,21 +323,21 @@ func TestInstallHookMatchesBash(t *testing.T) {
 				}
 			}},
 		{name: "legacy block ends at blank line", shell: "/bin/bash",
-			files: with(sshOK, ".bashrc", "top\n# ctx profile autoswitch — appended\n# more\n\n_f() { :; }\n"), vacuous: "refreshed",
+			files: with(sshOK, ".bashrc", "top\n"+ihPasteBash+"\n# more\n\n_f() { :; }\n"), vacuous: "refreshed",
 			check: func(t *testing.T, home string, r cvRun) {
 				if s := readHomeFile(t, home, ".bashrc"); !strings.HasPrefix(s, "top\n\n_f() { :; }\n\n# BEGIN") {
 					t.Errorf(".bashrc:\n%s", s)
 				}
 			}},
-		{name: "blank line before the rule ends the block", shell: "/bin/zsh", files: with(sshOK, ".zshrc", "# ── ctx auto-switch ──\nx\n\ny\n"+ihRule+"z\n"), vacuous: "refreshed",
+		{name: "blank line before the rule ends the block", shell: "/bin/zsh", files: with(sshOK, ".zshrc", ihLegacyInstaller+"\nx\n\ny\n"+ihRule+"z\n"), vacuous: "refreshed",
 			check: func(t *testing.T, home string, r cvRun) {
 				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "\ny\n"+ihRule+"z\n\n# BEGIN") {
 					t.Errorf(".zshrc:\n%s", s)
 				}
 			}},
-		{name: "legacy block to end of file", shell: "/bin/bash", files: with(sshOK, ".bashrc", "top\n# ctx profile autoswitch\nx\n"), vacuous: "refreshed"},
-		{name: "short rule does not end a legacy block", shell: "/bin/bash", files: with(sshOK, ".bashrc", "# ctx profile autoswitch\n# ────\nx\n\nkeep\n"), vacuous: "refreshed"},
-		{name: "BEGIN inside a legacy block", shell: "/bin/bash", files: with(sshOK, ".bashrc", "# ctx profile autoswitch\n"+ihBlock+"gone\n\nkeep\n"), vacuous: "refreshed"},
+		{name: "legacy block to end of file", shell: "/bin/bash", files: with(sshOK, ".bashrc", "top\n"+ihPasteBash+"\nx\n"), vacuous: "refreshed"},
+		{name: "short rule does not end a legacy block", shell: "/bin/bash", files: with(sshOK, ".bashrc", ihPasteBash+"\n# ────\nx\n\nkeep\n"), vacuous: "refreshed"},
+		{name: "BEGIN inside a legacy block", shell: "/bin/bash", files: with(sshOK, ".bashrc", ihPasteBash+"\n"+ihBlock+"gone\n\nkeep\n"), vacuous: "refreshed"},
 		{name: "no trailing newline", shell: "/bin/zsh", files: with(sshOK, ".zshrc", "a\nlast"), vacuous: "refreshed"},
 		{name: "empty rc", shell: "/bin/zsh", files: with(sshOK, ".zshrc", ""), vacuous: "refreshed"},
 		{name: "unterminated BEGIN", shell: "/bin/zsh", files: with(sshOK, ".zshrc", "a\n# BEGIN ctx profile autoswitch\nb\n"), code: 1,
@@ -410,14 +415,14 @@ func TestInstallHookRcEdge(t *testing.T) {
 				}
 			}},
 		{name: "CRLF legacy block ends at CRLF rule", shell: "/bin/zsh",
-			files:   map[string]string{".zshrc": "# ── ctx auto-switch ──\r\nx\r\n" + strings.Replace(ihRule, "\n", "\r\n", 1) + "after\r\n"},
+			files:   map[string]string{".zshrc": ihLegacyHook + "\r\nx\r\n" + strings.Replace(ihRule, "\n", "\r\n", 1) + "after\r\n"},
 			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
 				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "after\r\n\n# BEGIN") {
 					t.Errorf(".zshrc %q", s)
 				}
 			}},
 		{name: "legacy block without END keeps what follows, link and mode", shell: "/bin/zsh",
-			files: map[string]string{"dots/zshrc": "head\n# ctx profile autoswitch — appended\n_old() { :; }\n\nexport KEEP=1\nalias k=ls\n"}, tweak: link,
+			files: map[string]string{"dots/zshrc": "head\n" + ihPasteBash + "\n_old() { :; }\n\nexport KEEP=1\nalias k=ls\n"}, tweak: link,
 			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
 				keepsLink(t, home, r)
 				s := readHomeFile(t, home, "dots/zshrc")
@@ -503,6 +508,10 @@ func TestInstallHookRemovesHistoricPastes(t *testing.T) {
 				}})
 		}
 	}
+	paste970, err := os.ReadFile(filepath.Join("testdata", "autoswitch-paste", "970aa1a.bash"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases = append(cases,
 		ihCase{name: "paste header without its end line keeps R17's rule", shell: "/bin/zsh",
 			files:   map[string]string{".zshrc": pasteHeaderBash + "\n# Longest\n\nkeep() { :; }\n"},
@@ -512,10 +521,44 @@ func TestInstallHookRemovesHistoricPastes(t *testing.T) {
 				}
 			}},
 		ihCase{name: "CRLF paste", shell: "/bin/zsh",
-			files:   map[string]string{".zshrc": "u\r\n" + pasteHeaderBash + "\r\nbody\r\n\r\nfi\r\nv\r\n"},
+			files:   map[string]string{".zshrc": "u\r\n" + pasteHeaderBash + "\r\nbody\r\n\r\nif x; then\r\n  _ctx_profile_autoswitch\r\nfi\r\nv\r\n"},
 			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
 				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "u\r\nv\r\n\n# BEGIN") {
 					t.Errorf(".zshrc %q", s)
+				}
+			}},
+		// A user's own `fi` (or fish `_ctx_profile_autoswitch`) below a
+		// paste that is not a full one must not be taken for the paste's end.
+		ihCase{name: "a user fi below a partial paste keeps the user lines", shell: "/bin/zsh",
+			files: map[string]string{".zshrc": "export A=1\n" + ihPasteBash + "\n# Longest WORK_DIR prefix wins\n_ctx_profile_autoswitch() { :; }\nPROMPT_COMMAND=x\n\n" +
+				"export MYVAR=keep\nalias ll='ls -l'\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				want := "export A=1\n\nexport MYVAR=keep\nalias ll='ls -l'\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n\n# BEGIN"
+				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, want) {
+					t.Errorf("user lines lost:\n%s", s)
+				}
+			}},
+		ihCase{name: "a user _ctx_profile_autoswitch below a partial fish paste keeps the user lines", shell: "/bin/fish",
+			files: map[string]string{".config/fish/config.fish": "set -x A 1\n" + "# ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)" +
+				"\nfunction _ctx_profile_autoswitch\nend\n\nset -x MYVAR keep\n_ctx_profile_autoswitch\nset -x AFTER 1\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				want := "set -x A 1\n\nset -x MYVAR keep\n_ctx_profile_autoswitch\nset -x AFTER 1\n\n# BEGIN"
+				if s := readHomeFile(t, home, ".config/fish/config.fish"); !strings.HasPrefix(s, want) {
+					t.Errorf("user lines lost:\n%s", s)
+				}
+			}},
+		ihCase{name: "a full paste followed by a user if block", shell: "/bin/zsh",
+			files:   map[string]string{".zshrc": "u\n" + string(paste970) + "if true; then\n  :\nfi\nz\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "u\nif true; then\n  :\nfi\nz\n\n# BEGIN") {
+					t.Errorf(".zshrc:\n%s", s)
+				}
+			}},
+		ihCase{name: "a comment that only starts like a legacy header is the user's", shell: "/bin/zsh",
+			files:   map[string]string{".zshrc": "# ctx profile autoswitch notes\nmine=1\n# ── ctx auto-switch ────\nmine=2\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				if s := readHomeFile(t, home, ".zshrc"); !strings.HasPrefix(s, "# ctx profile autoswitch notes\nmine=1\n# ── ctx auto-switch ────\nmine=2\n\n# BEGIN") {
+					t.Errorf(".zshrc:\n%s", s)
 				}
 			}},
 		ihCase{name: "BEGIN inside an open BEGIN block is refused", shell: "/bin/zsh",

@@ -2069,7 +2069,7 @@ test_install_hook_keeps_rc() {
     _hook() { "$ROOT_DIR/bin/ctx" --no-gum install-hook "$@" </dev/null 2>&1; }
 
     # a legacy pasted block ends at its closing rule: what follows stays
-    printf 'top\n# ── ctx auto-switch ──────\n_ctx_auto_switch() { :; }\n%s\nafter=1\n\nlast=2\n' "$rule" >"$HOME/.zshrc"
+    printf 'top\n%s\n_ctx_auto_switch() { :; }\n%s\nafter=1\n\nlast=2\n' '# ── ctx auto-switch ───────────────────────────────────────────────────────────' "$rule" >"$HOME/.zshrc"
     out="$(_hook "$HOME/.zshrc")" || { echo "legacy rule: $out"; exit 1; }
     grep -q '^after=1$' "$HOME/.zshrc" && grep -q '^last=2$' "$HOME/.zshrc" || { echo "lost the rest: $(cat "$HOME/.zshrc")"; exit 1; }
     ! grep -q '_ctx_auto_switch()' "$HOME/.zshrc" || { echo "legacy kept: $(cat "$HOME/.zshrc")"; exit 1; }
@@ -2078,7 +2078,7 @@ test_install_hook_keeps_rc() {
     [[ "$(grep -c '^# BEGIN ctx profile autoswitch$' "$HOME/.zshrc")" == 1 ]] || { echo "block count"; exit 1; }
 
     # a legacy block without a closing rule ends at the next blank line
-    printf 'top\n# ctx profile autoswitch — old paste\nold=1\n\nkeep=1\n' >"$HOME/.bashrc"
+    printf 'top\n%s\nold=1\n\nkeep=1\n' '# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook' >"$HOME/.bashrc"
     out="$(_hook "$HOME/.bashrc")" || { echo "legacy blank: $out"; exit 1; }
     grep -q '^keep=1$' "$HOME/.bashrc" && ! grep -q '^old=1$' "$HOME/.bashrc" || { echo "blank end: $(cat "$HOME/.bashrc")"; exit 1; }
     grep -qx 'eval "$(mise activate bash)"' "$HOME/.bashrc" || { echo "bash mise line"; exit 1; }
@@ -2086,6 +2086,17 @@ test_install_hook_keeps_rc() {
     out="$(_hook "$HOME/.bashrc")" || { echo "rerun: $out"; exit 1; }
     [[ "$(grep -c '^# BEGIN ctx profile autoswitch$' "$HOME/.bashrc")" == 1 && "$(grep -c 'mise activate' "$HOME/.bashrc")" == 1 ]] \
       || { echo "rerun: $(cat "$HOME/.bashrc")"; exit 1; }
+
+    # a partial old paste: a later user `fi` is not its end (only "  _ctx_profile_autoswitch" + "fi" is)
+    printf 'export A=1\n%s\n# stub\n_ctx_profile_autoswitch() { :; }\nPROMPT_COMMAND=x\n\nexport MYVAR=keep\nalias ll=ls\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n' \
+      '# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook' >"$HOME/.partial"
+    out="$(_hook "$HOME/.partial")" || { echo "partial paste: $out"; exit 1; }
+    want=$'export A=1\n\nexport MYVAR=keep\nalias ll=ls\nif [ -f ~/.aliases ]; then\n  . ~/.aliases\nfi\nexport AFTER=1\n'
+    [[ "$(head -8 "$HOME/.partial")"$'\n' == "$want" ]] || { echo "partial paste lost user lines: $(cat "$HOME/.partial")"; exit 1; }
+    # a comment that only starts like a legacy header is the user's
+    printf '# ctx profile autoswitch notes\nmine=1\n' >"$HOME/.notes"
+    out="$(_hook "$HOME/.notes")" || { echo "notes: $out"; exit 1; }
+    [[ "$(head -2 "$HOME/.notes")" == $'# ctx profile autoswitch notes\nmine=1' ]] || { echo "user comment removed: $(cat "$HOME/.notes")"; exit 1; }
 
     # BEGIN without END: refused, nothing changed, no backup
     printf 'a\n# BEGIN ctx profile autoswitch\nb\n' >"$HOME/.zshrc"
@@ -2252,7 +2263,7 @@ test_installer_runs_install_hook() {
     mkdir -p "$HOME/dots" "$HOME/.ssh"
     p="$td/prefix"
     _t_fake_install "$p"
-    printf 'user=1\n# ── ctx auto-switch ────\nold() { :; }\n# ──────────────────────────────\nafter=2\n' >"$HOME/dots/zshrc"
+    printf 'user=1\n%s\nold() { :; }\n# ──────────────────────────────\nafter=2\n' '# ── ctx auto-switch ───────────────────────────────────────────────────────────' >"$HOME/dots/zshrc"
     chmod 640 "$HOME/dots/zshrc"
     ln -s dots/zshrc "$HOME/.zshrc"
     # install.sh's hook step runs the installed ctx install-hook (R18)

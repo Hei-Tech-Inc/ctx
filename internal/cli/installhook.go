@@ -162,23 +162,39 @@ func rcShell(rc string) string {
 }
 
 // The headers of the full hook pastes ctx made from 970aa1a to a65d9a9 (the
-// whole ctx_autoswitch.bash or .fish appended to the rc), and the line each
-// paste ends with.
+// whole ctx_autoswitch.bash or .fish appended to the rc), and of the pastes
+// before them (62d7522 to 970aa1a: install-hook's and install.sh's), exactly
+// as ctx wrote them; git history has no other.
 const (
-	pasteHeaderBash = "# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook"
-	pasteHeaderFish = "# ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)"
-	pasteEndBash    = "fi"
-	pasteEndFish    = "_ctx_profile_autoswitch"
+	pasteHeaderBash   = "# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook"
+	pasteHeaderFish   = "# ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)"
+	legacyHeaderHook  = "# ── ctx auto-switch ───────────────────────────────────────────────────────────"
+	legacyHeaderInst  = "# ── ctx auto-switch — added by ctx installer ─────────────────────────────────"
+	pasteLastLineFish = "_ctx_profile_autoswitch"
 )
+
+// pasteEnd is _ctx_rc_paste_end: which full paste (bash or fish) ends at line
+// l, given the two lines before it (p1 right before), or "". Every historic
+// bash paste ends "  _ctx_profile_autoswitch" then "fi"; every fish paste
+// ends "end", maybe a blank line, then "_ctx_profile_autoswitch". A user's
+// own `fi` elsewhere is not such an end.
+func pasteEnd(p2, p1, l string) string {
+	switch {
+	case l == "fi" && p1 == "  _ctx_profile_autoswitch":
+		return "bash"
+	case l == pasteLastLineFish && (p1 == "end" || p1 == "" && p2 == "end"):
+		return "fish"
+	}
+	return ""
+}
 
 // stripAutoswitch is _ctx_rc_strip_autoswitch: data's lines without
 //   - the BEGIN..END blocks (a lone END line is dropped too);
-//   - a full hook paste (exact header above) through its end line, when that
-//     line comes later in the file;
-//   - other legacy pastes ("# ctx profile autoswitch…" or
-//     "# ── ctx auto-switch…") up to their closing "# ─…" rule of 25 or more,
-//     or up to, not including, the next blank line, whichever comes first
-//     (with neither, to the end of the file).
+//   - a full hook paste (exact header above) through its end (pasteEnd),
+//     when such an end comes later in the file;
+//   - other legacy pastes (one of the exact headers above) up to their
+//     closing "# ─…" rule of 25 or more, or up to, not including, the next
+//     blank line, whichever comes first (with neither, to the end of the file).
 //
 // Lines are matched without a trailing CR and kept as they were; every kept
 // line ends in a newline. ok is false when a BEGIN has no END or a BEGIN
@@ -189,16 +205,23 @@ func stripAutoswitch(data []byte) (out []byte, ok bool) {
 	if len(data) > 0 {
 		lines = strings.Split(s, "\n")
 	}
-	lastEnd := map[string]int{pasteEndBash: -1, pasteEndFish: -1}
+	// Lookahead: the last line where a full paste of each kind could end.
+	lastEnd := map[string]int{"bash": -1, "fish": -1}
+	p1, p2 := "", ""
 	for i, line := range lines {
-		if l := strings.TrimSuffix(line, "\r"); l == pasteEndBash || l == pasteEndFish {
-			lastEnd[l] = i
+		l := strings.TrimSuffix(line, "\r")
+		if k := pasteEnd(p2, p1, l); k != "" {
+			lastEnd[k] = i
 		}
+		p2, p1 = p1, l
 	}
 	var b bytes.Buffer
 	state, pend := "", ""
+	p1, p2 = "", ""
 	for i, line := range lines {
 		l := strings.TrimSuffix(line, "\r")
+		prev2, prev1 := p2, p1
+		p2, p1 = p1, l
 		switch state {
 		case "begin":
 			if strings.HasPrefix(l, autoswitchBegin) {
@@ -209,7 +232,7 @@ func stripAutoswitch(data []byte) (out []byte, ok bool) {
 			}
 			continue
 		case "paste":
-			if l == pend {
+			if pasteEnd(prev2, prev1, l) == pend {
 				state = ""
 			}
 			continue
@@ -228,14 +251,14 @@ func stripAutoswitch(data []byte) (out []byte, ok bool) {
 			continue
 		}
 		switch {
-		case l == pasteHeaderBash && lastEnd[pasteEndBash] > i:
-			state, pend = "paste", pasteEndBash
-		case l == pasteHeaderFish && lastEnd[pasteEndFish] > i:
-			state, pend = "paste", pasteEndFish
+		case l == pasteHeaderBash && lastEnd["bash"] > i:
+			state, pend = "paste", "bash"
+		case l == pasteHeaderFish && lastEnd["fish"] > i:
+			state, pend = "paste", "fish"
 		case strings.HasPrefix(l, autoswitchBegin):
 			state = "begin"
 		case strings.HasPrefix(l, autoswitchEnd):
-		case strings.HasPrefix(l, "# ctx profile autoswitch"), strings.HasPrefix(l, "# ── ctx auto-switch"):
+		case l == pasteHeaderBash, l == pasteHeaderFish, l == legacyHeaderHook, l == legacyHeaderInst:
 			state = "legacy"
 		default:
 			b.WriteString(line + "\n")

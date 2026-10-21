@@ -1922,35 +1922,62 @@ _ctx_rc_shell() {
 }
 
 # The headers of the full hook pastes ctx made from 970aa1a to a65d9a9 (the
-# whole ctx_autoswitch.bash or .fish appended to the rc). Each paste ends with
-# a line that is exactly "fi" (bash) or "_ctx_profile_autoswitch" (fish).
+# whole ctx_autoswitch.bash or .fish appended to the rc), and of the pastes
+# before them (62d7522 to 970aa1a: install-hook's and install.sh's), exactly
+# as ctx wrote them; git history has no other.
 CTX_PASTE_HEADER_BASH="# ctx profile autoswitch — appended to shell rc by install.sh / ctx install-hook"
 CTX_PASTE_HEADER_FISH="# ctx profile autoswitch — fish (see lib/ctx_autoswitch.bash for behavior)"
+CTX_LEGACY_HEADER_HOOK="# ── ctx auto-switch ───────────────────────────────────────────────────────────"
+CTX_LEGACY_HEADER_INSTALLER="# ── ctx auto-switch — added by ctx installer ─────────────────────────────────"
+
+# Print which full paste (bash or fish) ends at line L, given the two lines
+# before it (P1 right before); print nothing and return 1 when none does.
+# Every historic bash paste ends "  _ctx_profile_autoswitch" then "fi"; every
+# fish paste ends "end", maybe a blank line, then "_ctx_profile_autoswitch".
+# A user's own `fi` elsewhere is not such an end.
+_ctx_rc_paste_end() {
+  local p2="$1" p1="$2" l="$3"
+  if [[ "$l" == "fi" && "$p1" == "  _ctx_profile_autoswitch" ]]; then
+    printf 'bash'
+  elif [[ "$l" == _ctx_profile_autoswitch && ( "$p1" == "end" || ( -z "$p1" && "$p2" == "end" ) ) ]]; then
+    printf 'fish'
+  else
+    return 1
+  fi
+}
 
 # Print rc file RC without its ctx autoswitch blocks:
 #   - "# BEGIN ctx profile autoswitch" .. "# END ctx profile autoswitch";
-#   - a full hook paste (exact header above) through its end line ("fi" or
-#     "_ctx_profile_autoswitch"), when that line comes later in the file;
-#   - other legacy pastes starting "# ctx profile autoswitch" or
-#     "# ── ctx auto-switch", which end at their closing "# ─────…" line (25 or
-#     more ─) or just before the next blank line (kept), whichever comes first;
-#     one with neither runs to the end of the file.
+#   - a full hook paste (exact header above) through its end
+#     (_ctx_rc_paste_end), when such an end comes later in the file;
+#   - other legacy pastes (one of the exact headers above), which end at their
+#     closing "# ─────…" line (25 or more ─) or just before the next blank
+#     line (kept), whichever comes first; one with neither runs to the end of
+#     the file.
 # A line ending in CR is matched without it and printed as it was.
 # Returns 3 (output incomplete) when a BEGIN has no END or a BEGIN comes
 # inside an open BEGIN block, and 2 when writing the output failed.
 _ctx_rc_strip_autoswitch() {
-  local line l n=0 state=none last_fi=0 last_fish=0 pend=""
-  # Lookahead: where the last possible end lines of a full paste are.
+  local line l n=0 state=none last_bash=0 last_fish=0 pend="" p1="" p2="" b1 b2 k
+  # Lookahead: the last line where a full paste of each kind could end.
   while IFS= read -r line || [[ -n "$line" ]]; do
     n=$((n + 1))
     l="${line%$'\r'}"
-    [[ "$l" == "fi" ]] && last_fi=$n
-    [[ "$l" == _ctx_profile_autoswitch ]] && last_fish=$n
+    case "$l" in
+      fi | _ctx_profile_autoswitch)
+        k="$(_ctx_rc_paste_end "$p2" "$p1" "$l")" || k=""
+        [[ "$k" == bash ]] && last_bash=$n
+        [[ "$k" == fish ]] && last_fish=$n
+        ;;
+    esac
+    p2="$p1" p1="$l"
   done <"$1"
-  n=0
+  n=0 p1="" p2=""
   while IFS= read -r line || [[ -n "$line" ]]; do
     n=$((n + 1))
     l="${line%$'\r'}"
+    b2="$p2" b1="$p1" # the two lines before this one, for a paste end
+    p2="$p1" p1="$l"
     case "$state" in
       begin)
         case "$l" in
@@ -1960,7 +1987,11 @@ _ctx_rc_strip_autoswitch() {
         continue
         ;;
       paste)
-        [[ "$l" == "$pend" ]] && state=none
+        case "$l" in
+          fi | _ctx_profile_autoswitch)
+            [[ "$(_ctx_rc_paste_end "$b2" "$b1" "$l")" == "$pend" ]] && state=none
+            ;;
+        esac
         continue
         ;;
       legacy)
@@ -1973,18 +2004,18 @@ _ctx_rc_strip_autoswitch() {
         continue
         ;;
     esac
-    if [[ "$l" == "$CTX_PASTE_HEADER_BASH" && $last_fi -gt $n ]]; then
-      state=paste pend="fi"
+    if [[ "$l" == "$CTX_PASTE_HEADER_BASH" && $last_bash -gt $n ]]; then
+      state=paste pend=bash
       continue
     fi
     if [[ "$l" == "$CTX_PASTE_HEADER_FISH" && $last_fish -gt $n ]]; then
-      state=paste pend=_ctx_profile_autoswitch
+      state=paste pend=fish
       continue
     fi
     case "$l" in
       "# BEGIN ctx profile autoswitch"*) state=begin ;;
       "# END ctx profile autoswitch"*) ;;
-      "# ctx profile autoswitch"*|"# ── ctx auto-switch"*) state=legacy ;;
+      "$CTX_PASTE_HEADER_BASH" | "$CTX_PASTE_HEADER_FISH" | "$CTX_LEGACY_HEADER_HOOK" | "$CTX_LEGACY_HEADER_INSTALLER") state=legacy ;;
       *) printf '%s\n' "$line" || return 2 ;;
     esac
   done <"$1"
