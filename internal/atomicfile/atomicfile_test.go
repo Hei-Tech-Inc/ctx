@@ -237,3 +237,30 @@ func TestFollowLinks(t *testing.T) {
 		t.Errorf("FollowLinks of a non-link = %q", got)
 	}
 }
+
+// TestRemoveTempsDuringWrite: an interrupt handler's RemoveTemps in the middle
+// of a write removes the temp file; the target stays as it was.
+func TestRemoveTempsDuringWrite(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "rc")
+	if err := os.WriteFile(p, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteThrough(p, []byte("new\n"), func(os.FileMode, bool) os.FileMode { return 0o644 },
+		func(f *os.File, data []byte) error {
+			_, _ = f.Write(data[:1])
+			if ents, _ := os.ReadDir(dir); len(ents) != 2 {
+				t.Errorf("no temp file during the write: %v", ents)
+			}
+			RemoveTemps()
+			return nil
+		})
+	if err == nil {
+		t.Error("the write went on after its temp file was removed")
+	}
+	if got := readFile(t, p); got != "mine\n" {
+		t.Errorf("target changed: %q", got)
+	}
+	noTemps(t, dir, "rc")
+	RemoveTemps() // nothing left to remove
+}

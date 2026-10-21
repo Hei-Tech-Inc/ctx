@@ -8,8 +8,37 @@ package atomicfile
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
+
+// temps are the temp files WriteThrough holds right now, for RemoveTemps.
+var (
+	tempsMu sync.Mutex
+	temps   = map[string]bool{}
+)
+
+// RemoveTemps removes the temp files of writes still in progress. An
+// interrupt handler calls it just before exiting, so Ctrl+C during a write
+// leaves nothing beside the target (which stays as it was).
+func RemoveTemps() {
+	tempsMu.Lock()
+	defer tempsMu.Unlock()
+	for name := range temps {
+		os.Remove(name)
+		delete(temps, name)
+	}
+}
+
+func track(name string, on bool) {
+	tempsMu.Lock()
+	defer tempsMu.Unlock()
+	if on {
+		temps[name] = true
+	} else {
+		delete(temps, name)
+	}
+}
 
 // FollowLinks resolves a chain of symlinks (at most 40), also when the last
 // one dangles (the file is then created where it points), like the readlink
@@ -60,6 +89,8 @@ func WriteThrough(path string, data []byte, mode func(old os.FileMode, existed b
 	if err != nil {
 		return err
 	}
+	track(tmp.Name(), true)
+	defer track(tmp.Name(), false)
 	werr := write(tmp, data)
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr

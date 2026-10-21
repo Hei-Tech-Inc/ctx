@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/atomicfile"
 	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
@@ -14,6 +15,8 @@ import (
 // stop child processes and exits 130, as Bash's INT trap does. Rich prompts
 // read Ctrl+C as a key (tui.ErrCancelled), so it does not reach this handler.
 // Commands that exec (run, env) and non-interactive paths do not install it.
+// Before exiting it removes the temp file of a write in progress
+// (atomicfile.RemoveTemps); the file being written stays as it was.
 func OnInterrupt(t tui.Term, kill func()) (stop func()) {
 	restore := tui.SaveTTY(t.In)
 	sig := make(chan os.Signal, 1)
@@ -28,6 +31,7 @@ func OnInterrupt(t tui.Term, kill func()) (stop func()) {
 			if kill != nil {
 				kill()
 			}
+			atomicfile.RemoveTemps()
 			os.Exit(code)
 		case <-done:
 		}

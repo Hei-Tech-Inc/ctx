@@ -31,9 +31,16 @@ const (
 // RC is backed up, then rewritten once through writeThroughMode (symlinks and
 // mode kept; a new file gets the umask default). Kept lines keep their line
 // endings, CRLF too; the appended lines end in LF. --dry-run (CTX_DRY_RUN=1)
-// prints what it would do and changes nothing. It does not prompt, so it
-// installs no interrupt handler (init, which prompts, does).
+// prints what it would do and changes nothing. Ctrl+C prints the cancel
+// line and exits 130 (OnInterrupt), removing a temp file beside the rc.
 func InstallHook(t tui.Term, args []string) int {
+	defer OnInterrupt(t, nil)()
+	return installHook(t, args)
+}
+
+// installHook is InstallHook without its interrupt handler, for init (which
+// has its own).
+func installHook(t tui.Term, args []string) int {
 	u := termUI(t)
 	home := os.Getenv("HOME")
 	rc := ""

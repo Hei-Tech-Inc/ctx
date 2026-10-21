@@ -90,7 +90,7 @@ func Init(t tui.Term, args []string) int {
 				}
 			}
 			if yes {
-				if code := InstallHook(t, []string{rc}); code != 0 {
+				if code := installHook(t, []string{rc}); code != 0 {
 					return code
 				}
 			} else {

@@ -5,6 +5,7 @@ package cli
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,5 +43,68 @@ func TestOnInterruptAnyCommand(t *testing.T) {
 	out, code := testutil.RunPTY(t, cmd, []string{testutil.CtrlC}, 30*time.Second)
 	if code != 130 || strings.Count(out, "Cancelled by user.") != 1 || strings.Count(out, "killed") != 1 {
 		t.Errorf("exit %d, want 130 with one cancel line and the kill hook; transcript:\n%s", code, out)
+	}
+}
+
+// TestInstallHookCtrlCLeavesNoTemp: Ctrl+C (SIGINT) while install-hook writes
+// the rc leaves no temp file beside it, keeps the rc as it was and exits 130.
+// The child (this test binary) blocks inside the write.
+func TestInstallHookCtrlCLeavesNoTemp(t *testing.T) {
+	if os.Getenv("CTX_TEST_IH_SIGINT") == "1" {
+		writeTemp = func(f *os.File, data []byte) error {
+			_, _ = f.Write(data[:3])
+			_ = os.WriteFile(os.Getenv("CTX_TEST_READY"), nil, 0o644)
+			time.Sleep(30 * time.Second)
+			return nil
+		}
+		os.Exit(InstallHook(tui.Term{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, nil))
+	}
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := filepath.Join(home, ".zshrc")
+	if err := os.WriteFile(rc, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ready := filepath.Join(t.TempDir(), "ready")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestInstallHookCtrlCLeavesNoTemp$")
+	cmd.Env = append(os.Environ(), "CTX_TEST_IH_SIGINT=1", "CTX_TEST_READY="+ready, "HOME="+home,
+		"CTX_DIR="+filepath.Join(home, ".ctx"), "SHELL=/bin/zsh", "CTX_LIB="+filepath.Join(repoRoot, "lib"),
+		"CTX_NO_GUM=1", "CTX_DRY_RUN=", "PATH="+testutil.SystemPath(t))
+	var out strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("child never reached the write:\n%s", out.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = cmd.Process.Signal(os.Interrupt)
+	err = cmd.Wait()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	}
+	if code != 130 || strings.Count(out.String(), "Cancelled by user.") != 1 {
+		t.Errorf("exit %d (%v), want 130 with one cancel line:\n%s", code, err, out.String())
+	}
+	if b, _ := os.ReadFile(rc); string(b) != "mine\n" {
+		t.Errorf(".zshrc = %q", b)
+	}
+	ents, _ := os.ReadDir(home)
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".zshrc.") {
+			t.Errorf("temp file left beside the rc: %s", e.Name())
+		}
 	}
 }
