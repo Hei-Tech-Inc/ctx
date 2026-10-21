@@ -231,7 +231,7 @@ _ctx_deactivate_emit_unsets() {
   local key
   case "$shell_kind" in
     fish)
-      for key in $SECRET_KEYS; do
+      for key in ${SECRET_KEYS:-}; do
         is_valid_env_key "$key" || continue
         printf 'set -e %s\n' "$key"
       done
@@ -249,7 +249,7 @@ _ctx_deactivate_emit_unsets() {
       fi
       ;;
     *)
-      for key in $SECRET_KEYS; do
+      for key in ${SECRET_KEYS:-}; do
         is_valid_env_key "$key" || continue
         printf 'unset %s 2>/dev/null || true\n' "$key"
       done
@@ -1350,7 +1350,7 @@ cmd_uninstall() {
   fi
 
   echo ""
-  info "Remove the ctx blocks from your shell rc if desired (search for '# BEGIN ctx profile autoswitch')."
+  info "Remove the ctx blocks from your shell rc if desired (search for '# BEGIN ctx profile autoswitch' and 'ctx activate')."
   echo ""
   [[ $failed -eq 0 ]] || exit 1
 }
@@ -1709,10 +1709,16 @@ cmd_doctor() {
       && success "mise shell hook: installed" \
       || { warn "mise activate: not in $shell_rc"; info "Run: ctx install-hook"; all_ok=false; }
 
-    if grep -q '_ctx_profile_autoswitch' "$shell_rc" 2>/dev/null \
-      || grep -q '# BEGIN ctx profile autoswitch' "$shell_rc" 2>/dev/null \
-      || grep -q 'ctx auto-switch' "$shell_rc" 2>/dev/null; then
-      success "ctx profile autoswitch: installed in $shell_rc"
+    local as_forms as_form=""
+    as_forms="$(_ctx_rc_autoswitch_forms "$shell_rc")"
+    grep -qF 'ctx auto-switch' "$shell_rc" 2>/dev/null && as_forms="${as_forms:0:1}l"
+    case "$as_forms" in
+      al) as_form="ctx activate, and the ctx_autoswitch lib" ;;
+      a-) as_form="ctx activate" ;;
+      -l) as_form="ctx_autoswitch lib → ctx activate when ctx-core is installed" ;;
+    esac
+    if [[ -n "$as_form" ]]; then
+      success "ctx profile autoswitch: installed in $shell_rc ($as_form)"
     else
       warn "ctx profile autoswitch: not in $shell_rc"
       info "Run: ctx install-hook"
@@ -1888,8 +1894,7 @@ cmd_init() {
 
   if [[ -n "$shell_rc" ]]; then
     if ! grep -q "mise activate" "$shell_rc" 2>/dev/null || \
-       { ! grep -q '_ctx_profile_autoswitch' "$shell_rc" 2>/dev/null \
-         && ! grep -q '# BEGIN ctx profile autoswitch' "$shell_rc" 2>/dev/null; }; then
+       [[ "$(_ctx_rc_autoswitch_forms "$shell_rc")" == "--" ]]; then
       if [[ $dry -eq 1 ]]; then
         cmd_install_hook "$shell_rc"
       elif ask_yn "Install shell hooks (mise + ctx auto-switch) to $shell_rc?" "y"; then
@@ -2042,6 +2047,17 @@ _ctx_rc_strip_autoswitch() {
 _ctx_rc_is_rule() {
   local r="${1#\# }"
   [[ "$1" == "# "* && "$r" == "─────────────────────────"* && -z "${r//─/}" ]]
+}
+
+# Print the ctx autoswitch hook forms in rc file RC as two characters: "a" when it
+# has an `eval "$(ctx activate <shell>)"` (or ctx-core path) line, else "-"; then "l"
+# when it has the install-hook block, another line sourcing lib/ctx_autoswitch.*, or
+# an old paste of it, else "-". Go twin: autoswitchForms.
+_ctx_rc_autoswitch_forms() {
+  local rc="$1" a="-" l="-"
+  grep -qF -e 'ctx activate ' -e 'ctx-core activate ' "$rc" 2>/dev/null && a=a
+  grep -qF -e '_ctx_profile_autoswitch' -e '# BEGIN ctx profile autoswitch' -e 'ctx_autoswitch.' "$rc" 2>/dev/null && l=l
+  printf '%s%s\n' "$a" "$l"
 }
 
 # The autoswitch block install-hook appends for SHELL_KIND (fish|bash|zsh),

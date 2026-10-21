@@ -292,6 +292,18 @@ func isRcRule(l string) bool {
 	return ok && strings.HasPrefix(r, strings.Repeat("─", 25)) && strings.ReplaceAll(r, "─", "") == ""
 }
 
+// autoswitchForms reports the ctx autoswitch hook forms in rc text: activate,
+// an `eval "$(ctx activate <shell>)"` (or ctx-core path) line; lib, the
+// install-hook block, another line sourcing lib/ctx_autoswitch.*, or an old
+// paste of it (which, with ctx-core installed, runs ctx activate too).
+// Bash twin: _ctx_rc_autoswitch_forms.
+func autoswitchForms(text string) (activate, lib bool) {
+	activate = strings.Contains(text, "ctx activate ") || strings.Contains(text, "ctx-core activate ")
+	lib = strings.Contains(text, "_ctx_profile_autoswitch") || strings.Contains(text, autoswitchBegin) ||
+		strings.Contains(text, "ctx_autoswitch.")
+	return activate, lib
+}
+
 // autoswitchBlock is _ctx_autoswitch_block: the block install-hook appends,
 // byte for byte, sourcing ctx_autoswitch.* from lib (or a standard lib dir).
 func autoswitchBlock(kind, lib string) string {
