@@ -113,10 +113,10 @@ ask_secret() {
       --width 60 \
       < /dev/tty || user_cancelled
   else
-    echo -e "${CYAN}?${RESET} $prompt ${DIM}(hidden)${RESET}: \c"
+    echo -e "${CYAN}?${RESET} $prompt ${DIM}(hidden)${RESET}: \c" >&2
     local var
     read -rs var || user_cancelled
-    echo ""
+    echo "" >&2
     echo "$var"
   fi
 }
@@ -137,7 +137,7 @@ ask_yn() {
     return $rc
   else
     local hint; [[ "$default" == "y" ]] && hint="Y/n" || hint="y/N"
-    echo -e "${CYAN}?${RESET} $prompt ${DIM}[$hint]${RESET}: \c"
+    echo -e "${CYAN}?${RESET} $prompt ${DIM}[$hint]${RESET}: \c" >&2
     local answer
     read -r answer || user_cancelled
     answer="${answer:-$default}"
@@ -169,12 +169,12 @@ pick_one() {
       < /dev/tty) || user_cancelled
     echo "$result"
   else
-    echo ""
+    echo "" >&2
     for i in "${!items[@]}"; do
-      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}"
+      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}" >&2
     done
-    echo ""
-    echo -e "${CYAN}?${RESET} $prompt (1-${#items[@]}, 0 to skip): \c"
+    echo "" >&2
+    echo -e "${CYAN}?${RESET} $prompt (1-${#items[@]}, 0 to skip): \c" >&2
     local choice
     read -r choice || user_cancelled
     if [[ "$choice" =~ ^[0-9]+$ ]] \
@@ -206,12 +206,12 @@ pick_many() {
       "${items[@]}" \
       < /dev/tty || user_cancelled
   else
-    echo ""
+    echo "" >&2
     for i in "${!items[@]}"; do
-      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}"
+      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}" >&2
     done
-    echo ""
-    echo -e "${CYAN}?${RESET} $prompt (comma-separated numbers, e.g. 1,3): \c"
+    echo "" >&2
+    echo -e "${CYAN}?${RESET} $prompt (comma-separated numbers, e.g. 1,3): \c" >&2
     local input
     read -r input || user_cancelled
     for n in $(echo "$input" | tr ',' ' '); do
@@ -398,6 +398,7 @@ ctx_profile_read_work_dir() {
   [[ -f "$conf" ]] || return 1
   wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
   wd="${wd/#\~/$HOME}"
+  [[ "$wd" == "/" ]] || wd="${wd%/}"
   [[ -n "$wd" ]] || return 1
   printf '%s\n' "$wd"
 }
@@ -432,6 +433,7 @@ ctx_resolve_path_with_root() {
     [[ -e "$conf" ]] || continue
     work_dir="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
     work_dir="${work_dir/#\~/$HOME}"
+    [[ "$work_dir" == "/" ]] || work_dir="${work_dir%/}"
     [[ -z "$work_dir" ]] && continue
     if [[ "$pwd" == "$work_dir" || "$pwd" == "$work_dir/"* ]]; then
       len=${#work_dir}
@@ -450,6 +452,7 @@ ctx_resolve_path_with_root() {
       local wdc
       wdc="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${first}.conf")"
       wdc="${wdc/#\~/$HOME}"
+      [[ "$wdc" == "/" ]] || wdc="${wdc%/}"
       [[ -z "$wdc" ]] && wdc="${best_work_dir%/}/$first"
       if [[ -d "$wdc" && ( "$pwd" == "$wdc" || "$pwd" == "$wdc/"* ) ]]; then
         local cand_len=${#wdc}
@@ -489,6 +492,7 @@ ctx_resolve_path_with_root() {
   if [[ -n "$path_profile" ]]; then
     display_wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${path_profile}.conf")"
     display_wd="${display_wd/#\~/$HOME}"
+    [[ "$display_wd" == "/" ]] || display_wd="${display_wd%/}"
     [[ -n "$display_wd" ]] && best_work_dir="$display_wd"
     [[ -z "$display_wd" && -n "$best_work_dir" ]] && display_wd="$best_work_dir"
   fi
@@ -573,12 +577,25 @@ ctx_activation_get_source() {
   [[ "$v" == "manual" ]] && echo manual || echo auto
 }
 
+# First base64 flag spelling that produces output wins (GNU -d, BSD -D, --decode).
+# GNU base64 prints the decoded text and then exits 1 on stray padding, so an
+# `a || b` chain would print it twice; never concatenate attempts.
+ctx_base64_decode() {
+  local f out
+  for f in -d -D --decode; do
+    out="$(printf '%s' "$1" | base64 "$f" 2>/dev/null)"
+    [[ -n "$out" ]] && { printf '%s' "$out"; return 0; }
+  done
+  return 1
+}
+
 # Decoded manual anchor PWD (when active_source=manual), or empty.
 ctx_activation_get_manual_pwd() {
   local raw dec
   raw="$(grep "^manual_pwd=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  raw="${raw//$'\r'/}"
   [[ -z "$raw" ]] && return 1
-  dec="$(printf '%s' "$raw" | base64 -d 2>/dev/null || printf '%s' "$raw" | base64 -D 2>/dev/null || printf '%s' "$raw" | base64 --decode 2>/dev/null || true)"
+  dec="$(ctx_base64_decode "$raw")"
   [[ -n "$dec" ]] && printf '%s\n' "$dec" && return 0
   printf '%s\n' "$raw"
 }
@@ -736,9 +753,10 @@ _secret_file_set() {
   local profile="$1" key="$2" value="$3"
   local f
   f="$(_secret_file "$profile" "$key")"
-  mkdir -p "$(dirname "$f")" || return 1
+  # umask 077: dirs and the file are created private from the start.
+  ( umask 077; mkdir -p "$(dirname "$f")" ) || return 1
   chmod 700 "${CTX_DIR}/secrets" "${CTX_DIR}/secrets/${profile}" 2>/dev/null || true
-  printf '%s' "$value" > "$f" || return 1
+  ( umask 077; printf '%s' "$value" > "$f" ) || return 1
   chmod 600 "$f" 2>/dev/null || true
   return 0
 }
@@ -1084,15 +1102,34 @@ gitconfig_add_include() {
   return 0
 }
 
+# Remove what gitconfig_add_include wrote for one identity file: the exact
+# "  path = <file>" line, the [includeIf …] header directly above it, and the
+# blank separator line directly above that header. Other profiles' includes
+# (e.g. ctx-acme-old when removing ctx-acme) and user sections are kept.
 gitconfig_remove_include() {
   local identity_file="$1"
   local gitconfig="$HOME/.gitconfig"
   [[ -f "$gitconfig" ]] || return 0
-  local tmp; tmp=$(mktemp)
-  grep -v "$identity_file" "$gitconfig" \
-    | grep -v "\[includeIf.*$(basename "$identity_file")" \
-    > "$tmp" || true
-  mv "$tmp" "$gitconfig"
+  local tmp rc=0; tmp=$(mktemp)
+  ID="  path = ${identity_file}" awk '
+    { l[NR] = $0 }
+    END {
+      for (i = 2; i <= NR; i++) {
+        if (l[i] == ENVIRON["ID"] && l[i-1] ~ /^\[includeIf/) {
+          del[i] = 1; del[i-1] = 1; hit = 1
+          if (i > 2 && l[i-2] == "") del[i-2] = 1
+        }
+      }
+      for (i = 1; i <= NR; i++) if (!del[i]) print l[i]
+      exit(hit ? 10 : 0)
+    }
+  ' "$gitconfig" > "$tmp" || rc=$?
+  # Rewrite in place (keeps a symlink and the file's mode) only if a line was dropped.
+  if [[ $rc -eq 10 ]]; then
+    backup_file "$gitconfig"
+    cat "$tmp" > "$gitconfig"
+  fi
+  rm -f "$tmp"
 }
 
 # ─── mise.toml generation ─────────────────────────────────────────────────────

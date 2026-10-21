@@ -13,6 +13,8 @@ This repository is a **Bash** CLI (`bin/ctx` + `lib/*.sh`) plus a small Go compa
 ```bash
 go vet ./... && go test ./...
 bash test/test.sh
+CTX_CORE=off bash test/test.sh   # Bash-only path (no Go forwarding)
+go build -o bin/ctx-core ./cmd/ctx-core   # test.sh fails without it; CTX_CORE_OPTIONAL=1 bash test/test.sh skips that check for local runs without Go (never set in CI)
 shellcheck -x -S warning bin/ctx lib/*.sh lib/*.bash install.sh test/*.sh
 ./bin/ctx help
 ```
@@ -36,6 +38,10 @@ When adding scripting fields, extend **`ctx --json`** handlers in `lib/cmd_ops.s
 | CLI entry | `bin/ctx` |
 | Installer (also builds/downloads `ctx-core`) | `install.sh` |
 | `ctx-core` entry, `mcp install` | `cmd/ctx-core/` |
+| Terminal UI (rich/plain prompts, lipgloss/huh) | `internal/tui/` |
 | MCP server and tools | `internal/mcpserver/` |
 | Knowledge store, kubectl/login runner, ops | `internal/knowledge/`, `internal/kube/`, `internal/ops/` |
 | Profiles, folder resolution, secrets | `internal/profile/`, `internal/resolve/`, `internal/secret/` |
+| Config, git guard, shared command code (`use`, `deactivate`, `secret`, `config`, `guard`) | `internal/ctxconfig/`, `internal/guard/`, `internal/cli/` |
+
+Commands implemented in Go are listed in the `implemented` table in `cmd/ctx-core/main.go`; `bin/ctx` forwards to them. A behavior change to one of them must be made in both the Bash and Go implementations (`CTX_CORE=off` runs Bash).

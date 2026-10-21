@@ -2,6 +2,44 @@
 # Nearest .ctx from $PWD up to git root wins (not repo-root only).
 # Sets CTX_PROMPT_SHOW / CTX_PROMPT_WORK_DIR / CTX_PROMPT_PROFILE (see README).
 
+# ctx runs as a child process, so `ctx use` / `ctx deactivate` cannot change this shell's
+# environment by themselves. This function sources their --eval output; every other
+# subcommand goes straight to the binary. Global flags may come before the subcommand.
+function ctx --description 'ctx (applies use/deactivate to this shell)'
+  set -l pre
+  set -l rest $argv
+  while set -q rest[1]; and contains -- $rest[1] --quiet -q --no-gum --dry-run --json
+    set -a pre $rest[1]
+    set -e rest[1]
+  end
+  if not set -q rest[1]; or not contains -- $rest[1] use deactivate
+    command ctx $argv
+    return $status
+  end
+  # --dry-run must not touch the shell; an explicit --eval means the caller sources it.
+  for a in $argv
+    test "$a" = --; and break
+    if contains -- $a --dry-run --eval; or string match -q -- '--eval=*' $a
+      command ctx $argv
+      return $status
+    end
+  end
+  set -l sub $rest[1]
+  set -e rest[1]
+  set -l out (command ctx $pre $sub --eval fish $rest)
+  set -l rc $status
+  printf '%s\n' $out | source
+  return $rc
+end
+
+# Run ctx use for the hook and apply its exports to this shell. Returns ctx use's status.
+function _ctx_as_use -a target
+  set -l out (env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use --eval fish "$target" 2>/dev/null)
+  set -l rc $status
+  printf '%s\n' $out | source
+  return $rc
+end
+
 function _ctx_rel_depth_under -a p r
   set p (string trim -r / -- (string replace -r '^~' "$HOME" -- "$p"))
   set r (string trim -r / -- (string replace -r '^~' "$HOME" -- "$r"))
@@ -56,6 +94,7 @@ function _ctx_profile_autoswitch --on-variable PWD
     test -e "$conf"; or continue
     set -l work_dir (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")
     set work_dir (string replace -r '^~' "$HOME" -- "$work_dir")
+    test "$work_dir" != "/"; and set work_dir (string replace -r '/$' '' -- "$work_dir")
     test -n "$work_dir"; or continue
     set -l plen (string length -- "$work_dir")
     if test (string length -- "$PWD") -ge "$plen"
@@ -86,6 +125,7 @@ function _ctx_profile_autoswitch --on-variable PWD
         if test -n "$first"; and test -f "$profiles_dir/$first.conf"
           set -l wdc (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$first.conf")
           set wdc (string replace -r '^~' "$HOME" -- "$wdc")
+          test "$wdc" != "/"; and set wdc (string replace -r '/$' '' -- "$wdc")
           test -z "$wdc"; and set wdc "$best_work_dir/$first"
           if test -d "$wdc"
             set -l wlen (string length -- "$wdc")
@@ -136,6 +176,7 @@ function _ctx_profile_autoswitch --on-variable PWD
   if test -n "$path_profile"
     set -l _sync_wd (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$path_profile.conf")
     set _sync_wd (string replace -r '^~' "$HOME" -- "$_sync_wd")
+    test "$_sync_wd" != "/"; and set _sync_wd (string replace -r '/$' '' -- "$_sync_wd")
     test -n "$_sync_wd"; and set best_work_dir "$_sync_wd"
   end
 
@@ -143,10 +184,11 @@ function _ctx_profile_autoswitch --on-variable PWD
   set -l src (grep "^active_source=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string lower)
   set -l manual_anchor ""
   if test "$src" = manual
-    set -l raw (grep "^manual_pwd=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
+    set -l raw (grep "^manual_pwd=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string replace -a \r '')
     if test -n "$raw"
       set manual_anchor (printf '%s' "$raw" | base64 -d 2>/dev/null)
       test -z "$manual_anchor"; and set manual_anchor (printf '%s' "$raw" | base64 -D 2>/dev/null)
+      test -z "$manual_anchor"; and set manual_anchor (printf '%s' "$raw" | base64 --decode 2>/dev/null)
       test -z "$manual_anchor"; and set manual_anchor "$raw"
     end
   end
@@ -170,6 +212,7 @@ function _ctx_profile_autoswitch --on-variable PWD
   if test -n "$path_profile"
     set profwd (bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$profiles_dir/$path_profile.conf")
     set profwd (string replace -r '^~' "$HOME" -- "$profwd")
+    test "$profwd" != "/"; and set profwd (string replace -r '/$' '' -- "$profwd")
     set display_root "$profwd"
     test -z "$display_root"; and test -n "$best_work_dir"; and set display_root "$best_work_dir"
   end
@@ -231,18 +274,22 @@ function _ctx_profile_autoswitch --on-variable PWD
     if test -n "$current"; and test "$current" != "$target"
       test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ← $current → $target\033[0m" >&2
       env CTX_QUIET=1 ctx deactivate --eval fish 2>/dev/null | source
-      if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+      if _ctx_as_use "$target"
         set _ctx_applied 1
       else
         test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
       end
     else if test -z "$current"
       test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] → $target\033[0m" >&2
-      if env CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null
+      if _ctx_as_use "$target"
         set _ctx_applied 1
       else
         test "$_ctx_notify" -eq 1; and echo -e "\033[2m[ctx] ctx use $target failed — run: ctx use $target\033[0m" >&2
       end
+    else if test "$CTX_ACTIVE_PROFILE" != "$target"
+      # Already active machine-wide (e.g. a new terminal): this shell still needs the exports.
+      _ctx_as_use "$target"
+      set _ctx_applied 1
     else
       set _ctx_applied 1
     end

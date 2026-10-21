@@ -20,7 +20,7 @@ source "$CTX_LIB/cmd_ops.sh"
 
 # ─── Flag parsing ─────────────────────────────────────────────────────────────
 CTX_DRY_RUN=0
-CTX_QUIET=0
+CTX_QUIET="${CTX_QUIET:-0}" # inherited (e.g. the autoswitch hook); --quiet/-q sets 1
 CTX_JSON=0
 POSITIONAL=()
 _ctx_passthrough=0
@@ -34,7 +34,7 @@ for arg in "$@"; do
     --)           _ctx_passthrough=1; POSITIONAL+=("$arg") ;;
     --dry-run)    CTX_DRY_RUN=1 ;;
     --quiet|-q)   CTX_QUIET=1 ;;
-    --no-gum)     HAS_GUM=false ;;
+    --no-gum)     HAS_GUM=false; export CTX_NO_GUM=1 ;;
     --json)       CTX_JSON=1 ;;
     *)            POSITIONAL+=("$arg") ;;
   esac
@@ -61,7 +61,7 @@ cmd_help() {
       "  import / add     Alias for setup" \
       "" \
       "$(gum style --faint "DAILY USE")" \
-      "  use  <name>      Activate a profile" \
+      "  use  <name>      Activate a profile (--eval bash|fish: print exports for eval)" \
       "  deactivate       Clear active profile (prints eval for your shell)" \
       "  list             List all profiles" \
       "  status           Active profile + live checks" \
@@ -121,6 +121,7 @@ ${BOLD}SETUP${RESET}
 
 ${BOLD}DAILY USE${RESET}
   use  <name>           Activate a profile (gh, SSH, AWS, Azure, GCP, kubectl)
+                        --eval bash|fish prints exports; the ctx shell function evals it
   deactivate            Clear active profile from ~/.ctx/config; run eval \"\$(ctx deactivate)\"
   list                  List all profiles
   status                Active profile + live checks
@@ -271,10 +272,12 @@ _ctx() {
             -p|--profile) _describe 'profiles' profiles ;;
           esac
           ;;
+        use) local ev=('--eval:Print shell exports for eval'); _describe 'use flags' ev ;;
       esac
       ;;
     5)
       case ${words[2]} in
+        use) [[ ${words[4]} == --eval ]] && { local sh=('bash' 'fish'); _describe 'shells' sh; } ;;
         setup|import|add) _describe 'setup options' setup_flags ;;
         secret)
           [[ ${words[3]} =~ ^(set|get|delete)$ ]] && _describe 'profiles' profiles
@@ -324,6 +327,10 @@ _ctx_comp() {
   if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
     COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
   fi
+  if [[ ${COMP_WORDS[1]} == use ]]; then
+    [[ $COMP_CWORD -eq 3 ]] && COMPREPLY=($(compgen -W "--eval" -- "$cur"))
+    [[ "$prev" == --eval ]] && COMPREPLY=($(compgen -W "bash fish" -- "$cur"))
+  fi
   if [[ ${COMP_WORDS[1]} == secret && ${COMP_WORDS[COMP_CWORD-1]} =~ ^(set|get|delete)$ ]]; then
     COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
   fi
@@ -346,6 +353,7 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard 
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx use' -l eval -d 'Print shell exports for eval' -x -a 'fish bash'
 complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx remove' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx verify' -a '(__fish_ctx_profiles)'
@@ -399,6 +407,22 @@ _ctx_core_exec() {
   exec "$bin" "$@"
 }
 
+# Run a command in ctx-core when it is installed, CTX_CORE is not "off", and the
+# binary says it implements the command (`ctx-core implements <cmd> [sub]`).
+# Once handed over there is no fallback: ctx-core's exit code is final.
+# Returns 1 (caller runs Bash) otherwise.
+_ctx_core_forward() {
+  [[ "${CTX_CORE:-}" == "off" ]] && return 1
+  local bin
+  bin="$(_ctx_core_bin)" || return 1
+  [[ -x "$bin" ]] || return 1
+  export CTX_VERSION CTX_DIR
+  CTX_BIN_PATH="$CTX_BIN/ctx"
+  export CTX_BIN_PATH
+  "$bin" implements "$1" "${2:-}" >/dev/null 2>&1 || return 1
+  exec "$bin" "$@"
+}
+
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
 main() {
   local cmd="${1:-help}"
@@ -407,14 +431,35 @@ main() {
   case "$cmd" in
     init)             cmd_init ;;
     setup|import|add) cmd_import "$@" ;;
-    use)              cmd_use "${1:-}" ;;
-    deactivate)      cmd_deactivate "$@" ;;
-    list|ls)          cmd_list ;;
-    status|st)        cmd_status ;;
+    use)
+      _ctx_core_forward use "$@" # always (quiet and non-quiet)
+      cmd_use "$@"
+      ;;
+    deactivate)
+      _ctx_core_forward deactivate "$@"
+      cmd_deactivate "$@"
+      ;;
+    list|ls)
+      if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward list --json; else _ctx_core_forward list; fi
+      cmd_list
+      ;;
+    status|st)
+      if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward status --json; else _ctx_core_forward status; fi
+      cmd_status
+      ;;
     clone)            cmd_clone "$@" ;;
-    workdir-prompt)   cmd_workdir_prompt ;;
-    config)           cmd_config "$@" ;;
-    secret)           cmd_secret "$@" ;;
+    workdir-prompt)
+      _ctx_core_forward workdir-prompt "$@"
+      cmd_workdir_prompt
+      ;;
+    config)
+      _ctx_core_forward config "$@"
+      cmd_config "$@"
+      ;;
+    secret)
+      case "${1:-}" in get|list|delete|set|migrate) _ctx_core_forward secret "$@" ;; esac
+      cmd_secret "$@"
+      ;;
     verify)           cmd_verify "${1:-}" ;;
     edit)
       local pname="${1:-}"
@@ -422,15 +467,27 @@ main() {
       profile_exists "$pname" || die "Profile '$pname' not found."
       "${EDITOR:-nano}" "$CTX_PROFILES_DIR/${pname}.conf"
       ;;
-    remove|rm|del)    cmd_remove "${1:-}" ;;
+    remove|rm|del)
+      _ctx_core_forward remove "$@"
+      cmd_remove "${1:-}"
+      ;;
     undo)             cmd_undo ;;
     install-hook)     cmd_install_hook "${1:-}" ;;
     upgrade)          cmd_upgrade "$@" ;;
     uninstall)        cmd_uninstall "$@" ;;
     doctor)           cmd_doctor ;;
-    guard)            cmd_guard "$@" ;;
-    env)              cmd_env "$@" ;;
-    run)              cmd_run "$@" ;;
+    guard)
+      case "${1:-}" in ""|check|status|install|uninstall|remove) _ctx_core_forward guard "$@" ;; esac
+      cmd_guard "$@"
+      ;;
+    env)
+      _ctx_core_forward env "$@"
+      cmd_env "$@"
+      ;;
+    run)
+      _ctx_core_forward run "$@"
+      cmd_run "$@"
+      ;;
     agent-rules)      cmd_agent_rules "$@" ;;
     mcp|knowledge)    _ctx_core_exec "$cmd" "$@" ;;
     completion)       cmd_completion "${1:-zsh}" ;;

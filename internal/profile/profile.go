@@ -17,7 +17,13 @@ type Profile struct {
 	AzureSubscription, AzureTenant, GCPProject, GCPAccount, KubeContext  string
 	SigningFormat, SigningKey                                            string
 	SecretKeys                                                           []string
-	ExtraEnvs                                                            map[string]string
+	// SecretKeysRaw is SECRET_KEYS exactly as the profile sets it (SecretKeys is its fields).
+	SecretKeysRaw string
+	ExtraEnvs     map[string]string
+	// ExtraEnvsRaw is EXTRA_ENVS exactly as the profile sets it (ordered, duplicates kept).
+	ExtraEnvsRaw string
+	// ProfileName is PROFILE_NAME as the profile sets it; `ctx use` reads secrets under it.
+	ProfileName string
 }
 
 var keys = []string{
@@ -61,7 +67,7 @@ func Load(dir, name string) (*Profile, error) {
 	if !plain || needsBash(vals) {
 		if bv, ok := bashValues(path); ok {
 			vals = bv
-			vals["WORK_DIR"] = expandHome(vals["WORK_DIR"], os.Getenv("HOME"))
+			vals["WORK_DIR"] = expandHome(vals["WORK_DIR"], os.Getenv("HOME"), true, true)
 		}
 	}
 	p := &Profile{
@@ -70,8 +76,8 @@ func Load(dir, name string) (*Profile, error) {
 		AzureSubscription: vals["AZURE_SUBSCRIPTION"], AzureTenant: vals["AZURE_TENANT"],
 		GCPProject: vals["GCP_PROJECT"], GCPAccount: vals["GCP_ACCOUNT"], KubeContext: vals["KUBE_CONTEXT"],
 		SigningFormat: vals["SIGNING_FORMAT"], SigningKey: vals["SIGNING_KEY"],
-		SecretKeys: strings.Fields(vals["SECRET_KEYS"]),
-		ExtraEnvs:  map[string]string{},
+		SecretKeys: strings.Fields(vals["SECRET_KEYS"]), SecretKeysRaw: vals["SECRET_KEYS"],
+		ExtraEnvs: map[string]string{}, ExtraEnvsRaw: vals["EXTRA_ENVS"], ProfileName: vals["PROFILE_NAME"],
 	}
 	for _, line := range strings.Split(vals["EXTRA_ENVS"], "\n") {
 		line = strings.TrimSpace(line)
@@ -199,9 +205,10 @@ func parse(src string) (vals map[string]string, plain bool) {
 				plain = false
 			}
 		}
-		if quote != '\'' {
-			v = expandHome(v, home)
-		}
+		// $HOME expands unless single-quoted. A leading ~ expands in WORK_DIR always
+		// (Bash's WORK_DIR readers do) and in other fields only when unquoted, as
+		// `source` does (ruling R6).
+		v = expandHome(v, home, quote != '\'', quote == 0 || k == "WORK_DIR")
 		if known[k] {
 			vals[k] = v
 		}
@@ -218,13 +225,13 @@ func plainBare(v string) bool {
 	return !strings.HasPrefix(v, "~") || v == "~" || strings.HasPrefix(v, "~/")
 }
 
-func expandHome(v, home string) string {
+func expandHome(v, home string, vars, tilde bool) string {
 	for _, p := range []string{"${HOME}", "$HOME"} {
-		if v == p || strings.HasPrefix(v, p+"/") {
+		if vars && (v == p || strings.HasPrefix(v, p+"/")) {
 			return home + v[len(p):]
 		}
 	}
-	if v == "~" || strings.HasPrefix(v, "~/") {
+	if tilde && (v == "~" || strings.HasPrefix(v, "~/")) {
 		return home + v[1:]
 	}
 	return v

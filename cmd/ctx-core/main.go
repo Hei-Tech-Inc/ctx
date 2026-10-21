@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,17 +14,70 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/cli"
+	"github.com/Hei-Tech-Inc/ctx/internal/guard"
 	"github.com/Hei-Tech-Inc/ctx/internal/knowledge"
 	"github.com/Hei-Tech-Inc/ctx/internal/mcpserver"
 	"github.com/Hei-Tech-Inc/ctx/internal/profile"
 	"github.com/Hei-Tech-Inc/ctx/internal/resolve"
 	"github.com/Hei-Tech-Inc/ctx/internal/secret"
+	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge> [args]\n"
+const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|guard> [args]\n"
+
+// implemented is the single table of commands ctx-core runs instead of Bash.
+// Each entry reports whether it handles the given first argument (the
+// subcommand or flag; "" when absent). Later tasks flip entries to true.
+// list and status take no subcommand besides --json; guard for every subcommand.
+var implemented = map[string]func(sub string) bool{
+	"list":           func(sub string) bool { return sub == "" || sub == "--json" },
+	"status":         func(sub string) bool { return sub == "" || sub == "--json" },
+	"workdir-prompt": func(string) bool { return true },
+	"env":            func(string) bool { return true },
+	"run":            func(string) bool { return true },
+	"guard":          func(sub string) bool { return guardSubs[sub] },
+	"secret":         func(sub string) bool { return secretSubs[sub] },
+	"config":         func(sub string) bool { return configSubs[sub] },
+	"deactivate":     func(string) bool { return true },
+	"use":            func(string) bool { return true },
+	"remove":         func(string) bool { return true },
+}
+
+// secretSubs are the `secret` subcommands ctx-core runs.
+var secretSubs = map[string]bool{"get": true, "list": true, "delete": true, "set": true, "migrate": true}
+
+// guardSubs are the `guard` subcommands ctx-core runs ("" is status).
+var guardSubs = map[string]bool{"": true, "check": true, "install": true, "uninstall": true, "remove": true, "status": true}
+
+// configSubs are the `config` subcommands ctx-core runs ("" is show).
+var configSubs = map[string]bool{
+	"": true, "show": true, "work-root": true, "secret-provider": true, "prompt-workdir-depth": true,
+	"prompt-extra-paths": true, "autoswitch-notify": true, "export": true, "import": true,
+}
+
+func implements(cmd string, rest []string) bool {
+	f, ok := implemented[cmd]
+	if !ok {
+		return false
+	}
+	sub := ""
+	if len(rest) > 0 {
+		sub = rest[0]
+	}
+	return f(sub)
+}
+
+// ctxVersion is the ctx version bin/ctx passes in CTX_VERSION, else the build version.
+func ctxVersion() string {
+	if v := os.Getenv("CTX_VERSION"); v != "" {
+		return v
+	}
+	return version
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -38,6 +92,62 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "ctx-core %s\n", version)
 		return 0
+	case "list", "status":
+		return runListStatus(args, stdout, stderr)
+	case "workdir-prompt":
+		pwd, err := os.Getwd()
+		if err == nil {
+			err = cli.WorkdirPrompt(stdout, pwd)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "ctx-core: %v\n", err)
+		}
+		return 0 // the Bash command never fails
+	case "env", "run":
+		return runEnvRun(args, stdout, stderr)
+	case "secret":
+		if len(args) < 2 || !implements("secret", args[1:]) {
+			fmt.Fprintln(stderr, "ctx-core: secret supports only get, list, delete, set and migrate")
+			return 127
+		}
+		term := osTerm(stdout, stderr)
+		return cli.SecretIn(term, args[1:])
+	case "config":
+		return cli.Config(stdout, stderr, args[1:])
+	case "deactivate":
+		return cli.Deactivate(stdout, stderr, args[1:])
+	case "use":
+		term := osTerm(stdout, stderr)
+		return cli.UseIn(term, args[1:])
+	case "remove":
+		term := osTerm(stdout, stderr)
+		return cli.Remove(term, args[1:])
+	case "guard":
+		sub := ""
+		if len(args) > 1 {
+			sub = args[1]
+		}
+		switch sub {
+		case "", "status":
+			return guard.Status(stdout, stderr)
+		case "install":
+			return guard.Install(stdout, stderr)
+		case "uninstall", "remove":
+			return guard.Uninstall(stdout, stderr)
+		case "check":
+			hook, rest := "", []string(nil)
+			if len(args) > 2 {
+				hook, rest = args[2], args[3:]
+			}
+			return guard.Check(hook, rest, stderr)
+		}
+		fmt.Fprintln(stderr, "ctx-core: guard supports only status, install, uninstall and check")
+		return 127
+	case "implements":
+		if len(args) >= 2 && implements(args[1], args[2:]) {
+			return 0
+		}
+		return 1
 	case "knowledge":
 		return runKnowledge(args[1:], stdout, stderr)
 	case "mcp":
@@ -72,7 +182,7 @@ func runMCP(args []string, stderr io.Writer) int {
 		return 1
 	}
 	opts.Cwd = cwd
-	d := mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.CLIGetter{}}
+	d := mcpserver.Deps{ProfilesDir: profile.Dir(), Getter: secret.ProviderGetter{}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := mcpserver.Run(ctx, d, opts, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
@@ -132,4 +242,61 @@ func runKnowledge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, p)
 	}
 	return 0
+}
+
+// runListStatus serves `list`, `status` and their --json forms. Any other form
+// exits 127.
+func runListStatus(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
+		fmt.Fprintf(stderr, "ctx-core: %s takes no arguments other than --json\n", args[0])
+		return 127
+	}
+	if len(args) == 1 {
+		term := osTerm(stdout, stderr)
+		if args[0] == "list" {
+			return cli.ListText(term)
+		}
+		return cli.StatusText(term)
+	}
+	var err error
+	if args[0] == "list" {
+		err = cli.ListJSON(stdout, ctxVersion())
+	} else {
+		var pwd string
+		if pwd, err = os.Getwd(); err == nil {
+			err = cli.StatusJSON(stdout, ctxVersion(), pwd)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "\u2717 %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// runEnvRun serves `env` and `run`. run replaces the process and returns only on failure.
+func runEnvRun(args []string, stdout, stderr io.Writer) int {
+	var err error
+	if args[0] == "env" {
+		err = cli.Env(stdout, args[1:])
+	} else {
+		err = cli.Run(args[1:])
+	}
+	if err == nil {
+		return 0
+	}
+	var ee *cli.ExitError
+	if errors.As(err, &ee) {
+		fmt.Fprintln(stderr, ee.Msg)
+		return ee.Code
+	}
+	fmt.Fprintf(stderr, "\u2717 %v\n", err)
+	return 1
+}
+
+// osTerm is the process terminal with its output streams replaced.
+func osTerm(stdout, stderr io.Writer) tui.Term {
+	term := tui.FromOS()
+	term.Out, term.Err = stdout, stderr
+	return term
 }

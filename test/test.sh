@@ -280,6 +280,31 @@ test_autoswitch_notify_default_off() {
   pass "autoswitch_notify default off"
 }
 
+test_base64_decode_gnu_style() {
+  (
+    set -euo pipefail
+    local td
+    td="$(mktemp -d)"
+    # GNU-style: -d prints the text, then exits 1 on stray padding; -D is unknown.
+    mkdir -p "$td/bin"
+    cat >"$td/bin/base64" <<'STUB'
+#!/bin/sh
+case "$1" in
+  -d|--decode) printf '/tmp/x'; exit 1 ;;
+  *) exit 1 ;;
+esac
+STUB
+    chmod +x "$td/bin/base64"
+    [[ "$(PATH="$td/bin:$PATH" ctx_base64_decode 'L3RtcC94==')" == /tmp/x ]] || { echo "decoded twice or not at all"; exit 1; }
+    export CTX_DIR="$td/ctx" CTX_CONFIG="$td/ctx/config"
+    mkdir -p "$CTX_DIR"
+    printf 'manual_pwd=L3RtcC94\r\n' >"$CTX_CONFIG"
+    [[ "$(PATH="$td/bin:$PATH" ctx_activation_get_manual_pwd)" == /tmp/x ]] || { echo "manual_pwd with CRLF"; exit 1; }
+    rm -rf "$td"
+  ) || fail "base64 decode (GNU style)"
+  pass "manual_pwd decodes once with GNU base64 and CRLF config"
+}
+
 test_config_upsert_literal_values() {
   (
     set -euo pipefail
@@ -324,7 +349,16 @@ test_autoswitch_hook_resolution() {
     printf 'profile= a \r\n' >"$td/w/mono/svc/.ctx"
     used="$td/used"
     unset GH_TOKEN _CTX_GH_PROFILE
-    ctx() { [[ "$1" == use ]] && printf '%s\n' "$2" >>"$used"; return 0; }
+    # Stub binary on PATH: the hook runs `command ctx use --eval bash <name>`, never a shell function.
+    mkdir -p "$td/bin"
+    cat >"$td/bin/ctx" <<'STUB'
+#!/bin/sh
+[ "$1" = use ] || exit 0
+for a; do last=$a; done
+printf '%s\n' "$last" >>"$CTX_TEST_USED"
+STUB
+    chmod +x "$td/bin/ctx"
+    export PATH="$td/bin:$PATH" CTX_TEST_USED="$used"
     gh() { [[ "$1 $2 $3" == "auth token -u" ]] && printf 'tok-%s' "$4"; }
     # shellcheck source=../lib/ctx_autoswitch.bash
     source "$ROOT/lib/ctx_autoswitch.bash"
@@ -355,6 +389,56 @@ test_autoswitch_hook_resolution() {
     rm -rf "$td"
   ) || fail "autoswitch hook resolution"
   pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx, per-shell GH_TOKEN)"
+}
+
+test_trailing_slash_work_dir() {
+  (
+    set -euo pipefail
+    local td ROOT mode out rc used
+    ROOT="$ROOT_DIR"
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+    unset GIT_COMMITTER_EMAIL CTX_GUARD
+    mkdir -p "$CTX_DIR/profiles" "$td/w/acme/r"
+    : >"$CTX_DIR/config"
+    printf 'GIT_EMAIL=dev@acme.com\nWORK_DIR="%s/"\n' "$td/w/acme" >"$CTX_DIR/profiles/acme.conf"
+    git -C "$td/w/acme/r" init -q
+    # Library resolvers
+    [[ "$(ctx_profile_read_work_dir "$CTX_DIR/profiles/acme.conf")" == "$td/w/acme" ]] || { echo "read_work_dir keeps slash"; exit 1; }
+    [[ "$(ctx_resolve_path_with_root "$td/w/acme/r" "$CTX_DIR/profiles")" == "acme"$'\t'"$td/w/acme" ]] || { echo "resolve keeps slash"; exit 1; }
+    printf 'WORK_DIR=/\n' >"$td/root.conf"
+    [[ "$(ctx_profile_read_work_dir "$td/root.conf")" == "/" ]] || { echo "root WORK_DIR trimmed"; exit 1; }
+    # Guard in both modes
+    for mode in off default; do
+      rc=0
+      if [[ $mode == off ]]; then
+        out="$(cd "$td/w/acme/r" && GIT_AUTHOR_EMAIL=x@y.z CTX_CORE=off "$ROOT_DIR/bin/ctx" guard check pre-commit 2>&1)" || rc=$?
+      else
+        out="$(cd "$td/w/acme/r" && env -u CTX_CORE GIT_AUTHOR_EMAIL=x@y.z "$ROOT_DIR/bin/ctx" guard check pre-commit 2>&1)" || rc=$?
+      fi
+      [[ $rc -ne 0 && "$out" == *"commit blocked"* ]] || { echo "guard ($mode): rc=$rc out=$out"; exit 1; }
+    done
+    # Autoswitch hook
+    used="$td/used"
+    # Stub binary on PATH: the hook runs `command ctx use --eval bash <name>`, never a shell function.
+    mkdir -p "$td/bin"
+    cat >"$td/bin/ctx" <<'STUB'
+#!/bin/sh
+[ "$1" = use ] || exit 0
+for a; do last=$a; done
+printf '%s\n' "$last" >>"$CTX_TEST_USED"
+STUB
+    chmod +x "$td/bin/ctx"
+    export PATH="$td/bin:$PATH" CTX_TEST_USED="$used"
+    # shellcheck source=../lib/ctx_autoswitch.bash
+    source "$ROOT/lib/ctx_autoswitch.bash"
+    cd "$td/w/acme/r"
+    : >"$used"
+    _ctx_profile_autoswitch 2>/dev/null
+    [[ "$(cat "$used")" == acme ]] || { echo "autoswitch: '$(cat "$used")'"; exit 1; }
+    rm -rf "$td"
+  ) || fail "trailing-slash WORK_DIR"
+  pass "trailing-slash WORK_DIR matches in Bash and Go (resolver, guard, autoswitch)"
 }
 
 test_setup_scope_clone_batch() {
@@ -540,6 +624,12 @@ test_ctx_run_env_agent_rules() {
     [[ "$(ctx run -- printf '%s,' --json -q --dry-run)" == "--json,-q,--dry-run," ]] || { echo "flags not passed through"; exit 1; }
     (cd "$td" && ctx run -p acme -- sh -c 'printf %s "$AWS_PROFILE"' | grep -qx acme-prod) || { echo "-p outside folder"; exit 1; }
 
+    printf '#!/bin/sh\necho rel-ran\n' >reltool && chmod +x reltool
+    [[ "$(PATH=".:$PATH" ctx run -- reltool)" == rel-ran ]] || { echo "run: relative PATH entry"; exit 1; }
+    printf 'echo ns-ran "$1"\n' >ns.sh && chmod +x ns.sh
+    [[ "$(ctx run -- ./ns.sh a)" == "ns-ran a" ]] || { echo "run: script without shebang"; exit 1; }
+    rm -f reltool ns.sh
+
     out="$(ctx env)"
     grep -q API_KEY <<<"$out" && { echo "env printed secrets without --secrets"; exit 1; }
     (eval "$out"; [[ "$GIT_AUTHOR_NAME" == "Dev One" && "$FOO" == "bar baz" ]]) || { echo "env eval"; exit 1; }
@@ -625,6 +715,91 @@ test_use_keeps_user_agent_keys() {
   pass "ctx use adds the profile SSH key without flushing the agent; deactivate removes only ctx's key"
 }
 
+test_core_forward_fallback() {
+  (
+    set -euo pipefail
+    local td out want rc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    export CTX_DIR="$td/ctx" HOME="$td/home"
+    unset CTX_CORE # the suite may run with CTX_CORE=off; this test sets it where needed
+    mkdir -p "$CTX_DIR/profiles" "$HOME"
+    printf 'PROFILE_NAME=alpha\nGIT_NAME=A\nGIT_EMAIL=a@example.com\n' >"$CTX_DIR/profiles/alpha.conf"
+    : >"$CTX_DIR/config"
+    want="$(CTX_CORE=off "$ROOT_DIR/bin/ctx" --json list)"
+    [[ "$want" == *'"command"'*'list'* ]] || { echo "bash json: $want"; exit 1; }
+    # implements exits 1: Bash runs, silently
+    cat >"$td/fakeno" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"$td/calls"
+exit 1
+EOS
+    chmod +x "$td/fakeno"
+    out="$(CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
+    [[ "$out" == "$want" ]] || { echo "fallback: $out"; exit 1; }
+    [[ ! -s "$td/err" ]] || { echo "fallback stderr: $(cat "$td/err")"; exit 1; }
+    [[ "$(cat "$td/calls")" == "implements list --json" ]] || { echo "calls: $(cat "$td/calls")"; exit 1; }
+    # CTX_CORE=off: Bash JSON and the fake is never called
+    rm -f "$td/calls"
+    out="$(CTX_CORE=off CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" --json list)"
+    [[ "$out" == "$want" ]] || { echo "off: $out"; exit 1; }
+    [[ ! -e "$td/calls" ]] || { echo "CTX_CORE=off still called ctx-core"; exit 1; }
+    # Non-executable CTX_CORE_BIN: Bash
+    printf '#!/usr/bin/env bash\necho GO\n' >"$td/noexec"
+    chmod -x "$td/noexec"
+    out="$(CTX_CORE_BIN="$td/noexec" "$ROOT_DIR/bin/ctx" --json list 2>/dev/null)"
+    [[ "$out" == "$want" ]] || { echo "noexec: $out"; exit 1; }
+    # implements exits 0: ctx-core runs with the exported env
+    cat >"$td/fakego" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == implements ]] && exit 0
+echo "GO $*"
+echo "env $CTX_VERSION|$CTX_DIR|$CTX_BIN_PATH" >&2
+EOS
+    chmod +x "$td/fakego"
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" --json list 2>"$td/err")"
+    [[ "$out" == "GO list --json" ]] || { echo "go list: $out"; exit 1; }
+    [[ "$(cat "$td/err")" == "env "*"|$CTX_DIR|$ROOT_DIR/bin/ctx" ]] || { echo "env: $(cat "$td/err")"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" guard check pre-commit 2>/dev/null </dev/null)"
+    [[ "$out" == "GO guard check pre-commit" ]] || { echo "go guard: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" env -p alpha 2>/dev/null)"
+    [[ "$out" == "GO env -p alpha" ]] || { echo "go env: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" deactivate --eval bash 2>/dev/null)"
+    [[ "$out" == "GO deactivate --eval bash" ]] || { echo "go deactivate: $out"; exit 1; }
+    # deactivate falls back to Bash when ctx-core does not implement it
+    rm -f "$td/calls"
+    out="$(CTX_CORE_BIN="$td/fakeno" "$ROOT_DIR/bin/ctx" deactivate --eval bash 2>"$td/err")"
+    [[ -z "$out" && "$(cat "$td/err")" == "No active profile." ]] || { echo "deactivate fallback: $out / $(cat "$td/err")"; exit 1; }
+    [[ "$(cat "$td/calls")" == "implements deactivate --eval" ]] || { echo "deactivate calls: $(cat "$td/calls")"; exit 1; }
+    # implements 0 but the command exits 127: that is the answer, Bash must not run
+    cat >"$td/fake127" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == implements ]] && exit 0
+exit 127
+EOS
+    chmod +x "$td/fake127"
+    set +e
+    out="$(CTX_CORE_BIN="$td/fake127" "$ROOT_DIR/bin/ctx" --json list 2>/dev/null)"
+    rc=$?
+    set -e
+    [[ $rc -eq 127 && -z "$out" ]] || { echo "rc127: rc=$rc out=$out"; exit 1; }
+    # Text list and its ls alias forward as the canonical name
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" ls 2>/dev/null)"
+    [[ "$out" == "GO list" ]] || { echo "text list not forwarded: $out"; exit 1; }
+    out="$(CTX_CORE_BIN="$td/fakego" "$ROOT_DIR/bin/ctx" st 2>/dev/null)"
+    [[ "$out" == "GO status" ]] || { echo "text status not forwarded: $out"; exit 1; }
+    # Any exit code is ctx-core's answer
+    printf '#!/usr/bin/env bash\n[[ "$1" == implements ]] && exit 0\necho nope\nexit 3\n' >"$td/fake3"
+    chmod +x "$td/fake3"
+    set +e
+    out="$(CTX_CORE_BIN="$td/fake3" "$ROOT_DIR/bin/ctx" --json list)"
+    rc=$?
+    set -e
+    [[ $rc -eq 3 && "$out" == nope ]] || { echo "rc3: rc=$rc out=$out"; exit 1; }
+  ) || fail "ctx-core forward fallback"
+  pass "read-only commands forward to ctx-core and run only when ctx-core implements them; otherwise Bash (also CTX_CORE=off)"
+}
+
 test_ctx_core_dispatch() {
   (
     set -euo pipefail
@@ -684,6 +859,338 @@ test_doctor_reports_ctx_core() {
   pass "ctx doctor reports ctx-core version/path or a warning"
 }
 
+# Coverage guard: with CTX_CORE enabled, make sure the suite really exercises the Go
+# path. Without it a missing or unfound bin/ctx-core silently turns the default-mode
+# run into a second Bash-only run. CTX_CORE_OPTIONAL=1 skips it for local runs without Go.
+test_ctx_core_is_exercised() {
+  if [[ "${CTX_CORE:-}" == "off" ]]; then
+    pass "ctx-core coverage guard skipped (CTX_CORE=off)"
+    return 0
+  fi
+  if [[ ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    if [[ "${CTX_CORE_OPTIONAL:-}" == "1" ]]; then
+      pass "ctx-core coverage guard skipped (bin/ctx-core missing, CTX_CORE_OPTIONAL=1)"
+      return 0
+    fi
+    fail "bin/ctx-core is missing: build it (go build -o bin/ctx-core ./cmd/ctx-core) or set CTX_CORE_OPTIONAL=1 to run Bash-only locally"
+  fi
+  (
+    set -euo pipefail
+    local td out
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    trap 'rm -rf "$td"' EXIT
+    mkdir -p "$td/home" "$td/ctx"
+    out="$(env -u CTX_CORE_BIN HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    [[ "$out" == *"($ROOT_DIR/bin/ctx-core)"* ]] || { echo "bin/ctx does not find the repo's bin/ctx-core: $out"; exit 1; }
+    "$ROOT_DIR/bin/ctx-core" implements list --json >/dev/null || { echo "ctx-core implements list --json failed"; exit 1; }
+  ) || fail "ctx-core coverage guard"
+  pass "bin/ctx finds the repo's bin/ctx-core and it implements the forwarded commands"
+}
+
+test_ctx_core_is_exercised
+# Profile "demo" with AWS_PROFILE_NAME and a file-provider secret full of shell metacharacters.
+# Sets td and exports CTX_TEST_SECRET in the calling subshell.
+_use_eval_fixture() {
+  td="$(cd "$(mktemp -d)" && pwd -P)"
+  export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1 PATH="$ROOT_DIR/bin:$PATH"
+  unset AWS_PROFILE API_KEY CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER CTX_QUIET GH_TOKEN
+  mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/demo" "$td/w/demo/r"
+  {
+    printf 'PROFILE_NAME=demo\nGIT_NAME=Dev\nGIT_EMAIL=dev@demo.com\nWORK_DIR=%s\n' "$td/w/demo"
+    printf 'AWS_PROFILE_NAME="demo-prod"\nSECRET_KEYS=API_KEY\n'
+  } >"$CTX_DIR/profiles/demo.conf"
+  printf 'secret_provider=file\n' >"$CTX_DIR/config"
+  # Literal quotes, $, backticks, a backslash and a newline are the point of this value.
+  # shellcheck disable=SC2089,SC2090
+  CTX_TEST_SECRET=$'a b \'q\' $x `id` "dq" \\\nline2'
+  # shellcheck disable=SC2090
+  export CTX_TEST_SECRET
+  printf '%s' "$CTX_TEST_SECRET" >"$CTX_DIR/secrets/demo/API_KEY"
+}
+
+test_use_eval_exports() {
+  (
+    set -euo pipefail
+    local td out err
+    _use_eval_fixture
+    cd "$td"
+    out="$(ctx --no-gum use demo --eval bash 2>"$td/err")" || { echo "use --eval failed: $(cat "$td/err")"; exit 1; }
+    grep -q 'Switching to' "$td/err" || { echo "human messages not on stderr"; exit 1; }
+    if grep -vq '^export [A-Za-z_][A-Za-z0-9_]*=' <<<"$out"; then echo "non-export stdout: $out"; exit 1; fi
+    (
+      [[ -z "$(eval "$out")" ]] || { echo "eval printed output"; exit 1; }
+      eval "$out"
+      [[ "$AWS_PROFILE" == demo-prod && "$CTX_ACTIVE_PROFILE" == demo ]] || { echo "AWS/active: $out"; exit 1; }
+      [[ "$API_KEY" == "$CTX_TEST_SECRET" ]] || { echo "secret did not round-trip: '$API_KEY'"; exit 1; }
+      eval "$(ctx deactivate --eval bash 2>/dev/null)"
+      [[ -z "${AWS_PROFILE+x}${API_KEY+x}${CTX_ACTIVE_PROFILE+x}" ]] || { echo "deactivate left vars set"; exit 1; }
+    ) || exit 1
+    [[ "$(ctx -q use --eval bash demo 2>/dev/null)" == "$out" ]] || { echo "--eval before name"; exit 1; }
+
+    out="$(ctx use demo --eval fish 2>/dev/null)"
+    grep -qxF "set -gx AWS_PROFILE 'demo-prod'" <<<"$out" || { echo "fish output: $out"; exit 1; }
+    grep -qxF "set -gx CTX_ACTIVE_PROFILE 'demo'" <<<"$out" || { echo "fish active: $out"; exit 1; }
+    if command -v fish >/dev/null 2>&1; then
+      # shellcheck disable=SC2016
+      fish -c 'source; test "$API_KEY" = "$CTX_TEST_SECRET"; and test "$AWS_PROFILE" = demo-prod' <<<"$out" \
+        || { echo "fish source"; exit 1; }
+    fi
+
+    err="$(ctx --no-gum use demo 2>&1 >/dev/null)"
+    grep -q 'not applied to this shell' <<<"$err" || { echo "no plain-use warning: $err"; exit 1; }
+    # shellcheck disable=SC2016
+    grep -qF 'eval "$(ctx use demo --eval bash)"' <<<"$err" || { echo "warning lacks fix: $err"; exit 1; }
+    [[ -z "$(ctx -q use demo 2>&1 >/dev/null)" ]] || { echo "quiet use warned"; exit 1; }
+    rm -rf "$td"
+  ) || fail "ctx use --eval"
+  pass "ctx use --eval bash|fish prints only shell code; plain use warns the vars did not reach the shell"
+}
+
+test_shell_wrapper_applies_use() {
+  local sh
+  for sh in bash zsh; do
+    command -v "$sh" >/dev/null 2>&1 || continue
+    (
+      set -euo pipefail
+      local td
+      _use_eval_fixture
+      cd "$td"
+      # shellcheck disable=SC2016
+      "$sh" -c '
+        source "$1/lib/ctx_autoswitch.bash"
+        ctx --no-gum use demo >/dev/null 2>&1 || { echo "use failed"; exit 1; }
+        [[ "$AWS_PROFILE" == demo-prod && "$API_KEY" == "$CTX_TEST_SECRET" && "$CTX_ACTIVE_PROFILE" == demo ]] || { echo "use: AWS=${AWS_PROFILE:-}"; exit 1; }
+        ctx deactivate >/dev/null 2>&1
+        [[ -z "${AWS_PROFILE+x}${API_KEY+x}${CTX_ACTIVE_PROFILE+x}" ]] || { echo "deactivate left vars"; exit 1; }
+        ctx -q use demo || { echo "-q use failed"; exit 1; }
+        [[ "$AWS_PROFILE" == demo-prod ]] || { echo "-q use: AWS unset"; exit 1; }
+        ctx deactivate >/dev/null 2>&1
+        ctx --dry-run use demo >/dev/null 2>&1 || true
+        [[ -z "${AWS_PROFILE+x}" ]] || { echo "--dry-run use changed the shell"; exit 1; }
+        [[ "$(ctx list 2>&1)" == "$(command ctx list 2>&1)" ]] || { echo "list passthrough"; exit 1; }
+        ctx version | grep -q "^ctx version" || { echo "version passthrough"; exit 1; }
+        ctx use nosuch >/dev/null 2>&1 && { echo "bad profile exit 0"; exit 1; }
+        ctx nosuchcmd >/dev/null 2>&1 && { echo "bad command exit 0"; exit 1; }
+        exit 0
+      ' _ "$ROOT_DIR" || exit 1
+      rm -rf "$td"
+    ) || fail "shell wrapper ($sh)"
+  done
+  pass "ctx shell wrapper applies use/deactivate to the current shell (bash, zsh)"
+}
+
+test_autoswitch_exports_profile_env() {
+  (
+    set -euo pipefail
+    local td
+    _use_eval_fixture
+    cd "$td"
+    # shellcheck disable=SC2016
+    bash -c '
+      source "$1/lib/ctx_autoswitch.bash"
+      cd "$2/w/demo/r" && _ctx_profile_autoswitch
+      [[ "${AWS_PROFILE:-}" == demo-prod && "${API_KEY:-}" == "$CTX_TEST_SECRET" ]] || { echo "hook did not export: AWS=${AWS_PROFILE:-}"; exit 1; }
+      cd "$2" && _ctx_profile_autoswitch
+      [[ -z "${AWS_PROFILE+x}${API_KEY+x}" ]] || { echo "hook left vars after leaving"; exit 1; }
+      cd "$2/w/demo/r" && _ctx_profile_autoswitch
+    ' _ "$ROOT_DIR" "$td" || exit 1
+    grep -qx 'active=demo' "$CTX_DIR/config" || { echo "not active"; exit 1; }
+    # A new terminal opened in the folder while demo is already active still gets the env.
+    # shellcheck disable=SC2016
+    bash -c '
+      cd "$2/w/demo/r" && source "$1/lib/ctx_autoswitch.bash"
+      [[ "${AWS_PROFILE:-}" == demo-prod ]] || { echo "new shell: AWS unset"; exit 1; }
+    ' _ "$ROOT_DIR" "$td" || exit 1
+    rm -rf "$td"
+  ) || fail "autoswitch exports profile env"
+  pass "autoswitch hook applies AWS_PROFILE and secrets to the shell"
+}
+
+test_autoswitch_keeps_manual_lock() {
+  (
+    set -euo pipefail
+    local td
+    _use_eval_fixture
+    cd "$td"
+    ctx --no-gum use demo >/dev/null 2>&1
+    grep -qx 'active_source=manual' "$CTX_DIR/config" || { echo "manual use did not lock"; exit 1; }
+    # The hook re-applying the same profile (a new terminal) must not downgrade the lock.
+    CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use demo --eval bash >/dev/null 2>&1
+    grep -qx 'active_source=manual' "$CTX_DIR/config" || { echo "lock downgraded to auto"; exit 1; }
+    rm -rf "$td"
+  ) || fail "autoswitch keeps manual lock"
+  pass "autoswitch re-applying the active profile keeps a manual lock"
+}
+
+test_quiet_use_cloud_tools_succeed() {
+  (
+    set -euo pipefail
+    local td t err rc=0
+    _use_eval_fixture
+    mkdir -p "$td/bin"
+    for t in az gcloud kubectl; do
+      printf '#!/bin/sh\nexit 0\n' >"$td/bin/$t"
+      chmod +x "$td/bin/$t"
+    done
+    printf 'AZURE_SUBSCRIPTION=sub\nGCP_PROJECT=proj\nKUBE_CONTEXT=kc\n' >>"$CTX_DIR/profiles/demo.conf"
+    export PATH="$td/bin:$PATH"
+    cd "$td"
+    ctx -q use demo --eval bash >/dev/null 2>"$td/err" || rc=$?
+    err="$(cat "$td/err")"
+    [[ $rc -eq 0 ]] || { echo "quiet use exit $rc: $err"; exit 1; }
+    [[ -z "$err" ]] || { echo "quiet use warned on success: $err"; exit 1; }
+    rm -rf "$td"
+  ) || fail "quiet use with az/gcloud/kubectl"
+  pass "quiet ctx use treats az/gcloud/kubectl success as success"
+}
+
+test_inherited_quiet_use() {
+  (
+    set -euo pipefail
+    local td out mode
+    _use_eval_fixture
+    cd "$td"
+    # The autoswitch hook runs `CTX_QUIET=1 CTX_AUTO_SWITCH=1 command ctx use --eval bash <p>`.
+    for mode in off on; do
+      out="$(CTX_CORE="$mode" CTX_QUIET=1 ctx use demo --eval bash 2>"$td/err")" || { echo "use failed ($mode): $(cat "$td/err")"; exit 1; }
+      [[ -z "$(cat "$td/err")" ]] || { echo "inherited CTX_QUIET=1 not quiet ($mode): $(cat "$td/err")"; exit 1; }
+      grep -qx 'export AWS_PROFILE=demo-prod' <<<"$out" || { echo "exports ($mode): $out"; exit 1; }
+    done
+    # With ctx-core installed, quiet use runs in Go; non-quiet use runs there too.
+    if [[ "${CTX_CORE:-}" != off && -x "$ROOT_DIR/bin/ctx-core" ]]; then
+      printf '#!/bin/sh\necho "$*" >>"%s/core-calls"\nexec "%s" "$@"\n' "$td" "$ROOT_DIR/bin/ctx-core" >"$td/core"
+      chmod +x "$td/core"
+      : >"$td/core-calls"
+      CTX_CORE_BIN="$td/core" CTX_QUIET=1 ctx use demo --eval bash >/dev/null 2>&1
+      grep -qx 'use demo --eval bash' "$td/core-calls" || { echo "quiet use not forwarded: $(cat "$td/core-calls")"; exit 1; }
+      : >"$td/core-calls"
+      CTX_CORE_BIN="$td/core" ctx --no-gum use demo --eval bash >/dev/null 2>&1
+      grep -qx 'use demo --eval bash' "$td/core-calls" || { echo "non-quiet use not forwarded: $(cat "$td/core-calls")"; exit 1; }
+    fi
+    rm -rf "$td"
+  ) || fail "inherited CTX_QUIET"
+  pass "ctx use honors an inherited CTX_QUIET=1 (the autoswitch hook); quiet use runs in ctx-core"
+}
+
+# With the real bin/ctx-core, quiet use and deactivate are served by Go (a wrapper logs each ctx-core argv).
+test_use_deactivate_served_by_go() {
+  if [[ "${CTX_CORE:-}" == off || ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    pass "Go use/deactivate check skipped (CTX_CORE=off or no bin/ctx-core)"
+    return 0
+  fi
+  (
+    set -euo pipefail
+    local td out
+    _use_eval_fixture
+    cd "$td"
+    printf '#!/bin/sh\necho "$*" >>"%s/core-calls"\nexec "%s" "$@"\n' "$td" "$ROOT_DIR/bin/ctx-core" >"$td/core"
+    chmod +x "$td/core"
+    : >"$td/core-calls"
+    export CTX_CORE_BIN="$td/core"
+    out="$(CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use demo --eval bash 2>/dev/null)"
+    grep -qx 'export AWS_PROFILE=demo-prod' <<<"$out" || { echo "use exports: $out"; exit 1; }
+    out="$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)"
+    grep -q '^unset AWS_PROFILE ' <<<"$out" || { echo "deactivate unsets: $out"; exit 1; }
+    grep -qx 'use demo --eval bash' "$td/core-calls" || { echo "use not run by ctx-core: $(cat "$td/core-calls")"; exit 1; }
+    grep -qx 'deactivate --eval bash' "$td/core-calls" || { echo "deactivate not run by ctx-core: $(cat "$td/core-calls")"; exit 1; }
+    rm -rf "$td"
+  ) || fail "use/deactivate served by ctx-core"
+  pass "quiet ctx use and ctx deactivate run in ctx-core"
+}
+
+test_plain_prompts_use_stderr() {
+  (
+    set -euo pipefail
+    local td out err
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$ROOT_DIR/bin:$PATH"
+    mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/p"
+    printf 'PROFILE_NAME=p\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' >"$CTX_DIR/profiles/p.conf"
+    printf 'secret_provider=file\n' >"$CTX_DIR/config"
+
+    out="$(printf 'hunter2\n' | ctx --no-gum secret set p API_KEY 2>/dev/null)"
+    [[ "$(cat "$CTX_DIR/secrets/p/API_KEY")" == hunter2 ]] || { echo "secret value: $(cat "$CTX_DIR/secrets/p/API_KEY")"; exit 1; }
+    ! grep -q '?' <<<"$out" || { echo "prompt leaked to stdout: $out"; exit 1; }
+
+    # shellcheck disable=SC2034 # read by pick_one/pick_many from core.sh
+    HAS_GUM=false
+    out="$(printf '2\n' | pick_one "Pick" a b c 2>/dev/null)"
+    [[ "$out" == b ]] || { echo "pick_one captured: '$out'"; exit 1; }
+    out="$(printf '1,3\n' | pick_many "Pick" a b c 2>/dev/null)"
+    [[ "$out" == $'a\nc' ]] || { echo "pick_many captured: '$out'"; exit 1; }
+
+    # The label sub-check needs a PATH without a real `pass`; skip it when /usr/bin:/bin has one.
+    if [[ -z "$(PATH="/usr/bin:/bin" type -P pass)" ]]; then
+      printf 'secret_provider=pass\n' >"$CTX_DIR/config"
+      err="$(printf 'x\n' | PATH="$ROOT_DIR/bin:/usr/bin:/bin" ctx --no-gum secret set p API_KEY 2>&1 >/dev/null || true)"
+      grep -q "provider 'pass password store'" <<<"$err" || { echo "error label: $err"; exit 1; }
+      ! grep -q 'command not found' <<<"$err" || { echo "command not found in: $err"; exit 1; }
+    fi
+    rm -rf "$td"
+  ) || fail "plain prompts write to stderr"
+  pass "plain prompts keep stdout clean"
+}
+
+test_remove_gitconfig_symlink_and_nomatch() {
+  (
+    set -euo pipefail
+    local td m
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$ROOT_DIR/bin:$PATH"
+    mkdir -p "$CTX_DIR/profiles" "$HOME/.config/git" "$HOME/dotfiles"
+    printf 'secret_provider=file\n' >"$CTX_DIR/config"
+    printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' >"$CTX_DIR/profiles/acme.conf"
+    printf '[user]\n\tname = Dev\n' >"$HOME/.config/git/ctx-acme"
+    printf '[user]\n\tname = Me\n\n[includeIf "gitdir:~/w/acme/"]\n  path = %s/.config/git/ctx-acme\n' "$HOME" >"$HOME/dotfiles/gitconfig"
+    chmod 644 "$HOME/dotfiles/gitconfig"
+    ln -s "$HOME/dotfiles/gitconfig" "$HOME/.gitconfig"
+    printf 'y\n' | ctx --no-gum remove acme >/dev/null 2>&1 || { echo "remove failed"; exit 1; }
+    [[ -L "$HOME/.gitconfig" ]] || { echo ".gitconfig no longer a symlink"; exit 1; }
+    ! grep -q includeIf "$HOME/dotfiles/gitconfig" || { echo "target not updated"; exit 1; }
+    m="$(stat -c %a "$HOME/dotfiles/gitconfig" 2>/dev/null || stat -f %Lp "$HOME/dotfiles/gitconfig")"
+    [[ "$m" == 644 ]] || { echo "target mode $m"; exit 1; }
+    # Nothing to drop: the file stays as it is.
+    printf '[user]\n\tname = Me\n' >"$HOME/dotfiles/gitconfig"
+    printf 'PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' >"$CTX_DIR/profiles/acme.conf"
+    rm -rf "$CTX_DIR/backups"
+    printf 'y\n' | ctx --no-gum remove acme >/dev/null 2>&1 || { echo "second remove failed"; exit 1; }
+    [[ -L "$HOME/.gitconfig" && "$(cat "$HOME/dotfiles/gitconfig")" == $'[user]\n\tname = Me' ]] || { echo "no-match changed the file"; exit 1; }
+    ! grep -rq gitconfig "$CTX_DIR/backups" 2>/dev/null || { echo "backup made without a rewrite"; exit 1; }
+    rm -rf "$td"
+  ) || fail "remove keeps a symlinked gitconfig and leaves it alone when nothing matches"
+  pass "remove writes through a symlinked ~/.gitconfig and skips no-match files"
+}
+
+test_remove_only_own_include() {
+  (
+    set -euo pipefail
+    local td gc
+    td="$(cd "$(mktemp -d)" && pwd -P)"
+    export HOME="$td/home" CTX_DIR="$td/home/.ctx" PATH="$ROOT_DIR/bin:$PATH"
+    mkdir -p "$CTX_DIR/profiles" "$HOME/.config/git" "$HOME/.ssh"
+    printf 'secret_provider=file\n' >"$CTX_DIR/config"
+    local n
+    for n in acme acme-old; do
+      printf 'PROFILE_NAME=%s\nGIT_NAME=Dev\nGIT_EMAIL=d@p.com\n' "$n" >"$CTX_DIR/profiles/$n.conf"
+      printf '[user]\n\tname = Dev\n' >"$HOME/.config/git/ctx-$n"
+    done
+    printf '[user]\n\tname = Me\n\n[includeIf "gitdir:~/w/acme/"]\n  path = %s/.config/git/ctx-acme\n\n[includeIf "gitdir:~/w/acme-old/"]\n  path = %s/.config/git/ctx-acme-old\n[alias]\n\tco = checkout\n' \
+      "$HOME" "$HOME" >"$HOME/.gitconfig"
+    printf '\nHost github-acme\n  HostName github.com\n  User git\n  IdentityFile k\n  IdentitiesOnly yes\n\nHost github-acme-old\n  HostName github.com\n  User git\n  IdentityFile k2\n  IdentitiesOnly yes\n' >"$HOME/.ssh/ctx_config"
+    printf 'y\n' | ctx --no-gum remove acme >/dev/null 2>&1 || { echo "remove failed"; exit 1; }
+    gc="$(cat "$HOME/.gitconfig")"
+    grep -q 'ctx-acme-old' <<<"$gc" || { echo "acme-old include lost: $gc"; exit 1; }
+    ! grep -q 'ctx-acme$' <<<"$gc" || { echo "acme path left: $gc"; exit 1; }
+    [[ "$(grep -c 'includeIf' <<<"$gc")" == 1 ]] || { echo "includeIf headers: $gc"; exit 1; }
+    grep -q 'name = Me' <<<"$gc" && grep -q 'co = checkout' <<<"$gc" || { echo "user sections lost: $gc"; exit 1; }
+    grep -q 'Host github-acme-old' "$HOME/.ssh/ctx_config" || { echo "acme-old host lost"; exit 1; }
+    ! grep -qx 'Host github-acme' "$HOME/.ssh/ctx_config" || { echo "acme host left"; exit 1; }
+    [[ ! -e "$CTX_DIR/profiles/acme.conf" && -e "$CTX_DIR/profiles/acme-old.conf" ]] || { echo "profile files wrong"; exit 1; }
+    rm -rf "$td"
+  ) || fail "remove deletes only the profile's own include"
+  pass "remove keeps other profiles' includes and user sections"
+}
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
@@ -699,7 +1206,9 @@ test_cmd_workdir_prompt
 test_generate_mise_toml_matches_fixture
 test_autoswitch_notify_default_off
 test_config_upsert_literal_values
+test_base64_decode_gnu_style
 test_autoswitch_hook_resolution
+test_trailing_slash_work_dir
 test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 test_guard_git_hooks
@@ -708,7 +1217,18 @@ test_ctx_run_env_agent_rules
 test_setup_commit_signing
 test_use_keeps_user_agent_keys
 test_ctx_core_dispatch
+test_core_forward_fallback
 test_install_builds_ctx_core
 test_doctor_reports_ctx_core
+test_use_eval_exports
+test_shell_wrapper_applies_use
+test_autoswitch_exports_profile_env
+test_autoswitch_keeps_manual_lock
+test_quiet_use_cloud_tools_succeed
+test_inherited_quiet_use
+test_use_deactivate_served_by_go
+test_plain_prompts_use_stderr
 
+test_remove_only_own_include
+test_remove_gitconfig_symlink_and_nomatch
 echo "All tests passed."

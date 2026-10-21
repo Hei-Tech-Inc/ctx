@@ -23,9 +23,72 @@ _ctx_agent_drop_added_key() {
   _ctx_config_rm_key ssh_agent_added
 }
 
+# One shell-code line that sets NAME=VALUE in the caller's shell (bash/zsh or fish).
+_ctx_emit_export() {
+  local shell_kind="$1" k="$2" v="$3"
+  if [[ "$shell_kind" == fish ]]; then
+    printf "set -gx %s '%s'\n" "$k" "$(printf '%s' "$v" | sed "s/[\\\\']/\\\\&/g")"
+  else
+    printf 'export %s=%q\n' "$k" "$v"
+  fi
+}
+
+# Variables ctx use wants in the caller's shell. ctx is a child process, so these only reach
+# the shell through `ctx use --eval` (the ctx shell function and autoswitch hook eval it).
+# Keep in sync with _ctx_deactivate_emit_unsets.
+_ctx_use_export() {
+  export "$1=$2"
+  _ctx_use_k+=("$1")
+  _ctx_use_v+=("$2")
+}
+
+# ctx use <profile> [--eval bash|fish]
+# With --eval: messages go to stderr, stdout is only shell code for the caller to eval.
 cmd_use() {
-  local name="${1:-}" quiet="${CTX_QUIET:-0}"
-  [[ -z "$name" ]] && die "Usage: ctx use <profile>"
+  local name="" eval_shell="" i rc
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --eval)
+        eval_shell="bash"
+        if [[ -n "${2:-}" && ( "$2" == bash || "$2" == zsh || "$2" == fish ) ]]; then
+          eval_shell="$2"
+          shift
+        fi
+        ;;
+      --eval=*) eval_shell="${1#--eval=}" ;;
+      -*) die "Usage: ctx use <profile> [--eval bash|fish]" ;;
+      *) [[ -z "$name" ]] || die "Usage: ctx use <profile> [--eval bash|fish]"; name="$1" ;;
+    esac
+    shift
+  done
+  [[ -z "$name" ]] && die "Usage: ctx use <profile> [--eval bash|fish]"
+
+  _ctx_use_k=() _ctx_use_v=()
+  if [[ -n "$eval_shell" ]]; then
+    [[ "$eval_shell" == fish ]] || eval_shell=bash
+    _ctx_use_apply "$name" >&2
+    rc=$?
+    for ((i = 0; i < ${#_ctx_use_k[@]}; i++)); do
+      _ctx_emit_export "$eval_shell" "${_ctx_use_k[i]}" "${_ctx_use_v[i]}"
+    done
+    return "$rc"
+  fi
+
+  _ctx_use_apply "$name"
+  rc=$?
+  # CTX_ACTIVE_PROFILE is always recorded; warn only when the profile sets something real.
+  if [[ "${CTX_QUIET:-0}" == "0" && ${#_ctx_use_k[@]} -gt 1 ]]; then
+    local names=""
+    for ((i = 0; i < ${#_ctx_use_k[@]}; i++)); do
+      [[ "${_ctx_use_k[i]}" == CTX_ACTIVE_PROFILE ]] || names+="${names:+, }${_ctx_use_k[i]}"
+    done
+    warn "These variables were not applied to this shell: ${names}. Run ctx install-hook and open a new shell, or run: eval \"\$(ctx use ${name} --eval bash)\"  (fish: ctx use ${name} --eval fish | source)" >&2
+  fi
+  return "$rc"
+}
+
+_ctx_use_apply() {
+  local name="$1" quiet="${CTX_QUIET:-0}"
   load_profile "$name"
 
   [[ "$quiet" == "0" ]] && info "Switching to: ${BOLD}${name}${RESET}"
@@ -60,41 +123,48 @@ cmd_use() {
 
   # 3. AWS
   if [[ -n "${AWS_PROFILE_NAME:-}" ]]; then
-    export AWS_PROFILE="$AWS_PROFILE_NAME"
+    _ctx_use_export AWS_PROFILE "$AWS_PROFILE_NAME"
     [[ "$quiet" == "0" ]] && success "AWS_PROFILE → $AWS_PROFILE_NAME"
   fi
 
   # 4. Azure
   if [[ -n "${AZURE_SUBSCRIPTION:-}" ]]; then
     if has az; then
-      az account set --subscription "$AZURE_SUBSCRIPTION" &>/dev/null \
-        && { [[ "$quiet" == "0" ]] && success "Azure → $AZURE_SUBSCRIPTION"; } \
-        || { warn "Azure subscription switch failed"; errors=$((errors+1)); }
+      if az account set --subscription "$AZURE_SUBSCRIPTION" &>/dev/null; then
+        [[ "$quiet" == "0" ]] && success "Azure → $AZURE_SUBSCRIPTION"
+      else
+        warn "Azure subscription switch failed"
+        errors=$((errors+1))
+      fi
     else
-      export AZURE_SUBSCRIPTION="$AZURE_SUBSCRIPTION"
-      [[ -n "${AZURE_TENANT:-}" ]] && export AZURE_TENANT="$AZURE_TENANT"
+      _ctx_use_export AZURE_SUBSCRIPTION "$AZURE_SUBSCRIPTION"
+      [[ -n "${AZURE_TENANT:-}" ]] && _ctx_use_export AZURE_TENANT "$AZURE_TENANT"
     fi
   fi
 
   # 5. GCP
   if [[ -n "${GCP_PROJECT:-}" ]]; then
     if has gcloud; then
-      gcloud config set project "$GCP_PROJECT" --quiet 2>/dev/null \
-        && { [[ "$quiet" == "0" ]] && success "GCP → $GCP_PROJECT"; } \
-        || warn "GCP project switch failed"
+      if gcloud config set project "$GCP_PROJECT" --quiet 2>/dev/null; then
+        [[ "$quiet" == "0" ]] && success "GCP → $GCP_PROJECT"
+      else
+        warn "GCP project switch failed"
+      fi
       [[ -n "${GCP_ACCOUNT:-}" ]] && \
         gcloud config set account "$GCP_ACCOUNT" --quiet 2>/dev/null || true
     else
-      export GCLOUD_PROJECT="${GCP_PROJECT:-}"
+      _ctx_use_export GCLOUD_PROJECT "$GCP_PROJECT"
     fi
   fi
 
   # 6. kubectl
   if [[ -n "${KUBE_CONTEXT:-}" ]]; then
     if has kubectl; then
-      kubectl config use-context "$KUBE_CONTEXT" &>/dev/null \
-        && { [[ "$quiet" == "0" ]] && success "kubectl → $KUBE_CONTEXT"; } \
-        || warn "kubectl context '$KUBE_CONTEXT' not found"
+      if kubectl config use-context "$KUBE_CONTEXT" &>/dev/null; then
+        [[ "$quiet" == "0" ]] && success "kubectl → $KUBE_CONTEXT"
+      else
+        warn "kubectl context '$KUBE_CONTEXT' not found"
+      fi
     fi
   fi
 
@@ -110,7 +180,7 @@ cmd_use() {
       local val
       val=$(keychain_get "$PROFILE_NAME" "$key")
       if [[ -n "$val" ]]; then
-        declare -x "$key=$val"
+        _ctx_use_export "$key" "$val"
         [[ "$quiet" == "0" ]] && success "Secret → $key ($_sec_label)"
       else
         warn "Secret '$key' missing ($_sec_label) — run: ctx secret set $PROFILE_NAME $key"
@@ -127,10 +197,16 @@ cmd_use() {
     fi
   fi
 
+  local prev_active
+  prev_active="$(active_profile)"
   set_active_profile "$name"
+  _ctx_use_export CTX_ACTIVE_PROFILE "$name"
 
   if [[ "${CTX_AUTO_SWITCH:-0}" == "1" ]]; then
-    ctx_activation_set_auto
+    # The hook re-applying a profile already locked by hand (e.g. in a new terminal) keeps the lock.
+    if [[ "$prev_active" != "$name" || "$(ctx_activation_get_source)" != manual ]]; then
+      ctx_activation_set_auto
+    fi
   else
     ctx_activation_set_manual "${PWD:-$HOME}"
   fi
@@ -344,7 +420,7 @@ cmd_status() {
     dim "  $act_note"
   else
     hr
-    echo "  Profile  : ${BOLD}$current${RESET}"
+    echo -e "  Profile  : ${BOLD}$current${RESET}"
     echo "  Git      : ${GIT_NAME:-—} <${GIT_EMAIL:-—}>"
     echo "  Dir      : ${WORK_DIR:-—}"
     echo "  GitHub   : ${GITHUB_USER:-—}"
@@ -366,7 +442,7 @@ cmd_status() {
   if has gh && [[ -n "${GITHUB_USER:-}" ]]; then
     local active_gh
     active_gh=$(gh auth status 2>&1 | grep "Logged in to github.com account" \
-      | awk '{print $NF}' | tr -d '()' | head -1)
+      | head -1 | awk '{for (i = 1; i < NF; i++) if ($i == "account") { print $(i + 1); exit }}' | tr -d '()')
     if [[ "$active_gh" == "$GITHUB_USER" ]]; then
       success "gh account matches ($active_gh)"
     else
@@ -478,8 +554,8 @@ cmd_list() {
     local marker=""
     [[ "$pname" == "$current" ]] && marker=" ${GREEN}← active${RESET}"
 
-    local tags=()
-    [[ -n "${WORK_DIR:-}"          ]] && tags+=("${WORK_DIR/$HOME/~}")
+    local tags=() tilde='~'
+    [[ -n "${WORK_DIR:-}"          ]] && tags+=("${WORK_DIR/$HOME/$tilde}")
     [[ -n "${GITHUB_USER:-}"       ]] && tags+=("gh:$GITHUB_USER")
     [[ -n "${AWS_PROFILE_NAME:-}"  ]] && tags+=("aws:$AWS_PROFILE_NAME")
     [[ -n "${AZURE_SUBSCRIPTION:-}" ]] && tags+=("azure")
@@ -489,7 +565,11 @@ cmd_list() {
 
     echo -e "  ${BOLD}${pname}${RESET}${marker}"
     echo -e "  ${DIM}${GIT_NAME:-—} <${GIT_EMAIL:-—}>${RESET}"
-    [[ ${#tags[@]} -gt 0 ]] && echo -e "  ${DIM}$(IFS=' | '; echo "${tags[*]}")${RESET}"
+    if [[ ${#tags[@]} -gt 0 ]]; then
+      local joined="" tag
+      for tag in "${tags[@]}"; do joined+="${joined:+ | }$tag"; done
+      echo -e "  ${DIM}${joined}${RESET}"
+    fi
     echo ""
   done
 
@@ -558,7 +638,7 @@ cmd_secret() {
       local val; val=$(ask_secret "Value for $key")
       local _lbl; _lbl="$(ctx_secret_store_label)"
       if ! keychain_set "$profile" "$key" "$val"; then
-        die "Failed to store secret using provider '$(_lbl)'. Check provider config and required CLI tools."
+        die "Failed to store secret using provider '$_lbl'. Check provider config and required CLI tools."
       fi
       success "$key stored ($_lbl) for $profile"
       ;;
@@ -586,7 +666,7 @@ cmd_secret() {
       [[ -z "$profile" || -z "$key" ]] && die "Usage: ctx secret delete <profile> <KEY>"
       local _lbl; _lbl="$(ctx_secret_store_label)"
       if ! keychain_delete "$profile" "$key"; then
-        die "Failed to delete secret using provider '$(_lbl)'. Check provider config and required CLI tools."
+        die "Failed to delete secret using provider '$_lbl'. Check provider config and required CLI tools."
       fi
       success "Deleted $key from $_lbl"
       ;;
@@ -602,7 +682,7 @@ cmd_secret() {
       case "$from_provider" in keychain|file|pass) ;; *) die "Invalid from-provider: $from_provider" ;; esac
       [[ "$to_provider" == "$from_provider" ]] && die "Source and destination providers are the same: $to_provider"
 
-      local keys copied=0 missing=0
+      local keys copied=0 missing=0 copied_keys=""
       keys="$(secret_list_with_provider "$from_provider" "$profile")"
       [[ -z "$keys" ]] && die "No secrets found for '$profile' in provider '$from_provider'."
       while IFS= read -r mkey; do
@@ -615,14 +695,16 @@ cmd_secret() {
         fi
         if secret_set_with_provider "$to_provider" "$profile" "$mkey" "$mval"; then
           copied=$((copied+1))
+          copied_keys="${copied_keys}${mkey}"$'\n'
         fi
       done <<< "$keys"
       success "Migrated $copied secret(s) for '$profile' from $from_provider to $to_provider."
       [[ $missing -gt 0 ]] && warn "$missing key(s) were empty/unreadable and skipped."
-      if ask_yn "Delete migrated keys from source provider '$from_provider'?" "n"; then
+      # Only offer to delete keys that were actually copied.
+      if [[ $copied -gt 0 ]] && ask_yn "Delete migrated keys from source provider '$from_provider'?" "n"; then
         while IFS= read -r mkey; do
           [[ -n "$mkey" ]] && secret_delete_with_provider "$from_provider" "$profile" "$mkey" >/dev/null 2>&1 || true
-        done <<< "$keys"
+        done <<< "$copied_keys"
         success "Removed source keys from '$from_provider'."
       fi
       ;;
@@ -1583,11 +1665,7 @@ cmd_env() {
   done
   _ctx_profile_env_collect "$_ctx_cmd_profile" "$with_secrets"
   for ((i = 0; i < ${#_ctx_env_k[@]}; i++)); do
-    if [[ "$shell_kind" == fish ]]; then
-      printf "set -gx %s '%s'\n" "${_ctx_env_k[i]}" "$(printf '%s' "${_ctx_env_v[i]}" | sed "s/[\\\\']/\\\\&/g")"
-    else
-      printf 'export %s=%q\n' "${_ctx_env_k[i]}" "${_ctx_env_v[i]}"
-    fi
+    _ctx_emit_export "$shell_kind" "${_ctx_env_k[i]}" "${_ctx_env_v[i]}"
   done
 }
 
