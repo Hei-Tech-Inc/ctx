@@ -47,7 +47,6 @@ func UseIn(t tui.Term, args []string) int {
 		Quiet:      os.Getenv("CTX_QUIET") != "" && os.Getenv("CTX_QUIET") != "0",
 		AutoSwitch: os.Getenv("CTX_AUTO_SWITCH") == "1",
 	}
-	quiet := opts.Quiet
 	name, evalShell := "", ""
 	usage := ui{out: stdout, err: stderr, colors: t.Colors}
 	for i := 0; i < len(args); i++ {
@@ -75,9 +74,9 @@ func UseIn(t tui.Term, args []string) int {
 	}
 
 	if evalShell == "" {
-		a := &useApply{u: termUI(t), out: stdout, quiet: quiet, tm: t, opts: opts}
+		a := &useApply{u: termUI(t), out: stdout, tm: t, opts: opts}
 		code, _ := a.run(name)
-		if !quiet && len(a.exports) > 1 {
+		if !opts.Quiet && len(a.exports) > 1 {
 			var names []string
 			for _, kv := range a.exports {
 				if kv[0] != "CTX_ACTIVE_PROFILE" {
@@ -94,7 +93,7 @@ func UseIn(t tui.Term, args []string) int {
 	et := t
 	et.Out = stderr
 	opts.Shell = evalShell
-	a := &useApply{u: termUI(et), out: stderr, quiet: quiet, tm: et, opts: opts}
+	a := &useApply{u: termUI(et), out: stderr, tm: et, opts: opts}
 	code, ok := a.run(name)
 	if !ok {
 		return code
@@ -114,8 +113,7 @@ func UseIn(t tui.Term, args []string) int {
 // useApply holds one quiet _ctx_use_apply run.
 type useApply struct {
 	u       ui
-	quiet   bool
-	opts    UseOpts
+	opts    UseOpts   // Quiet suppresses the progress lines
 	tm      tui.Term  // rich selects the Accent "Active context" line
 	out     io.Writer // where the tools' stdout goes (stderr under --eval)
 	exports [][2]string
@@ -153,7 +151,7 @@ func (a *useApply) upsert(key, value string) {
 
 // ok prints a success line unless quiet.
 func (a *useApply) ok(msg string) {
-	if !a.quiet {
+	if !a.opts.Quiet {
 		a.u.success(msg)
 	}
 }
@@ -178,7 +176,7 @@ func (a *useApply) run(name string) (code int, ok bool) {
 		a.vars["PROFILE_NAME"] = name // Bash stops on the unbound variable; keep going
 	}
 
-	if !a.quiet {
+	if !a.opts.Quiet {
 		u.info("Switching to: " + u.c(ansiBold) + name + u.c(ansiReset))
 	}
 
@@ -323,7 +321,7 @@ func (a *useApply) run(name string) (code int, ok bool) {
 		_ = ctxconfig.SetManual(pwd)
 	}
 
-	if !a.quiet {
+	if !a.opts.Quiet {
 		u.say("")
 		if t := a.tm; t.Rich {
 			u.say(tui.Accent(78, "Active context: "+name))

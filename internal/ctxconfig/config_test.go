@@ -167,3 +167,19 @@ func TestParseNotify(t *testing.T) {
 		t.Error("NotifyEnabled precedence wrong")
 	}
 }
+
+func TestParseHookFields(t *testing.T) {
+	cfg := Parse([]byte("active=b\nactive=a=x\r\nactive_source=Manual\r\nmanual_pwd=L3cvYQ==\r\n"))
+	if cfg.Active != "b\na" {
+		t.Errorf("Active = %q", cfg.Active)
+	}
+	if cfg.ActiveLast != "a=x\r" {
+		t.Errorf("ActiveLast = %q, want the whole last value", cfg.ActiveLast)
+	}
+	if got := DecodeManualPWD(stripCR(cfg.Last["manual_pwd"])); got != "/w/a" {
+		t.Errorf("DecodeManualPWD = %q", got)
+	}
+	if got := DecodeManualPWD("not base64!"); got != "not base64!" {
+		t.Errorf("raw fallback = %q", got)
+	}
+}
