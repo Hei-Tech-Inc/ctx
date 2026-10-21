@@ -33,8 +33,9 @@ func backup(path string, warn Warn) {
 // link, a private mode (no group/other write) is kept, a group- or
 // world-writable one becomes 600 with a warning (ssh refuses such a file), and
 // a new file is 600. A file that cannot be read or written is left alone with
-// a warning.
-func EnsureInclude(warn Warn) {
+// a warning. It reports whether the Include is in place (already there or
+// added), as ensure_ssh_include's exit status does.
+func EnsureInclude(warn Warn) bool {
 	home := os.Getenv("HOME")
 	sshMain := filepath.Join(home, ".ssh", "config")
 	ctxSSH := SSHConfigPath()
@@ -47,7 +48,7 @@ func EnsureInclude(warn Warn) {
 
 	existing, rerr := os.ReadFile(sshMain)
 	if strings.Contains(string(existing), "Include "+ctxSSH) {
-		return
+		return true
 	}
 	say := func(msg string) {
 		if warn != nil {
@@ -59,7 +60,7 @@ func EnsureInclude(warn Warn) {
 	if _, err := os.Stat(target); err == nil {
 		if rerr != nil || syscall.Access(target, 2) != nil { // W_OK
 			say(failed)
-			return
+			return false
 		}
 	}
 	backup(sshMain, warn)
@@ -77,12 +78,13 @@ func EnsureInclude(warn Warn) {
 	}, nil)
 	if err != nil {
 		say(failed)
-		return
+		return false
 	}
 	if tightened {
 		say(sshMain + " was writable by group or others; it is now 600 (ssh refuses such a file)")
 	}
 	ctxconfig.Log("Added Include " + ctxSSH + " to " + sshMain)
+	return true
 }
 
 // GitconfigAddInclude mirrors gitconfig_add_include: append an includeIf for

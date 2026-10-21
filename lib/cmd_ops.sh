@@ -2150,8 +2150,7 @@ cmd_install_hook() {
   success "ctx profile autoswitch hook refreshed in $shell_rc (sources lib)"
 
   # 3. Ensure SSH Include is wired up
-  ensure_ssh_include
-  success "SSH config isolated to $CTX_SSH_CONFIG"
+  ensure_ssh_include && success "SSH config isolated to $CTX_SSH_CONFIG"
 
   info "Reload your shell: source $shell_rc"
 }

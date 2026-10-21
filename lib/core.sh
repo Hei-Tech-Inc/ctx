@@ -1140,6 +1140,7 @@ ensure_ssh_include() {
   rm -f "$tmp"
   [[ $tight -eq 1 ]] && warn "$ssh_main was writable by group or others; it is now 600 (ssh refuses such a file)" >&2
   log "Added Include $CTX_SSH_CONFIG to $ssh_main"
+  return 0
 }
 
 # Write a host block to our ctx_config file, never to ~/.ssh/config.

@@ -29,7 +29,9 @@ func TestEnsureIncludeWritesThrough(t *testing.T) {
 			t.Fatal(err)
 		}
 		var warned []string
-		EnsureInclude(func(m string) { warned = append(warned, m) })
+		if !EnsureInclude(func(m string) { warned = append(warned, m) }) {
+			t.Errorf("%v: EnsureInclude reported a failure", c.mode)
+		}
 		if st, err := os.Lstat(filepath.Join(home, ".ssh", "config")); err != nil || st.Mode()&os.ModeSymlink == 0 {
 			t.Errorf("%v: link replaced", c.mode)
 		}
@@ -43,5 +45,32 @@ func TestEnsureIncludeWritesThrough(t *testing.T) {
 		if got := len(warned) == 1 && strings.Contains(warned[0], "it is now 600"); got != c.warn {
 			t.Errorf("%v: warnings %q", c.mode, warned)
 		}
+	}
+}
+
+// TestEnsureIncludeReportsFailure: a read-only ~/.ssh/config is left alone
+// and EnsureInclude reports false; once the Include is there it reports true.
+func TestEnsureIncludeReportsFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write a read-only file")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CTX_DIR", filepath.Join(home, ".ctx"))
+	cfg := filepath.Join(home, ".ssh", "config")
+	_ = os.MkdirAll(filepath.Dir(cfg), 0o700)
+	if err := os.WriteFile(cfg, []byte("Host a\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	var warned []string
+	if EnsureInclude(func(m string) { warned = append(warned, m) }) {
+		t.Error("read-only config: EnsureInclude reported success")
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "Could not add Include") {
+		t.Errorf("warnings %q", warned)
+	}
+	_ = os.Chmod(cfg, 0o600)
+	if !EnsureInclude(nil) || !EnsureInclude(nil) {
+		t.Error("writable config: EnsureInclude reported a failure (added, then already there)")
 	}
 }

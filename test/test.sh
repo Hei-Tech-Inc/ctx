@@ -2120,6 +2120,13 @@ test_install_hook_keeps_rc() {
     rc=0; out="$(_hook "$HOME/ro.zshrc")" || rc=$?
     [[ $rc -eq 1 && "$out" == *"Cannot write $HOME/ro.zshrc"* && "$(cat "$HOME/ro.zshrc")" == ro ]] || { echo "read-only: $rc $out"; exit 1; }
 
+    # a read-only ~/.ssh/config: the rc step still succeeds, but no "SSH config isolated" after the warning
+    printf 'Host a\n' >"$HOME/.ssh/config"; chmod 400 "$HOME/.ssh/config"
+    out="$(_hook "$HOME/.zshrc.ssh")" || { echo "ro ssh config: $out"; exit 1; }
+    [[ "$out" == *"Could not add Include"* && "$out" != *"SSH config isolated"* && "$out" == *"Reload your shell"* ]] \
+      || { echo "ro ssh config out: $out"; exit 1; }
+    chmod 600 "$HOME/.ssh/config"; rm -f "$HOME/.ssh/config"
+
     # config.fish gets the fish mise line and the fish block
     mkdir -p "$HOME/.config/fish"
     out="$(_hook "$HOME/.config/fish/config.fish")" || { echo "fish: $out"; exit 1; }

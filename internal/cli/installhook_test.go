@@ -642,6 +642,12 @@ func TestInstallHookSSHConfig(t *testing.T) {
 				if s := readHomeFile(t, home, ".ssh/config"); s != "Host a\n" {
 					t.Errorf(".ssh/config = %q", s)
 				}
+				if strings.Contains(r.stdout+r.stderr, "SSH config isolated") {
+					t.Errorf("success claimed after a failed Include:\n%s%s", r.stdout, r.stderr)
+				}
+				if !strings.Contains(r.stdout, "Reload your shell") {
+					t.Errorf("rc step output lost:\n%s", r.stdout)
+				}
 			}},
 	})
 }

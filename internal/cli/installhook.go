@@ -144,8 +144,9 @@ func InstallHook(t tui.Term, args []string) int {
 	}
 	u.success("ctx profile autoswitch hook refreshed in " + rc + " (sources lib)")
 
-	gitssh.EnsureInclude(u.warnErr)
-	u.success("SSH config isolated to " + sshConf)
+	if gitssh.EnsureInclude(u.warnErr) {
+		u.success("SSH config isolated to " + sshConf)
+	}
 	u.info("Reload your shell: source " + rc)
 	return 0
 }
