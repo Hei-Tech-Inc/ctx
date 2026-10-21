@@ -864,6 +864,22 @@ test_install_builds_ctx_core() {
   pass "install.sh builds ctx-core next to the libs with the ctx version"
 }
 
+# Fake tools for a doctor run in DIR: every tool doctor probes (so it never reaches a real
+# az or gcloud on the machine, which can go to the network) and a bash that drops the -l of
+# doctor's `bash -lc` (a login shell's path_helper would put the machine's tool dirs first).
+# Use with PATH="DIR:/usr/bin:/bin".
+_t_doctor_tools() {
+  local d="$1" t real
+  real="$(command -v bash)"
+  mkdir -p "$d"
+  for t in git mise gum gh aws az gcloud kubectl; do
+    printf '#!/bin/sh\necho "%s 1.0"\n' "$t" >"$d/$t"
+    chmod +x "$d/$t"
+  done
+  printf '#!/bin/sh\nif [ "$1" = -lc ]; then exec "%s" -c "$2"; fi\nexec "%s" "$@"\n' "$real" "$real" >"$d/bash"
+  chmod +x "$d/bash"
+}
+
 # The Bash doctor (CTX_CORE=off); the Go one is covered by internal/cli/doctor_test.go.
 test_doctor_reports_ctx_core() {
   (
@@ -874,9 +890,11 @@ test_doctor_reports_ctx_core() {
     mkdir -p "$td/home" "$td/ctx"
     printf '#!/usr/bin/env bash\necho "ctx-core 9.9.9"\n' >"$td/ctx-core"
     chmod +x "$td/ctx-core"
-    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    _t_doctor_tools "$td/tools"
+    out="$(PATH="$td/tools:/usr/bin:/bin" HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/ctx-core" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
     [[ "$out" == *"ctx-core: 9.9.9 ($td/ctx-core)"* ]] || { echo "present: $out"; exit 1; }
-    out="$(HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
+    [[ "$out" == *"Azure CLI: az 1.0"* && "$out" == *"gcloud: gcloud 1.0"* ]] || { echo "doctor did not use the fake cloud CLIs: $out"; exit 1; }
+    out="$(PATH="$td/tools:/usr/bin:/bin" HOME="$td/home" CTX_DIR="$td/ctx" CTX_CORE=off CTX_CORE_BIN="$td/missing" "$ROOT_DIR/bin/ctx" doctor 2>&1 || true)"
     [[ "$out" == *"ctx-core missing"*"ctx mcp unavailable"* ]] || { echo "missing: $out"; exit 1; }
   ) || fail "doctor reports ctx-core"
   pass "ctx doctor reports ctx-core version/path or a warning"
@@ -958,7 +976,8 @@ test_ctx_core_is_exercised() {
     chmod +x "$td/core"
     : >"$td/core-calls"
     env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" list --json >/dev/null 2>&1 || { echo "list --json failed"; exit 1; }
-    out="$(env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" --no-gum doctor 2>&1 || true)"
+    _t_doctor_tools "$td/tools"
+    out="$(env PATH="$td/tools:/usr/bin:/bin" CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" --no-gum doctor 2>&1 || true)"
     env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" "$ROOT_DIR/bin/ctx" version >/dev/null 2>&1 || { echo "version failed"; exit 1; }
     env CTX_CORE_BIN="$td/core" HOME="$td/home" CTX_DIR="$td/ctx" SHELL=/bin/zsh "$ROOT_DIR/bin/ctx" --no-gum --dry-run install-hook "$td/home/rc" </dev/null >/dev/null 2>&1 \
       || { echo "install-hook --dry-run failed"; exit 1; }
@@ -973,6 +992,7 @@ test_ctx_core_is_exercised() {
     done
     [[ "$out" == *"ctx-core: "*"($td/core)"* || "$out" == *"ctx-core: "*"/ctx-core)"* ]] || { echo "doctor does not report ctx-core: $out"; exit 1; }
     [[ "$out" != *"ctx-core missing"* ]] || { echo "doctor says ctx-core is missing: $out"; exit 1; }
+    [[ "$out" == *"Azure CLI: az 1.0"* && "$out" == *"gcloud: gcloud 1.0"* ]] || { echo "doctor did not use the fake cloud CLIs: $out"; exit 1; }
   ) || fail "ctx-core coverage guard"
   pass "bin/ctx finds the repo's bin/ctx-core before PATH and forwards list, doctor, version, install-hook, init and upgrade to it"
 }
