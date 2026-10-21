@@ -344,6 +344,8 @@ func activateFixture(t *testing.T, td, shell string) (env []string, fake, log st
 	testutil.Script(t, fake, "#!/bin/sh\nprintf '%s\\n' \"$*\" >>"+shellQ(log)+
 		"\n[ \"$1\" = hook-env ] && printf '%s\\0' \"${__CTX_SH_GH_TOKEN-<none>}\" >>"+shellQ(log+".env")+
 		"\n[ -n \"${CTX_FAKE_FAIL-}\" ] && exit 3"+
+		// CTX_FAKE_SIGINT=pid: interrupt that shell, once (or every prompt would).
+		"\nif [ -n \"${CTX_FAKE_SIGINT-}\" ] && mkdir "+shellQ(log+".sigint")+" 2>/dev/null; then kill -INT \"$CTX_FAKE_SIGINT\"; sleep 1; exit 1; fi"+
 		"\nexec "+shellQ(core)+" \"$@\"\n")
 	glue := filepath.Join(td, "glue."+shell)
 	hookWrite(t, glue, activateScript(shell, fake))
@@ -731,6 +733,89 @@ src
 			cmd.Env = env
 			if out, err := cmd.CombinedOutput(); err != nil || len(out) > 0 {
 				t.Errorf("%v: %s", err, out)
+			}
+		})
+	}
+}
+
+// TestActivateBashPreexecDelayed sources bash-preexec with __bp_delay_install
+// after the glue: until the user installs it nothing runs precmd_functions,
+// so the hook stays in PROMPT_COMMAND and keeps working; after
+// __bp_install_after_session_init it moves first into precmd_functions.
+func TestActivateBashPreexecDelayed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs interactive bash")
+	}
+	bp, err := filepath.Abs("testdata/bash-preexec/bash-preexec.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, argv := range activateShells(t) {
+		if shellOf(key) != "bash" {
+			continue
+		}
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			td := t.TempDir()
+			env, _, _ := activateFixture(t, td, "bash")
+			env = append(env, "BP="+bp)
+			out := interactiveShell(t, env, td, argv, `cd "$TD"
+source "$GLUE"; __bp_delay_install=1; source "$BP"; tool() { echo "M-tool prof=${CTX_PROMPT_PROFILE-}"; }; precmd_functions+=(tool)
+cd w/a
+echo "M-before show=$CTX_PROMPT_SHOW prof=${CTX_PROMPT_PROFILE-} active=$CTX_ACTIVE_PROFILE"
+__bp_install_after_session_init
+cd ../b; echo M-mark
+_n=0; for _f in "${precmd_functions[@]}"; do [ "$_f" = _ctx_hook ] && _n=$((_n+1)); done; echo "M-pf0=${precmd_functions[0]} n=$_n"
+echo "M-pc=$(declare -p PROMPT_COMMAND | grep -c _ctx_hook)"
+echo "M-after active=$CTX_ACTIVE_PROFILE"
+`)
+			for _, want := range []string{"M-before show=1 prof=a active=a", "M-pf0=_ctx_hook n=1", "M-pc=0", "M-after active=b"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("no %q in %q", want, out)
+				}
+			}
+			i := strings.Index(out, "M-mark\n")
+			if i < 0 || !strings.HasPrefix(out[i+len("M-mark\n"):], "M-tool prof=b\n") {
+				t.Errorf("tool did not see this prompt's CTX_PROMPT_PROFILE after the install: %q", out)
+			}
+		})
+	}
+}
+
+// TestActivateInterruptKeepsErrtrace interrupts hook-env (the fake ctx-core
+// sends SIGINT to the shell): the shell keeps errtrace (set -E) and its ERR
+// trap, since the hook never changes either.
+func TestActivateInterruptKeepsErrtrace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs interactive bash")
+	}
+	for key, argv := range activateShells(t) {
+		if shellOf(key) != "bash" {
+			continue
+		}
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			td := t.TempDir()
+			env, _, log := activateFixture(t, td, "bash")
+			out := interactiveShell(t, env, td, argv, `cd "$TD"
+set -E
+trap 'echo M-ERR' ERR
+source "$GLUE"
+export CTX_FAKE_SIGINT=$$
+cd w/a
+unset CTX_FAKE_SIGINT
+echo "M-flags=$-"
+trap -p ERR | sed 's/^/M-trap /'
+`)
+			if _, err := os.Stat(log + ".sigint"); err != nil {
+				t.Fatalf("hook-env was not interrupted: %q", out)
+			}
+			i := strings.Index(out, "M-flags=")
+			if i < 0 || !strings.Contains(strings.SplitN(out[i:], "\n", 2)[0], "E") {
+				t.Errorf("errtrace lost after an interrupted hook-env: %q", out)
+			}
+			if !strings.Contains(out, "M-trap trap -- 'echo M-ERR' ERR") {
+				t.Errorf("ERR trap lost: %q", out)
 			}
 		})
 	}

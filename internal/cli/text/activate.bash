@@ -61,23 +61,26 @@ function ctx {
 # caller's $? (PROMPT_COMMAND runs `_ctx_hook keep && :`, so later entries still see
 # the command's status while errexit and the ERR trap ignore it).
 _ctx_hook() {
-  local _ctx_st=$? _ctx_out _ctx_e="" _ctx_d="${CTX_DIR:-$HOME/.ctx}"
+  local _ctx_st=$? _ctx_out _ctx_d="${CTX_DIR:-$HOME/.ctx}"
   # Run from PROMPT_COMMAND while bash-preexec is loaded (sourced after this glue, as
-  # its docs ask): move to the front of precmd_functions, before the prompt tools.
-  if [[ -n "${1-}" && -n "${__bp_imported-}${bash_preexec_imported-}" ]]; then
+  # its docs ask) and installed or about to install at this prompt (its PROMPT_COMMAND
+  # holds __bp_precmd_invoke_cmd, or the __bp_install string): move to the front of
+  # precmd_functions, before the prompt tools. With __bp_delay_install nothing runs
+  # precmd_functions yet, so the hook stays in PROMPT_COMMAND until the install.
+  if [[ -n "${1-}" && -n "${__bp_imported-}${bash_preexec_imported-}" ]] &&
+    [[ "${PROMPT_COMMAND[*]:-}" == *__bp_precmd_invoke_cmd* || "${PROMPT_COMMAND[*]:-}" == *__bp_install* ]]; then
     _ctx_register
   fi
   if [[ "$PWD" != "${__CTX_PWD-}" || ! -e "${__CTX_STAMP-}" || "$_ctx_d/config" -nt "$__CTX_STAMP" || "$_ctx_d/profiles" -nt "$__CTX_STAMP" ]]; then
     if [[ -x @CTX_CORE@ ]]; then
-      # errtrace would run the user's ERR trap inside the substitution when it fails.
-      if [[ $- == *E* ]]; then _ctx_e=1; set +E; fi
-      _ctx_out="$(__CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" \
+      # trap - ERR: with errtrace (set -E) bash 3.2 would run the user's ERR trap inside
+      # the substitution when ctx-core fails; the shell's own trap and options are untouched.
+      _ctx_out="$(trap - ERR; __CTX_STATE="${__CTX_STATE-}" __CTX_STAMP="${__CTX_STAMP-}" \
         __CTX_SH_NOTIFY="${CTX_AUTOSWITCH_NOTIFY+=$CTX_AUTOSWITCH_NOTIFY}" \
         __CTX_SH_GH_TOKEN="${GH_TOKEN+=$GH_TOKEN}" \
         __CTX_SH_ACTIVE="${CTX_ACTIVE_PROFILE+=$CTX_ACTIVE_PROFILE}" \
         __CTX_SH_GH_PROFILE="${_CTX_GH_PROFILE+=$_CTX_GH_PROFILE}" \
         @CTX_CORE@ hook-env bash)" || :
-      if [[ -n "$_ctx_e" ]]; then set -E; fi
       eval "$_ctx_out" || :
       __CTX_PWD="$PWD"
     fi
