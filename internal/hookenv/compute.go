@@ -64,6 +64,11 @@ type Plan struct {
 	// this run's pwd and target, and the previous keys (still in the shell).
 	State State
 
+	// st is shared by copies of the Plan, so a copy cannot Finish again.
+	st *planState
+}
+
+type planState struct {
 	fin  func(UseResult) Output
 	done bool
 }
@@ -76,15 +81,15 @@ type Plan struct {
 //
 // Finish panics when called twice, or with a result for a use that was not
 // planned: both are caller bugs that would print a wrong shell diff.
-func (p *Plan) Finish(r UseResult) Output {
-	if p.done {
+func (p Plan) Finish(r UseResult) Output {
+	if p.st.done {
 		panic("hookenv: Plan.Finish called twice")
 	}
 	if p.Use == nil && (r.Code != 0 || len(r.Exports) != 0) {
 		panic("hookenv: Plan.Finish got a use result, but no use was planned")
 	}
-	p.done = true
-	return p.fin(r)
+	p.st.done = true
+	return p.st.fin(r)
 }
 
 // Output is one finished hook run. Exports and Unsets are the net change to
@@ -150,7 +155,7 @@ func Compute(in Input) *Plan {
 
 	v := newView(in.Env)
 	done := func(plan *Plan, out Output) *Plan {
-		plan.fin = func(UseResult) Output { return out }
+		plan.st = &planState{fin: func(UseResult) Output { return out }}
 		return plan
 	}
 	if in.Prev.PWD == in.PWD && in.Prev.Target == target {
@@ -215,7 +220,7 @@ func Compute(in Input) *Plan {
 	}
 	dropPrev()
 	plan.Use = &UseCall{Target: target, Quiet: true, AutoSwitch: true}
-	plan.fin = p.complete
+	plan.st = &planState{fin: p.complete}
 	return plan
 }
 

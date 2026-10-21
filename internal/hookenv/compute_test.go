@@ -405,8 +405,10 @@ func TestPlanFinishIsSingleUse(t *testing.T) {
 	if plan.State.PWD != "/w/b" || plan.State.Target != "b" {
 		t.Errorf("Plan.State before Finish = %#v, want pwd and target", plan.State)
 	}
+	cp := *plan // a copy shares the single use
 	_ = plan.Finish(UseResult{})
 	mustPanic(t, "second Finish", func() { plan.Finish(UseResult{}) })
+	mustPanic(t, "Finish on a copy", func() { cp.Finish(UseResult{}) })
 }
 
 func TestPlanFinishRejectsUnplannedResult(t *testing.T) {

@@ -66,6 +66,7 @@ func HookEnv(t tui.Term, args []string) int {
 		return 2
 	}
 	shell := args[0]
+	start := time.Now() // before anything is read: see touchStamp
 
 	shellVars := map[string]*string{}
 	for _, pv := range HookShellVars {
@@ -100,16 +101,26 @@ func HookEnv(t tui.Term, args []string) int {
 	}
 
 	var b strings.Builder
+	wrote := false
 	// The legacy hook returns early (no state, no prompt exports) without a
 	// profiles dir; the stamp keeps the guard from calling again.
 	if st, err := os.Stat(profilesDir); err == nil && st.IsDir() {
-		out := hookRun(pwd, prev, shellVars, shell, profilesDir)
+		var out hookenv.Output
+		out, wrote = hookRun(pwd, prev, shellVars, shell, profilesDir)
 		writeHookScript(&b, shell, out)
 		for _, l := range out.Notify {
 			_, _ = io.WriteString(t.Err, l+"\n")
 		}
 	}
-	touchStamp(stamp, stampNew)
+	// The stamp records when this shell last read the config: the start of
+	// the run, so a write by another terminal during it still counts as
+	// newer. A run that wrote the config itself (use, deactivate) stamps its
+	// end instead, or every switch would cost a second run.
+	when := start
+	if wrote {
+		when = time.Now()
+	}
+	touchStamp(stamp, stampNew, when)
 	if stamp != stampIn {
 		writeShellLocal(&b, shell, "__CTX_STAMP", stamp)
 	}
@@ -118,8 +129,9 @@ func HookEnv(t tui.Term, args []string) int {
 }
 
 // hookRun computes the run and performs its side effects in-process, in the
-// hook's order: deactivate, the quiet use, then Finish.
-func hookRun(pwd string, prev hookenv.State, shellVars map[string]*string, shell, profilesDir string) hookenv.Output {
+// hook's order: deactivate, the quiet use, then Finish. wrote reports a side
+// effect (they write the config).
+func hookRun(pwd string, prev hookenv.State, shellVars map[string]*string, shell, profilesDir string) (out hookenv.Output, wrote bool) {
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
 		if k, v, ok := strings.Cut(kv, "="); ok {
@@ -175,7 +187,7 @@ func hookRun(pwd string, prev hookenv.State, shellVars map[string]*string, shell
 			res.Exports = a.exports
 		}
 	}
-	return plan.Finish(res)
+	return plan.Finish(res), plan.Deactivate || plan.Use != nil
 }
 
 // unsetGitIdentity is the git half of deactivate's eval'd output: under the
@@ -200,9 +212,9 @@ func unsetGitIdentity(pwd, wd string, fish bool) {
 func writeHookScript(b *strings.Builder, shell string, out hookenv.Output) {
 	for _, k := range out.Unsets {
 		if shell == "fish" {
-			b.WriteString("set -e " + k + "\n")
+			b.WriteString("set -e -g " + k + "\n")
 		} else {
-			b.WriteString("unset " + k + "\n")
+			b.WriteString("unset -v " + k + "\n")
 		}
 	}
 	for _, kv := range out.Exports {
@@ -283,13 +295,14 @@ func newerThan(t time.Time, profilesDir string) bool {
 	return false
 }
 
-// touchStamp sets the stamp's mtime to now (creating it); a new stamp also
-// sweeps the stamps of shells gone for stampMaxAge. Failures are ignored: a
-// missing stamp only makes the guard call hook-env again.
-func touchStamp(path string, isNew bool) {
+// touchStamp sets the stamp's mtime to when, creating it (and its dir: it
+// may have been removed, e.g. by a reinstall). A new stamp also sweeps the
+// stamps of shells gone for stampMaxAge. Failures are ignored: a missing
+// stamp only makes the guard call hook-env again.
+func touchStamp(path string, isNew bool, when time.Time) {
 	dir := filepath.Dir(path)
+	_ = os.MkdirAll(dir, 0o700)
 	if isNew {
-		_ = os.MkdirAll(dir, 0o700)
 		if ents, err := os.ReadDir(dir); err == nil {
 			cutoff := time.Now().Add(-stampMaxAge)
 			for _, e := range ents {
@@ -304,6 +317,5 @@ func touchStamp(path string, isNew bool) {
 		return
 	}
 	_ = f.Close()
-	now := time.Now()
-	_ = os.Chtimes(path, now, now)
+	_ = os.Chtimes(path, when, when)
 }

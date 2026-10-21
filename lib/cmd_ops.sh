@@ -308,16 +308,23 @@ cmd_deactivate() {
     return 0
   fi
 
-  load_profile "$current"
+  eval_shell="$(echo "${eval_shell:-bash}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$eval_shell" == "fish" ]] || eval_shell="bash"
+
   local wd_use=""
-  if [[ -n "${WORK_DIR:-}" && "$PWD" == "${WORK_DIR}"* ]]; then
-    wd_use="$WORK_DIR"
+  if ! profile_exists "$current"; then
+    # R13: a deleted profile still leaves the context, with the fixed unsets.
+    warn "Profile '$current' no longer exists; cleared the active context" >&2
+    local SECRET_KEYS="" EXTRA_ENVS=""
+  else
+    load_profile "$current"
+    if [[ -n "${WORK_DIR:-}" && "$PWD" == "${WORK_DIR}"* ]]; then
+      wd_use="$WORK_DIR"
+    fi
   fi
 
   clear_active_profile_activation
 
-  eval_shell="$(echo "${eval_shell:-bash}" | tr '[:upper:]' '[:lower:]')"
-  [[ "$eval_shell" == "fish" ]] || eval_shell="bash"
   _ctx_deactivate_emit_unsets "$eval_shell" "$wd_use"
 
   if ! $want_eval && [[ "$quiet" == "0" ]]; then

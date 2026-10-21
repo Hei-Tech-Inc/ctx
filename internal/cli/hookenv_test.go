@@ -50,6 +50,8 @@ var hookCases = []hookCase{
 		config: []string{"autoswitch_notify=off"}, locals: []string{"CTX_AUTOSWITCH_NOTIFY=1"},
 	},
 	{name: "exported CTX_AUTOSWITCH_NOTIFY=0 beats config on", steps: []string{"w/a", "."}, env: []string{"CTX_AUTOSWITCH_NOTIFY=0"}},
+	// R13: leaving a deleted current profile clears it once; no notify on later cds.
+	{name: "deleted current profile left once", steps: []string{".", "home", ".", "w/a"}, config: []string{"active=gone"}},
 }
 
 // hookFixture writes profiles, dirs, config, secrets and fakes under td and
@@ -439,19 +441,19 @@ export CTX_PROMPT_WORK_DIR=@TD/w/a
 __CTX_STATE=v1\|@TD/w/a/x\|a\|AWS_PROFILE\ API_KEY\ CTX_ACTIVE_PROFILE\ CTX_ACTIVATION_TRIGGER
 __CTX_STAMP=@TD/ctx/@STAMP
 `,
-	`unset API_KEY
-unset AWS_PROFILE
-unset GH_TOKEN
-unset _CTX_GH_PROFILE
+	`unset -v API_KEY
+unset -v AWS_PROFILE
+unset -v GH_TOKEN
+unset -v _CTX_GH_PROFILE
 export CTX_ACTIVE_PROFILE=b
 export CTX_PROMPT_PROFILE=b
 export CTX_PROMPT_WORK_DIR=@TD/w/b
 __CTX_STATE=v1\|@TD/w/b\|b\|CTX_ACTIVE_PROFILE\ CTX_ACTIVATION_TRIGGER
 `,
-	`unset CTX_ACTIVE_PROFILE
-unset CTX_ACTIVATION_TRIGGER
-unset CTX_PROMPT_PROFILE
-unset CTX_PROMPT_WORK_DIR
+	`unset -v CTX_ACTIVE_PROFILE
+unset -v CTX_ACTIVATION_TRIGGER
+unset -v CTX_PROMPT_PROFILE
+unset -v CTX_PROMPT_WORK_DIR
 export CTX_PROMPT_SHOW=0
 __CTX_STATE=v1\|@TD\|\|
 `,
@@ -472,19 +474,19 @@ set -gx CTX_PROMPT_WORK_DIR '@TD/w/a'
 set -gu __CTX_STATE 'v1|@TD/w/a/x|a|AWS_PROFILE API_KEY CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER'
 set -gu __CTX_STAMP '@TD/ctx/@STAMP'
 `,
-	`set -e API_KEY
-set -e AWS_PROFILE
-set -e GH_TOKEN
-set -e _CTX_GH_PROFILE
+	`set -e -g API_KEY
+set -e -g AWS_PROFILE
+set -e -g GH_TOKEN
+set -e -g _CTX_GH_PROFILE
 set -gx CTX_ACTIVE_PROFILE 'b'
 set -gx CTX_PROMPT_PROFILE 'b'
 set -gx CTX_PROMPT_WORK_DIR '@TD/w/b'
 set -gu __CTX_STATE 'v1|@TD/w/b|b|CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER'
 `,
-	`set -e CTX_ACTIVE_PROFILE
-set -e CTX_ACTIVATION_TRIGGER
-set -e CTX_PROMPT_PROFILE
-set -e CTX_PROMPT_WORK_DIR
+	`set -e -g CTX_ACTIVE_PROFILE
+set -e -g CTX_ACTIVATION_TRIGGER
+set -e -g CTX_PROMPT_PROFILE
+set -e -g CTX_PROMPT_WORK_DIR
 set -gx CTX_PROMPT_SHOW '0'
 set -gu __CTX_STATE 'v1|@TD||'
 `,
@@ -570,7 +572,7 @@ func TestHookEnvGoldenFish(t *testing.T) {
 	}
 }
 
-var fishLineRE = regexp.MustCompile(`(?s)^set (-gx|-gu|-e) ([A-Za-z_][A-Za-z0-9_]*)(?: '((?:[^'\\]|\\.)*)')?$`)
+var fishLineRE = regexp.MustCompile(`(?s)^set (-gx|-gu|-e -g) ([A-Za-z_][A-Za-z0-9_]*)(?: '((?:[^'\\]|\\.)*)')?$`)
 
 // applyFish applies hook-env's fish output: set -gx exports, set -gu shell
 // locals, set -e erases. Quoted values may span lines.
@@ -611,7 +613,7 @@ func applyFish(t *testing.T, out string, env, locals map[string]string) {
 			env[m[2]] = v
 		case "-gu":
 			locals[m[2]] = v
-		case "-e":
+		case "-e -g":
 			delete(env, m[2])
 		}
 	}
@@ -808,5 +810,45 @@ func TestHookEnvStamp(t *testing.T) {
 	}
 	if out := run(m[1]); out != "" {
 		t.Errorf("with its stamp: %q, want nothing", out)
+	}
+	dir := filepath.Dir(m[1])
+	checkModes := func() {
+		t.Helper()
+		if st, err := os.Stat(dir); err != nil || st.Mode().Perm() != 0o700 {
+			t.Errorf("stamps dir: %v %v, want 0700", st, err)
+		}
+		if st, err := os.Stat(m[1]); err != nil || st.Mode().Perm() != 0o600 {
+			t.Errorf("stamp: %v %v, want 0600", st, err)
+		}
+	}
+	checkModes()
+
+	// The stamps dir removed under a running shell (reinstall): recreated.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if out := run(m[1]); out != "" {
+		t.Errorf("after the dir was removed: %q, want nothing new", out)
+	}
+	checkModes()
+
+	// A new shell sweeps stamps untouched for 30 days, and only stamps.
+	stale, fresh, other := filepath.Join(dir, "0123456789abcdef"), filepath.Join(dir, "fedcba9876543210"), filepath.Join(dir, "notastamp")
+	for _, p := range []string{stale, fresh, other} {
+		hookWrite(t, p, "")
+	}
+	ago := time.Now().Add(-31 * 24 * time.Hour)
+	for _, p := range []string{stale, other} {
+		if err := os.Chtimes(p, ago, ago); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out := run(""); !strings.HasPrefix(out, "__CTX_STAMP=") {
+		t.Errorf("new shell: %q", out)
+	}
+	for p, want := range map[string]bool{stale: false, fresh: true, other: true, m[1]: true} {
+		if _, err := os.Stat(p); (err == nil) != want {
+			t.Errorf("%s exists=%v, want %v", filepath.Base(p), err == nil, want)
+		}
 	}
 }
