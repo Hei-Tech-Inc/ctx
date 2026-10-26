@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,9 +27,24 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// The differential subtests mostly wait, on child processes and, in the
+	// pty suites, on RunPTY's quiet gaps: the package keeps well under one
+	// CPU busy at the default -parallel (GOMAXPROCS). Run more at once unless
+	// -parallel was given.
+	flag.Parse()
+	parallelSet := false
+	flag.Visit(func(f *flag.Flag) { parallelSet = parallelSet || f.Name == "test.parallel" })
+	if !parallelSet {
+		_ = flag.Set("test.parallel", strconv.Itoa(4*runtime.GOMAXPROCS(0)))
+	}
+	startCoreBuild()
 	code := m.Run()
-	if sharedRoot != "" {
-		_ = os.RemoveAll(sharedRoot)
+	coreOnce.Do(func() {}) // wait for a build still running before removing it
+	testutil.CleanupSystemPath()
+	for _, d := range []string{sharedRoot, coreDir} {
+		if d != "" {
+			_ = os.RemoveAll(d)
+		}
 	}
 	os.Exit(code)
 }
@@ -74,6 +91,12 @@ func shared(t *testing.T) (script, farm string) {
 // returns setLog, which points the fakes at a fresh argv log dir and returns it.
 func statusEnv(t *testing.T, fakes map[string]string) (setLog func() string) {
 	t.Helper()
+	return statusEnvOn(t, t.Setenv, fakes)
+}
+
+// statusEnvOn is statusEnv with setenv in place of t.Setenv (a ptest's).
+func statusEnvOn(t *testing.T, setenv func(k, v string), fakes map[string]string) (setLog func() string) {
+	t.Helper()
 	script, farm := shared(t)
 	dir := t.TempDir()
 	for name := range fakes {
@@ -82,12 +105,12 @@ func statusEnv(t *testing.T, fakes map[string]string) (setLog func() string) {
 		}
 	}
 	for _, name := range fakeTools {
-		t.Setenv("FAKE_BODY_"+strings.ReplaceAll(name, "-", "_"), fakes[name])
+		setenv("FAKE_BODY_"+strings.ReplaceAll(name, "-", "_"), fakes[name])
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+farm)
+	setenv("PATH", dir+string(os.PathListSeparator)+farm)
 	return func() string {
 		d := t.TempDir()
-		t.Setenv("FAKE_LOGDIR", d)
+		setenv("FAKE_LOGDIR", d)
 		return d
 	}
 }
@@ -196,7 +219,7 @@ func TestStatusTextMatchesBash(t *testing.T) {
 		}},
 		{"no tools", map[string]string{}, func(f *fixture) string { return full(f) }},
 		{"active env var", good, func(f *fixture) string {
-			t.Setenv("CTX_ACTIVE_PROFILE", "acme")
+			f.p.Setenv("CTX_ACTIVE_PROFILE", "acme")
 			return full(f)
 		}},
 		{"minimal profile", good, func(f *fixture) string {
@@ -211,17 +234,19 @@ func TestStatusTextMatchesBash(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			f := newFixture(t)
-			t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+			p := newPtest(t)
+			f := newPFixture(p)
+			p.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 			cwd := c.setup(f)
-			setLog := statusEnv(t, c.fakes)
+			setLog := statusEnvOn(t, p.Setenv, c.fakes)
 			bashLog := setLog()
 			want, wantCode := f.bashText(cwd, "status")
 			wantArgv := argvs(t, bashLog)
-			t.Chdir(cwd)
-			t.Setenv("PWD", cwd)
+			p.Setenv("PWD", cwd)
 			goLog := setLog()
-			got, stderr, code := goText(StatusText)
+			var got, stderr string
+			var code int
+			p.inProc(cwd, func() { got, stderr, code = goText(StatusText) })
 			if gotArgv := argvs(t, goLog); !reflect.DeepEqual(gotArgv, wantArgv) {
 				t.Errorf("external argv differ\n go:   %q\nbash: %q", gotArgv, wantArgv)
 			}

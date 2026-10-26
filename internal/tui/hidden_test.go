@@ -62,3 +62,26 @@ func TestReadSecretTTYRestores(t *testing.T) {
 		}
 	}
 }
+
+// SaveTTY's restore puts back the state read when it was called, even after a
+// hidden read turned echo off, and is a no-op without a terminal.
+func TestSaveTTYRestores(t *testing.T) {
+	origGet, origSet := ttyGet, ttySet
+	t.Cleanup(func() { ttyGet, ttySet = origGet, origSet })
+	saved := &ttyState{}
+	var sets []*ttyState
+	ttyGet = func(int) (*ttyState, error) { return saved, nil }
+	ttySet = func(_ int, s *ttyState) error { sets = append(sets, s); return nil }
+	restore := saveTTYFd(7)
+	restore()
+	if len(sets) != 1 || sets[0] != saved {
+		t.Errorf("want one set(saved), got %v", sets)
+	}
+	ttyGet = func(int) (*ttyState, error) { return nil, errNoTermios }
+	sets = nil
+	saveTTYFd(7)()
+	if len(sets) != 0 {
+		t.Errorf("no terminal: want no set, got %v", sets)
+	}
+	SaveTTY(strings.NewReader(""))() // not a terminal: a no-op
+}

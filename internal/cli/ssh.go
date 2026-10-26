@@ -6,67 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Hei-Tech-Inc/ctx/internal/atomicfile"
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
+	"github.com/Hei-Tech-Inc/ctx/internal/gitssh"
 )
 
 // sshConfigPath is CTX_SSH_CONFIG: $HOME/.ssh/ctx_config.
-func sshConfigPath() string { return filepath.Join(os.Getenv("HOME"), ".ssh", "ctx_config") }
-
-// ensureSSHInclude mirrors ensure_ssh_include: make sure ~/.ssh/config starts
-// with an Include of the ctx-managed file, backing it up before the first edit.
-func ensureSSHInclude() {
-	home := os.Getenv("HOME")
-	sshMain := filepath.Join(home, ".ssh", "config")
-	ctxSSH := sshConfigPath()
-	_ = os.MkdirAll(filepath.Join(home, ".ssh"), 0o777)
-	_ = os.Chmod(filepath.Join(home, ".ssh"), 0o700)
-	if f, err := os.OpenFile(ctxSSH, os.O_CREATE|os.O_WRONLY, 0o666); err == nil {
-		f.Close()
-	}
-	_ = os.Chmod(ctxSSH, 0o600)
-
-	existing, _ := os.ReadFile(sshMain)
-	if strings.Contains(string(existing), "Include "+ctxSSH) {
-		return
-	}
-	_ = ctxconfig.BackupFile(sshMain)
-	body := "# ctx managed hosts — added by ctx installer\nInclude " + ctxSSH + "\n\n" + string(existing)
-	tmp, err := os.CreateTemp(filepath.Dir(sshMain), "config.")
-	if err != nil {
-		return
-	}
-	_, werr := tmp.WriteString(body)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil || os.Rename(tmp.Name(), sshMain) != nil {
-		os.Remove(tmp.Name())
-		return
-	}
-	_ = os.Chmod(sshMain, 0o600)
-	ctxconfig.Log("Added Include " + ctxSSH + " to " + sshMain)
-}
-
-// gitconfigAddInclude mirrors gitconfig_add_include: append an includeIf for
-// workDir to ~/.gitconfig unless identityFile is already mentioned there.
-// It reports whether it added the block.
-func gitconfigAddInclude(workDir, identityFile string) bool {
-	gitconfig := filepath.Join(os.Getenv("HOME"), ".gitconfig")
-	if data, err := os.ReadFile(gitconfig); err == nil && strings.Contains(string(data), identityFile) {
-		return false
-	}
-	_ = ctxconfig.BackupFile(gitconfig)
-	f, err := os.OpenFile(gitconfig, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	if _, err := f.WriteString("\n[includeIf \"gitdir:" + workDir + "/\"]\n  path = " + identityFile + "\n"); err != nil {
-		return false
-	}
-	ctxconfig.Log("Added includeIf for " + workDir + " to ~/.gitconfig")
-	return true
-}
+func sshConfigPath() string { return gitssh.SSHConfigPath() }
 
 // sourcedWorkDir returns WORK_DIR as `source profile.conf` leaves it (no ~
 // expansion beyond what the file itself does), "" when unset.
@@ -153,7 +99,7 @@ func awkLines(s string) []string {
 // line are kept. A path line not directly under an [includeIf header is left alone.
 // The file is only rewritten (after a backup) when a line is dropped, and a
 // symlinked ~/.gitconfig is written through with its mode kept.
-func gitconfigRemoveInclude(identityFile string) error {
+func gitconfigRemoveInclude(identityFile string, warn gitssh.Warn) error {
 	path := filepath.Join(os.Getenv("HOME"), ".gitconfig")
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -185,36 +131,33 @@ func gitconfigRemoveInclude(identityFile string) error {
 	if !dropped {
 		return nil
 	}
-	_ = ctxconfig.BackupFile(path)
+	if ctxconfig.BackupFile(path) != nil && warn != nil {
+		warn("Could not back up " + path)
+	}
 	return writeThrough(path, []byte(out.String()))
 }
 
 // writeThrough atomically replaces the file path points to (following a
 // symlink) with data, keeping that file's mode, like `cat tmp > file` does.
+// A file that does not exist yet gets mode 0600.
 func writeThrough(path string, data []byte) error {
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		path = real
-	}
-	mode := os.FileMode(0o600)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".")
-	if err != nil {
-		return err
-	}
-	_, werr := tmp.Write(data)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr == nil {
-		werr = os.Chmod(tmp.Name(), mode)
-	}
-	if werr == nil {
-		werr = os.Rename(tmp.Name(), path)
-	}
-	if werr != nil {
-		os.Remove(tmp.Name())
-	}
-	return werr
+	return writeThroughMode(path, data, 0o600)
+}
+
+// writeTemp writes data into the temp file; tests replace it to inject failures.
+var writeTemp = func(f *os.File, data []byte) error {
+	_, err := f.Write(data)
+	return err
+}
+
+// writeThroughMode is writeThrough with newMode for a file that does not exist
+// yet (atomicfile.WriteThrough: the target is replaced only by a rename of a
+// complete temp file in its directory, so a failed write leaves it as it was).
+func writeThroughMode(path string, data []byte, newMode os.FileMode) error {
+	return atomicfile.WriteThrough(path, data, func(old os.FileMode, existed bool) os.FileMode {
+		if existed {
+			return old
+		}
+		return newMode
+	}, writeTemp)
 }

@@ -60,6 +60,13 @@ type Prompter interface {
 	AskSecret(prompt string) (string, error)
 	// AskYN asks a yes/no question; def is the answer for a bare Enter.
 	AskYN(prompt string, def bool) (bool, error)
+	// Ask reads a line of text; an empty answer is def. hint is the rich
+	// placeholder ("" picks Bash's default one) and is unused in plain mode.
+	Ask(prompt, def, hint string) (string, error)
+	// PickOne asks for one of items and returns it, or "" when the user
+	// skips (plain: 0 or anything invalid). An empty list returns "" without
+	// prompting.
+	PickOne(prompt string, items []string) (string, error)
 }
 
 // Prompter returns the rich or plain prompter for t.

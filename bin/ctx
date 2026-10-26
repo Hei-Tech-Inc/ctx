@@ -18,6 +18,10 @@ source "$CTX_LIB/cmd_import.sh"
 # shellcheck source=../lib/cmd_ops.sh
 source "$CTX_LIB/cmd_ops.sh"
 
+# A cancelled prompt (user_cancelled) signals this shell from a command
+# substitution; exit with status 130 instead of dying from the signal.
+trap 'exit 130' INT
+
 # ─── Flag parsing ─────────────────────────────────────────────────────────────
 CTX_DRY_RUN=0
 CTX_QUIET="${CTX_QUIET:-0}" # inherited (e.g. the autoswitch hook); --quiet/-q sets 1
@@ -63,15 +67,16 @@ cmd_help() {
       "$(gum style --faint "DAILY USE")" \
       "  use  <name>      Activate a profile (--eval bash|fish: print exports for eval)" \
       "  deactivate       Clear active profile (prints eval for your shell)" \
-      "  list             List all profiles" \
-      "  status           Active profile + live checks" \
+      "  list (ls)        List all profiles" \
+      "  status (st)      Active profile + live checks" \
       "  clone            git clone with GitHub host rewrite for this profile" \
       "  workdir-prompt   Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)" \
-      "  run -- <cmd>     Run one command (e.g. an AI agent) with this folder's profile identity" \
-      "  env              Print the profile's identity as exports (eval; --secrets to include secrets)" \
-      "  agent-rules      Print or --write AI agent instructions (AGENTS.md)" \
-      "  mcp              Run the ctx MCP server (stdio) for AI agents" \
-      "  knowledge        Manage per-client knowledge notes" \
+      "  run [-p name] -- <cmd>  Run one command (e.g. an AI agent) with this folder's profile identity" \
+      "  env [-p name]    Print the profile's identity as exports (eval; --secrets, --fish)" \
+      "  agent-rules      Print or --write [file] AI agent instructions (AGENTS.md)" \
+      "  mcp              Run the ctx MCP server (stdio) for AI agents; --profile NAME" \
+      "  mcp install <claude|cursor>  Register the MCP server with Claude Code or Cursor" \
+      "  knowledge init [name]  Create per-client knowledge notes" \
       "" \
       "$(gum style --faint "SECRETS  (Keychain or ~/.ctx/secrets)")" \
       "  secret set   <profile> <KEY>" \
@@ -87,19 +92,20 @@ cmd_help() {
       "  config import    Import portable config bundle" \
       "  verify [name]    One profile: live ssh -T, gh match, paths, email" \
       "  edit   <name>    Open profile in \$EDITOR" \
-      "  remove <name>    Delete profile + secrets" \
+      "  remove <name>    Delete profile + secrets (rm, del)" \
       "  undo             Restore last backup" \
       "  install-hook     Install mise + ctx hooks into shell rc" \
       "  upgrade [--check] Re-run installer, or check for newer version" \
       "  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe" \
       "  doctor           Machine-wide: tools, hooks, SSH layout, profiles" \
-      "  guard [install|uninstall]  Block commits/pushes with the wrong profile identity" \
-      "  version          Print version" \
+      "  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity" \
+      "  completion <zsh|bash|fish>  Print shell completion script" \
+      "  version          Print version (-v, --version)" \
       "  help setup       Full setup wizard + --config reference" \
       "" \
       "$(gum style --faint "FLAGS")" \
       "  --dry-run        Preview changes without writing files" \
-      "  --quiet          Suppress output (used by auto-switch)" \
+      "  --quiet, -q      Suppress output (used by auto-switch)" \
       "  --no-gum         Force plain text prompts" \
       "  --json           Machine-readable JSON (list, status)" \
       "" \
@@ -110,36 +116,40 @@ cmd_help() {
       "  -y / --yes       With --config: skip final confirmation prompt" \
       "  setup --help     Same as: ctx help setup"
   else
+    # BOLD/RESET hold the text \033[1m (not the escape byte); expand it for the heredoc.
+    local _b _r
+    _b="$(printf '%b' "$BOLD")" _r="$(printf '%b' "$RESET")"
     cat <<EOF
 
-${BOLD}ctx${RESET} — client context switcher v${CTX_VERSION}
+${_b}ctx${_r} — client context switcher v${CTX_VERSION}
 
-${BOLD}SETUP${RESET}
+${_b}SETUP${_r}
   init                  Check deps, install hooks
   setup                 Configure a new profile (optional: --config FILE -y)
   import / add          Alias for setup
 
-${BOLD}DAILY USE${RESET}
+${_b}DAILY USE${_r}
   use  <name>           Activate a profile (gh, SSH, AWS, Azure, GCP, kubectl)
                         --eval bash|fish prints exports; the ctx shell function evals it
   deactivate            Clear active profile from ~/.ctx/config; run eval \"\$(ctx deactivate)\"
-  list                  List all profiles
-  status                Active profile + live checks
+  list (ls)             List all profiles
+  status (st)           Active profile + live checks
   clone                 git clone with GitHub host rewrite (see README)
   workdir-prompt        Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)
   run [-p name] -- <cmd>  Run one command (e.g. an AI agent) with this folder's profile identity
   env [-p name]         Print the profile's identity as exports (eval; --secrets, --fish)
   agent-rules [--write [file]]  Print or write AI agent instructions (default: AGENTS.md)
-  mcp                   Run the ctx MCP server (stdio) for AI agents
-  knowledge             Manage per-client knowledge notes
+  mcp [--profile name]  Run the ctx MCP server (stdio) for AI agents
+  mcp install <claude|cursor>  Register the MCP server with Claude Code or Cursor
+  knowledge init [name] Create per-client knowledge notes
 
-${BOLD}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${RESET}
+${_b}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk)${_r}
   secret set   <profile> <KEY>
   secret get   <profile> <KEY>
   secret list  <profile>
   secret delete <profile> <KEY>
 
-${BOLD}MAINTENANCE${RESET}
+${_b}MAINTENANCE${_r}
   help setup            Full setup wizard + --config reference
   config [show]         Show ctx config values
   config work-root <p>  Set default client directory root
@@ -148,19 +158,20 @@ ${BOLD}MAINTENANCE${RESET}
   config import <dir>   Import config bundle on a new machine
   verify [name]         One profile: live ssh -T, gh match, paths, email
   edit   <name>         Open profile config in \$EDITOR
-  remove <name>         Delete profile + stored secrets
+  remove <name>         Delete profile + stored secrets (rm, del)
   undo                  Restore last backup
   install-hook [rc]     Install mise + ctx hooks into shell rc
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles
-  guard [install|uninstall]  Block commits/pushes with the wrong profile identity
+  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity
   completion <zsh|bash|fish> Print shell completion script
-  version               Print version
+  version               Print version (-v, --version)
+  help [setup]          This screen (-h, --help)
 
-${BOLD}FLAGS${RESET}
+${_b}FLAGS${_r}
   --dry-run             Preview changes, write nothing
-  --quiet               Suppress output (auto-switch hook uses this)
+  --quiet, -q           Suppress output (auto-switch hook uses this)
   --no-gum              Force plain text prompts
   --json                Machine-readable JSON for supported commands (list, status)
   setup --scope clone   Profile + SSH host for ctx clone only
@@ -169,8 +180,8 @@ ${BOLD}FLAGS${RESET}
   setup -y              With --config: confirm without prompting
   setup --help          Same as: ctx help setup
 
-${BOLD}SETUP CONFIG FILE${RESET}
-  See ${BOLD}examples/setup.noninteractive.conf.example${RESET} in the repo.
+${_b}SETUP CONFIG FILE${_r}
+  See ${_b}examples/setup.noninteractive.conf.example${_r} in the repo.
   1. ctx setup           → wizard detects your existing keys/accounts
   2. ctx writes:
      - ~/.ctx/profiles/<name>.conf   (metadata)
@@ -180,7 +191,7 @@ ${BOLD}SETUP CONFIG FILE${RESET}
      - ~/clients/<name>/mise.toml    (env vars + hooks, auto-loads on cd)
   3. Secrets → macOS Keychain (or ~/.ctx/secrets elsewhere), loaded by mise hooks.enter
 
-${BOLD}INSTALL REQUIREMENTS${RESET}
+${_b}INSTALL REQUIREMENTS${_r}
   Everything is installed by install.sh:
     mise (env/tools per dir), gum (TUI), gh (GitHub auth), git, awscli
 
@@ -204,7 +215,9 @@ _ctx() {
     'use:Activate a profile'
     'deactivate:Clear active profile (shell eval)'
     'list:List all profiles'
+    'ls:Alias for list'
     'status:Show active profile and live checks'
+    'st:Alias for status'
     'clone:git clone with GitHub host rewrite'
     'workdir-prompt:Print WORK_DIR line when cwd is in prompt scope'
     'config:Configure ctx defaults'
@@ -212,12 +225,14 @@ _ctx() {
     'verify:Verify profile wiring'
     'edit:Open profile config in $EDITOR'
     'remove:Delete a profile'
+    'rm:Alias for remove'
+    'del:Alias for remove'
     'undo:Restore last backup'
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
     'doctor:Health check'
-    'guard:Git identity guard (status, install, uninstall)'
+    'guard:Git identity guard (status, install, uninstall, check)'
     'run:Run a command with the profile identity'
     'env:Print profile identity as exports'
     'agent-rules:Print or write AI agent instructions'
@@ -226,10 +241,16 @@ _ctx() {
     'completion:Print shell completion'
     'version:Print version'
     'help:Show help'
+    '-v:Print version'
+    '--version:Print version'
+    '-h:Show help'
+    '--help:Show help'
   )
   profiles=("${(@f)$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}')}")
   local setup_flags=(
     '--config:Non-interactive KEY=value file'
+    '--scope:Profile scope (clone or full)'
+    '--extend:Add to an existing profile'
     '-y:Skip final confirm'
     '--yes:Skip final confirm'
     '--help:Full setup reference'
@@ -239,6 +260,7 @@ _ctx() {
   local global_flags=(
     '--dry-run:Preview without writing files'
     '--quiet:Suppress output'
+    '-q:Suppress output'
     '--no-gum:Plain prompts'
     '--json:JSON output (list, status)'
   )
@@ -246,13 +268,18 @@ _ctx() {
     2) _describe 'ctx flags' global_flags && _describe 'ctx commands' cmds ;;
     3)
       case ${words[2]} in
-        --dry-run|--quiet|--no-gum|--json) _describe 'ctx commands' cmds ;;
-        use|edit|remove|verify) _describe 'profiles' profiles ;;
+        --dry-run|--quiet|-q|--no-gum|--json) _describe 'ctx commands' cmds ;;
+        use|edit|remove|rm|del|verify) _describe 'profiles' profiles ;;
+        env) local fl=('-p:Profile' '--profile:Profile' '--secrets:Include secrets' '--fish:Fish syntax'); _describe 'env flags' fl ;;
+        run) local fl=('-p:Profile' '--profile:Profile'); _describe 'run flags' fl ;;
+        mcp) local sub=('install:Register with Claude Code or Cursor' '--profile:Serve one profile'); _describe 'mcp options' sub ;;
+        knowledge) local sub=('init'); _describe 'subcommands' sub ;;
+        agent-rules) local sub=('--write:Write to a file'); _describe 'agent-rules flags' sub ;;
         setup|import|add) _describe 'setup options' setup_flags ;;
         help) _describe 'help topics' help_topics ;;
         secret) local sub=('set' 'get' 'list' 'delete' 'migrate'); _describe 'subcommands' sub ;;
         config) local sub=('show' 'work-root' 'secret-provider' 'prompt-workdir-depth' 'prompt-extra-paths' 'autoswitch-notify' 'export' 'import'); _describe 'subcommands' sub ;;
-        guard) local sub=('status' 'install' 'uninstall'); _describe 'subcommands' sub ;;
+        guard) local sub=('status' 'install' 'uninstall' 'remove' 'check'); _describe 'subcommands' sub ;;
         upgrade) local sub=('--check'); _describe 'upgrade flags' sub ;;
         uninstall) local sub=('--purge'); _describe 'uninstall flags' sub ;;
         completion) local sh=('zsh' 'bash' 'fish'); _describe 'shells' sh ;;
@@ -263,6 +290,10 @@ _ctx() {
         setup|import|add)
           if [[ ${words[3]} == --config ]]; then
             _files
+          elif [[ ${words[3]} == --scope ]]; then
+            local scopes=('clone' 'full'); _describe 'scopes' scopes
+          elif [[ ${words[3]} == --extend ]]; then
+            _describe 'profiles' profiles
           else
             _describe 'setup options' setup_flags
           fi
@@ -273,6 +304,15 @@ _ctx() {
           esac
           ;;
         use) local ev=('--eval:Print shell exports for eval'); _describe 'use flags' ev ;;
+        env|run) case ${words[3]} in -p|--profile) _describe 'profiles' profiles ;; esac ;;
+        mcp)
+          case ${words[3]} in
+            install) local tg=('claude' 'cursor'); _describe 'targets' tg ;;
+            --profile) _describe 'profiles' profiles ;;
+          esac
+          ;;
+        knowledge) [[ ${words[3]} == init ]] && _describe 'profiles' profiles ;;
+        agent-rules) [[ ${words[3]} == --write ]] && _files ;;
       esac
       ;;
     5)
@@ -292,11 +332,11 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
+  local cmds="init setup import add use deactivate list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
-  if [[ "$w1" =~ ^(list|status)$ && "$prev" == "$w1" ]]; then
+  if [[ "$w1" =~ ^(list|ls|status|st)$ && "$prev" == "$w1" ]]; then
     COMPREPLY=($(compgen -W "--json" -- "$cur"))
     return
   fi
@@ -306,7 +346,15 @@ _ctx_comp() {
       COMPREPLY=($(compgen -f -- "$cur"))
       return
     fi
-    COMPREPLY=($(compgen -W "--config -y --yes --help -h" -- "$cur"))
+    if [[ "$prev" == "--scope" ]]; then
+      COMPREPLY=($(compgen -W "clone full" -- "$cur"))
+      return
+    fi
+    if [[ "$prev" == "--extend" ]]; then
+      COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
+      return
+    fi
+    COMPREPLY=($(compgen -W "--config --scope --extend -y --yes --help -h" -- "$cur"))
     return
   fi
   if [[ "$prev" == "help" ]]; then
@@ -314,15 +362,24 @@ _ctx_comp() {
     return
   fi
   case "$prev" in
-    use|edit|remove|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    use|edit|remove|rm|del|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    env) COMPREPLY=($(compgen -W "-p --profile --secrets --fish" -- "$cur")) ;;
+    run) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
+    mcp) COMPREPLY=($(compgen -W "install --profile" -- "$cur")) ;;
+    install) [[ "$w1" == mcp ]] && COMPREPLY=($(compgen -W "claude cursor" -- "$cur")) ;;
+    knowledge) COMPREPLY=($(compgen -W "init" -- "$cur")) ;;
+    init) [[ "$w1" == knowledge ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    agent-rules) COMPREPLY=($(compgen -W "--write" -- "$cur")) ;;
+    --write) [[ "$w1" == agent-rules ]] && COMPREPLY=($(compgen -f -- "$cur")) ;;
+    -p|--profile) [[ "$w1" =~ ^(env|run|mcp)$ ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     secret) COMPREPLY=($(compgen -W "set get list delete migrate" -- "$cur")) ;;
     config) COMPREPLY=($(compgen -W "show work-root secret-provider prompt-workdir-depth prompt-extra-paths autoswitch-notify export import" -- "$cur")) ;;
-    guard) COMPREPLY=($(compgen -W "status install uninstall" -- "$cur")) ;;
+    guard) COMPREPLY=($(compgen -W "status install uninstall remove check" -- "$cur")) ;;
     upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     uninstall) COMPREPLY=($(compgen -W "--purge" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
-    ctx) COMPREPLY=($(compgen -W "$cmds --dry-run --quiet --no-gum --json" -- "$cur")) ;;
+    ctx) COMPREPLY=($(compgen -W "$cmds --dry-run --quiet -q --no-gum --json -v --version -h --help" -- "$cur")) ;;
   esac
   if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
     COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
@@ -346,17 +403,33 @@ end
 complete -c ctx -f
 
 complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
+complete -c ctx -n '__fish_use_subcommand' -l dry-run -d 'Preview without writing files'
+complete -c ctx -n '__fish_use_subcommand' -s q -l quiet -d 'Suppress output'
+complete -c ctx -n '__fish_use_subcommand' -l no-gum -d 'Plain prompts'
+complete -c ctx -n '__fish_use_subcommand' -s v -l version -d 'Print version'
+complete -c ctx -n '__fish_use_subcommand' -s h -l help -d 'Show help'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list status clone workdir-prompt config secret verify edit remove undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
-complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall'
+complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall remove check'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -l eval -d 'Print shell exports for eval' -x -a 'fish bash'
 complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
-complete -c ctx -n '__fish_seen_subcommand_from ctx remove' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx remove rm del' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx verify' -a '(__fish_ctx_profiles)'
+
+complete -c ctx -n '__fish_seen_subcommand_from ctx env' -s p -l profile -d 'Profile' -x -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx env' -l secrets -d 'Include secrets'
+complete -c ctx -n '__fish_seen_subcommand_from ctx env' -l fish -d 'Fish syntax'
+complete -c ctx -n '__fish_seen_subcommand_from ctx run' -s p -l profile -d 'Profile' -x -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx mcp' -a 'install' -d 'Register with Claude Code or Cursor'
+complete -c ctx -n '__fish_seen_subcommand_from ctx mcp' -l profile -d 'Serve one profile' -x -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from install' -a 'claude cursor'
+complete -c ctx -n '__fish_seen_subcommand_from ctx knowledge' -a 'init'
+complete -c ctx -n '__fish_seen_subcommand_from knowledge; and __fish_seen_subcommand_from init' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx agent-rules' -l write -d 'Write to a file (default AGENTS.md)' -r
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx secret' -a 'set get list delete migrate'
 complete -c ctx -n '__fish_seen_subcommand_from ctx secret set' -a '(__fish_ctx_profiles)'
@@ -372,9 +445,11 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -s y -l ye
 complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -s h -l help -d 'Full setup reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -l config -d 'Non-interactive KEY=value file' -r
 complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add; and __fish_prev_arg_in --config' -f -a '(__fish_complete_path)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -l scope -d 'Profile scope' -x -a 'clone full'
+complete -c ctx -n '__fish_seen_subcommand_from ctx setup import add' -l extend -d 'Add to an existing profile' -x -a '(__fish_ctx_profiles)'
 
-complete -c ctx -n '__fish_seen_subcommand_from ctx list' -l json -d 'JSON output'
-complete -c ctx -n '__fish_seen_subcommand_from ctx status' -l json -d 'JSON output'
+complete -c ctx -n '__fish_seen_subcommand_from ctx list ls' -l json -d 'JSON output'
+complete -c ctx -n '__fish_seen_subcommand_from ctx status st' -l json -d 'JSON output'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx clone' -s p -l profile -d 'Profile' -a '(__fish_ctx_profiles)'
 FISH
@@ -408,7 +483,8 @@ _ctx_core_exec() {
 }
 
 # Run a command in ctx-core when it is installed, CTX_CORE is not "off", and the
-# binary says it implements the command (`ctx-core implements <cmd> [sub]`).
+# binary says it implements the command (`ctx-core implements <cmd> [args…]`;
+# it sees every argument, e.g. setup decides from --config FILE and --yes).
 # Once handed over there is no fallback: ctx-core's exit code is final.
 # Returns 1 (caller runs Bash) otherwise.
 _ctx_core_forward() {
@@ -416,10 +492,10 @@ _ctx_core_forward() {
   local bin
   bin="$(_ctx_core_bin)" || return 1
   [[ -x "$bin" ]] || return 1
-  export CTX_VERSION CTX_DIR
+  export CTX_VERSION CTX_DIR CTX_LIB
   CTX_BIN_PATH="$CTX_BIN/ctx"
   export CTX_BIN_PATH
-  "$bin" implements "$1" "${2:-}" >/dev/null 2>&1 || return 1
+  "$bin" implements "$@" >/dev/null 2>&1 || return 1
   exec "$bin" "$@"
 }
 
@@ -429,8 +505,14 @@ main() {
   shift 2>/dev/null || true
 
   case "$cmd" in
-    init)             cmd_init ;;
-    setup|import|add) cmd_import "$@" ;;
+    init)
+      _ctx_core_forward init
+      cmd_init
+      ;;
+    setup|import|add)
+      _ctx_core_forward setup "$@" # every shape, --extend NAME included
+      cmd_import "$@"
+      ;;
     use)
       _ctx_core_forward use "$@" # always (quiet and non-quiet)
       cmd_use "$@"
@@ -438,6 +520,15 @@ main() {
     deactivate)
       _ctx_core_forward deactivate "$@"
       cmd_deactivate "$@"
+      ;;
+    activate)
+      _ctx_core_forward activate "$@"
+      die "ctx activate needs ctx-core (CTX_CORE=off or ctx-core not found)"
+      ;;
+    hook-env)
+      # Normally the activate glue runs ctx-core hook-env directly.
+      _ctx_core_forward hook-env "$@"
+      die "ctx hook-env needs ctx-core (CTX_CORE=off or ctx-core not found)"
       ;;
     list|ls)
       if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward list --json; else _ctx_core_forward list; fi
@@ -447,7 +538,10 @@ main() {
       if [[ "$CTX_JSON" == 1 ]]; then _ctx_core_forward status --json; else _ctx_core_forward status; fi
       cmd_status
       ;;
-    clone)            cmd_clone "$@" ;;
+    clone)
+      _ctx_core_forward clone "$@"
+      cmd_clone "$@"
+      ;;
     workdir-prompt)
       _ctx_core_forward workdir-prompt "$@"
       cmd_workdir_prompt
@@ -460,22 +554,50 @@ main() {
       case "${1:-}" in get|list|delete|set|migrate) _ctx_core_forward secret "$@" ;; esac
       cmd_secret "$@"
       ;;
-    verify)           cmd_verify "${1:-}" ;;
+    verify)
+      _ctx_core_forward verify "$@"
+      cmd_verify "${1:-}"
+      ;;
     edit)
+      _ctx_core_forward edit "$@"
       local pname="${1:-}"
       [[ -z "$pname" ]] && die "Usage: ctx edit <profile>"
       profile_exists "$pname" || die "Profile '$pname' not found."
-      "${EDITOR:-nano}" "$CTX_PROFILES_DIR/${pname}.conf"
+      # Like git: VISUAL, then EDITOR, then nano; the value may carry arguments.
+      local editor="${VISUAL:-${EDITOR:-nano}}" rc=0
+      # Ctrl+C reaches the editor too; its own handling decides the exit code.
+      # ctx and the sh (dash on Debian/Ubuntu stays the editor's parent) catch
+      # SIGINT rather than die by it; a caught signal is default again in the
+      # editor. Not `exec $editor`: that breaks EDITOR="FOO=1 vim".
+      trap : INT
+      sh -c "trap : INT; $editor \"\$@\"" sh "$CTX_PROFILES_DIR/${pname}.conf" || rc=$?
+      trap 'exit 130' INT
+      return "$rc"
       ;;
     remove|rm|del)
       _ctx_core_forward remove "$@"
       cmd_remove "${1:-}"
       ;;
-    undo)             cmd_undo ;;
-    install-hook)     cmd_install_hook "${1:-}" ;;
-    upgrade)          cmd_upgrade "$@" ;;
-    uninstall)        cmd_uninstall "$@" ;;
-    doctor)           cmd_doctor ;;
+    undo)
+      _ctx_core_forward undo "$@"
+      cmd_undo
+      ;;
+    install-hook)
+      _ctx_core_forward install-hook "$@" # Go, like Bash, reads only the first
+      cmd_install_hook "${1:-}"
+      ;;
+    upgrade)
+      _ctx_core_forward upgrade "$@"
+      cmd_upgrade "$@"
+      ;;
+    uninstall)
+      _ctx_core_forward uninstall "$@"
+      cmd_uninstall "$@"
+      ;;
+    doctor)
+      _ctx_core_forward doctor "$@"
+      cmd_doctor
+      ;;
     guard)
       case "${1:-}" in ""|check|status|install|uninstall|remove) _ctx_core_forward guard "$@" ;; esac
       cmd_guard "$@"
@@ -488,11 +610,20 @@ main() {
       _ctx_core_forward run "$@"
       cmd_run "$@"
       ;;
-    agent-rules)      cmd_agent_rules "$@" ;;
+    agent-rules)      _ctx_core_forward agent-rules "$@"; cmd_agent_rules "$@" ;;
     mcp|knowledge)    _ctx_core_exec "$cmd" "$@" ;;
-    completion)       cmd_completion "${1:-zsh}" ;;
-    version|-v|--version) echo "ctx version $CTX_VERSION" ;;
-    help|-h|--help)   cmd_help "$@" ;;
+    completion)
+      _ctx_core_forward completion "$@"
+      cmd_completion "${1:-zsh}"
+      ;;
+    version|-v|--version)
+      _ctx_core_forward ctx-version # not "version": ctx-core's own prints "ctx-core X"
+      echo "ctx version $CTX_VERSION"
+      ;;
+    help|-h|--help)
+      _ctx_core_forward help "$@"
+      cmd_help "$@"
+      ;;
     *)
       error "Unknown command: $cmd"
       echo ""

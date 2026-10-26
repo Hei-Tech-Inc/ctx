@@ -11,13 +11,16 @@ func richTerm(in string) Term {
 	return Term{In: strings.NewReader(in), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Rich: true}
 }
 
+// TestRichPrompts feeds keys through an open pipe (richKeys): with a reader
+// that hits EOF right after the keys, huh's EOF grace can cancel the form
+// before it handles them on a loaded machine. Only the EOF cases use richTerm.
 func TestRichPrompts(t *testing.T) {
-	got, err := richTerm("s3cret\r").Prompter().AskSecret("Value for K")
+	got, err := richKeys(t, "s3cret\r").Prompter().AskSecret("Value for K")
 	if err != nil || got != "s3cret" {
 		t.Errorf("AskSecret = %q, %v", got, err)
 	}
 	// Rich input keeps exactly what was typed, surrounding spaces included.
-	got, err = richTerm(" a b \r").Prompter().AskSecret("Value for K")
+	got, err = richKeys(t, " a b \r").Prompter().AskSecret("Value for K")
 	if err != nil || got != " a b " {
 		t.Errorf("AskSecret spaces = %q, %v", got, err)
 	}
@@ -31,15 +34,15 @@ func TestRichPrompts(t *testing.T) {
 		{"n", true, false},
 		{"\x1b[D\r", false, true}, // left arrow: from the focused "No" to "Yes"
 	} {
-		got, err := richTerm(c.in).Prompter().AskYN("Delete it?", c.def)
+		got, err := richKeys(t, c.in).Prompter().AskYN("Delete it?", c.def)
 		if err != nil || got != c.want {
 			t.Errorf("AskYN(%q, def=%v) = %v, %v; want %v", c.in, c.def, got, err, c.want)
 		}
 	}
-	if _, err := richTerm("\x03").Prompter().AskSecret("K"); !errors.Is(err, ErrCancelled) {
+	if _, err := richKeys(t, "\x03").Prompter().AskSecret("K"); !errors.Is(err, ErrCancelled) {
 		t.Errorf("AskSecret ctrl+c err = %v", err)
 	}
-	if _, err := richTerm("\x03").Prompter().AskYN("Q?", true); !errors.Is(err, ErrCancelled) {
+	if _, err := richKeys(t, "\x03").Prompter().AskYN("Q?", true); !errors.Is(err, ErrCancelled) {
 		t.Errorf("AskYN ctrl+c err = %v", err)
 	}
 	// EOF on non-terminal input cancels instead of hanging.

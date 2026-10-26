@@ -4,6 +4,102 @@
 # Sets CTX_PROMPT_SHOW / CTX_PROMPT_WORK_DIR / CTX_PROMPT_PROFILE for prompts (see README).
 # Runs on every prompt: the no-switch path must stay builtin-only (no subprocesses).
 
+# ── ctx-core shim ──
+# With ctx-core installed and CTX_CORE not "off", this file evals `ctx-core activate`
+# (the Go hook, ctx hook-env) and stops; the shell code after the shim is the fallback
+# when ctx-core is missing, CTX_CORE=off, or activate fails or prints nothing. ctx-core
+# is found as bin/ctx finds it: CTX_CORE_BIN (which then must be executable), ../bin or
+# this file's dir (a checkout, an install), then PATH. Either way a re-source, also
+# after a CTX_CORE flip, leaves one hook: activate removes the hook below, and the
+# fallback first removes activate's _ctx_hook.
+
+# _ctx_shim_core: the activate glue for this shell in _ctx_shim_out; false without it.
+_ctx_shim_core() {
+  local _ctx_s _ctx_c _ctx_sh=bash
+  _ctx_shim_out=""
+  [[ -z "${ZSH_VERSION:-}" ]] || _ctx_sh=zsh
+  if [[ -n "${CTX_CORE_BIN:-}" ]]; then
+    _ctx_c="$CTX_CORE_BIN"
+  else
+    if [[ "$_ctx_sh" == zsh ]]; then
+      eval '_ctx_s=${(%):-%x}'
+    else
+      _ctx_s="${BASH_SOURCE[0]:-}"
+    fi
+    case "$_ctx_s" in
+      */*) _ctx_s="${_ctx_s%/*}" ;;
+      *) _ctx_s=. ;;
+    esac
+    for _ctx_c in "$_ctx_s/../bin/ctx-core" "$_ctx_s/ctx-core" ""; do
+      [[ -z "$_ctx_c" || ( -x "$_ctx_c" && ! -d "$_ctx_c" ) ]] && break
+    done
+    if [[ -z "$_ctx_c" ]]; then
+      if [[ "$_ctx_sh" == zsh ]]; then
+        _ctx_c="$(whence -p ctx-core 2>/dev/null)"
+      else
+        _ctx_c="$(type -P ctx-core 2>/dev/null)"
+      fi
+    fi
+  fi
+  [[ -n "$_ctx_c" && -x "$_ctx_c" && ! -d "$_ctx_c" ]] || return 1
+  _ctx_shim_out="$("$_ctx_c" activate "$_ctx_sh" 2>/dev/null)" || _ctx_shim_out=""
+  [[ -n "$_ctx_shim_out" ]]
+}
+
+# _ctx_shim_drop: removes activate's hook (registrations, functions, state) before
+# the fallback registers its own. Every step tolerates errexit.
+_ctx_shim_drop() {
+  local _ctx_c _ctx_f _ctx_pc _ctx_arr=""
+  local -a _ctx_new
+  _ctx_new=()
+  typeset -f _ctx_hook >/dev/null 2>&1 || return 0
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    autoload -Uz add-zsh-hook 2>/dev/null || true
+    add-zsh-hook -d chpwd _ctx_hook 2>/dev/null || true
+    add-zsh-hook -d precmd _ctx_hook 2>/dev/null || true
+  elif declare -F _ctx_pc_strip >/dev/null 2>&1; then
+    if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+      eval '[[ -n "${PROMPT_COMMAND+x}" && "${PROMPT_COMMAND@a}" == *a* ]]' && _ctx_arr=1
+    fi
+    if [[ -n "$_ctx_arr" ]]; then
+      for _ctx_c in "${PROMPT_COMMAND[@]}"; do
+        _ctx_pc_strip "$_ctx_c"
+        [[ -z "$_ctx_pc" && "$_ctx_c" != "$_ctx_pc" ]] || _ctx_new+=("$_ctx_pc")
+      done
+      # (eval: to ShellCheck PROMPT_COMMAND stays the string the fallback below uses)
+      eval 'PROMPT_COMMAND=(${_ctx_new[@]+"${_ctx_new[@]}"})'
+    else
+      _ctx_pc_strip "${PROMPT_COMMAND:-}"
+      PROMPT_COMMAND="$_ctx_pc"
+    fi
+    if [[ -n "${_PRESERVED_PROMPT_COMMAND:-}" ]]; then
+      _ctx_pc_strip "$_PRESERVED_PROMPT_COMMAND"
+      _PRESERVED_PROMPT_COMMAND="$_ctx_pc"
+    fi
+    _ctx_new=()
+    if [[ -n "${precmd_functions+x}" ]]; then
+      for _ctx_f in ${precmd_functions[@]+"${precmd_functions[@]}"}; do
+        [[ "$_ctx_f" == _ctx_hook ]] || _ctx_new+=("$_ctx_f")
+      done
+      precmd_functions=(${_ctx_new[@]+"${_ctx_new[@]}"})
+    fi
+  fi
+  unset -f _ctx_hook _ctx_register _ctx_bp_live _ctx_pc_strip 2>/dev/null || true
+  # activate's state; the fallback recomputes from scratch (its own cache too).
+  unset __CTX_STATE __CTX_PWD _CTX_AS_STATE 2>/dev/null || true
+}
+
+if [[ "${CTX_CORE:-}" != off ]] && _ctx_shim_core; then
+  unset -f _ctx_shim_core _ctx_shim_drop
+  unset _CTX_AS_STATE _CTX_AS_MANUAL_RAW _CTX_AS_MANUAL_DEC 2>/dev/null || true
+  eval "$_ctx_shim_out"
+  unset _ctx_shim_out
+  return 0
+fi
+_ctx_shim_drop
+unset -f _ctx_shim_core _ctx_shim_drop
+unset _ctx_shim_out
+
 # ctx runs as a child process, so `ctx use` / `ctx deactivate` cannot change this shell's
 # environment by themselves. This function evals their --eval output; every other
 # subcommand goes straight to the binary. Global flags may come before the subcommand.

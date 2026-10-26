@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/ctxconfig"
 )
@@ -218,9 +219,13 @@ func (k Keychain) Delete(profile, key string) error {
 
 // List mirrors _secret_keychain_list_keys: the quoted "ctx-<profile>-<KEY>"
 // strings in the keychain dump, with the prefix removed, sorted. The profile
-// is matched literally (Bash feeds it to grep and sed as a pattern).
+// is matched literally (Bash feeds it to grep and sed as a pattern). A failed
+// `security dump-keychain` is an error, not an empty list.
 func (Keychain) List(profile string) ([]string, error) {
-	out, _ := output("security", "dump-keychain")
+	out, err := output("security", "dump-keychain")
+	if err != nil {
+		return nil, fmt.Errorf("security dump-keychain: %w", err)
+	}
 	prefix := `"ctx-` + profile + `-`
 	re := regexp.MustCompile(regexp.QuoteMeta(prefix) + `[^"\n]*"`)
 	var keys []string
@@ -293,7 +298,19 @@ func (File) List(profile string) ([]string, error) {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return nil, nil
 	}
+	if err := listable(dir); err != nil {
+		return nil, err
+	}
 	return sortLines(globNames(dir, "")), nil
+}
+
+// listable mirrors [[ -r dir && -x dir ]]: an existing store dir that cannot
+// be listed is an error (the Bash list functions return 1), not "no keys".
+func listable(dir string) error {
+	if err := syscall.Access(dir, 0x4|0x1); err != nil { // R_OK|X_OK
+		return fmt.Errorf("%s: %w", dir, err)
+	}
+	return nil
 }
 
 // globNames lists the non-hidden entries of dir that exist (symlinks followed)
@@ -355,6 +372,9 @@ func (Pass) List(profile string) ([]string, error) {
 	dir := base + "/ctx/" + profile
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return nil, nil
+	}
+	if err := listable(dir); err != nil {
+		return nil, err
 	}
 	return sortLines(globNames(dir, ".gpg")), nil
 }

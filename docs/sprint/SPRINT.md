@@ -57,18 +57,33 @@ Update this file when an item ships (check the box, link PR or commit).
 | E2 | Read-only/hot-path commands in Go: `list --json`, `status --json`, `workdir-prompt`, `env`, `run`, `guard check` | M | [x] | Forwarding via `ctx-core implements`; `CTX_CORE=off` forces Bash |
 | E3 | `use` (quiet), `deactivate`, `secret get/list/delete`, `config`, `guard install/uninstall/status` | M | [x] | Autoswitch path ~152 ms to ~96 ms (median of 20, 10 profiles, fake tools) |
 | E4a | Text `list`/`status`, non-quiet `use`, `secret set`/`migrate`, `remove`/`rm`/`del`, with Charm (`internal/tui`) | M | [x] | Rich UI without gum; `ctx-core` 13.27 MB to 15.75 MB |
-| E4b | `setup` wizard with its `import`/`add` aliases, plus `Ask`/`PickOne`/`PickMany`/`Spin` | L | [ ] | |
-| E4c | Remaining Bash-only commands: `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `completion`, `help` | L | [ ] | |
-| E5 | Shell hook via `ctx hook-env` | M | [ ] | |
-| E6 | Drop Bash | L | [ ] | |
+| E4b | `setup` wizard with its `import`/`add` aliases, plus `Ask`/`PickOne`/`Spin` | L | [x] | `internal/setup`, `internal/gitssh`, `internal/shquote`; `--extend` fixed |
+| E4c | Remaining Bash-only commands: `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `completion`, `help`, `version` | L | [x] | `internal/ghacct`, `internal/atomicfile`; fixes listed in CHANGELOG; Bash stays as fallback |
+| E5 | Shell hook via `ctx activate` / `ctx hook-env` | M | [x] | `internal/hookenv`; `lib/ctx_autoswitch.*` are shims that run `ctx activate`; switch ~68 ms to ~9 ms, unchanged prompt ~2 ms to 0.04 ms with no fork (`scripts/bench-hook.sh`) |
+| E6 | Drop Bash | L | [ ] | Needs a new version source (today `CTX_VERSION` in `lib/core.sh`, also read by `upgrade --check`); `install.sh` file list (no `lib/*.sh`) |
 
-Known follow-ups (found in E2): the Bash `prompt_extra_paths` handling never checks the last entry; Go mirrors it for parity. Fix both together in a later phase.
+Notes for E6 (from E5):
+
+- The rc block `install-hook` writes sources `lib/ctx_autoswitch.bash`/`.fish`. Once Bash is gone, either keep those two files as thin shims that run `ctx activate`, or have `install-hook` write `eval "$(ctx activate <shell>)"` and migrate existing blocks. `ctx doctor` and `init` already accept both forms.
+- Dropping the legacy hook drops its quirks too: it edits only the first element of an array `PROMPT_COMMAND`, and the fish hook matches `prompt_extra_paths` as globs.
+- fish is verified only in CI (`go test` and `test.sh` install it there); it is not installed on the dev Mac.
+- The hook's guard uses `-nt` on the config and the profiles folder. bash 3.2 and zsh compare whole seconds, so a change in the same second as this shell's stamp is picked up only at the next `cd` or change.
+- The guard watches the profiles folder's mtime, not each `.conf`: an in-place edit of a profile (e.g. a `WORK_DIR` change from an editor that writes in place) is picked up at the next `cd`. ctx's own writes are atomic renames, so they are seen. The legacy hook re-read profiles every prompt.
+- A `ctx use` in another terminal that lands while this shell's `hook-env` is running (about 8 ms) can be missed until the next `cd` or config write. Optional fix: stamp the config's own mtime after a run that wrote it.
+
+## Backlog (requested 2026-10-20)
+
+| Item | Notes |
+|------|-------|
+| Profile dashboard | A comprehensive, intuitive visual view of profiles, opened by a command (for example a `ctx dashboard` TUI) or something better. |
+| ctx logo | A logo for the project. |
+| Project website | Modeled on https://go-tui.dev/: simple and clean, with docs and its color palette as the reference; ctx's own branding and copy. |
 
 ---
 
 ## Done in this slice (reference)
 
-- A1, A2, B1, B3, C1, C2, C3, E1, E2, E3 (see git history / CHANGELOG [Unreleased]).
+- A1, A2, B1, B3, C1, C2, C3, E1, E2, E3, E4a, E4b, E4c, E5 (see git history / CHANGELOG [Unreleased]).
 
 ## References
 

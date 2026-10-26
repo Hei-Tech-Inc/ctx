@@ -27,24 +27,60 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|use|guard> [args]\n"
+const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|activate|hook-env|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor|install-hook|init|upgrade> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
-// Each entry reports whether it handles the given first argument (the
+// Each entry gets the arguments after the command and reports whether
+// ctx-core handles that shape. Most look only at the first argument (the
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
 // list and status take no subcommand besides --json; guard for every subcommand.
-var implemented = map[string]func(sub string) bool{
-	"list":           func(sub string) bool { return sub == "" || sub == "--json" },
-	"status":         func(sub string) bool { return sub == "" || sub == "--json" },
-	"workdir-prompt": func(string) bool { return true },
-	"env":            func(string) bool { return true },
-	"run":            func(string) bool { return true },
-	"guard":          func(sub string) bool { return guardSubs[sub] },
-	"secret":         func(sub string) bool { return secretSubs[sub] },
-	"config":         func(sub string) bool { return configSubs[sub] },
-	"deactivate":     func(string) bool { return true },
-	"use":            func(string) bool { return true },
-	"remove":         func(string) bool { return true },
+var implemented = map[string]func(args []string) bool{
+	"list":           func(a []string) bool { return first(a) == "" || first(a) == "--json" },
+	"status":         func(a []string) bool { return first(a) == "" || first(a) == "--json" },
+	"workdir-prompt": func([]string) bool { return true },
+	"env":            func([]string) bool { return true },
+	"run":            func([]string) bool { return true },
+	"guard":          func(a []string) bool { return guardSubs[first(a)] },
+	"secret":         func(a []string) bool { return secretSubs[first(a)] },
+	"config":         func(a []string) bool { return configSubs[first(a)] },
+	"deactivate":     func([]string) bool { return true },
+	"activate":       func([]string) bool { return true },
+	"hook-env":       func([]string) bool { return true },
+	"use":            func([]string) bool { return true },
+	"remove":         func([]string) bool { return true },
+	// setup and its aliases: every shape (the wizard, --extend, help,
+	// --config and the argument errors).
+	"setup":  func([]string) bool { return true },
+	"import": func([]string) bool { return true },
+	"add":    func([]string) bool { return true },
+	// ctx-version is the user-facing `ctx version|-v|--version` line
+	// ("ctx version X"); bin/ctx forwards it under this name so that
+	// `ctx-core version` keeps printing "ctx-core X" (install and doctor
+	// parse that).
+	"ctx-version": func([]string) bool { return true },
+	"help":        func([]string) bool { return true },
+	"completion":  func([]string) bool { return true },
+	"agent-rules": func([]string) bool { return true },
+	"edit":        func([]string) bool { return true },
+	"undo":        func([]string) bool { return true },
+	"uninstall":   func([]string) bool { return true },
+	"verify":      func([]string) bool { return true },
+	"clone":       func([]string) bool { return true },
+	"doctor":      func([]string) bool { return true },
+	// install-hook and init: every shape (bin/ctx passes install-hook only
+	// its first argument; init ignores its arguments).
+	"install-hook": func([]string) bool { return true },
+	"init":         func([]string) bool { return true },
+	// upgrade: every shape (--check, the real run; other args are ignored).
+	"upgrade": func([]string) bool { return true },
+}
+
+// first is args[0], or "" when there are no arguments.
+func first(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // secretSubs are the `secret` subcommands ctx-core runs.
@@ -64,11 +100,7 @@ func implements(cmd string, rest []string) bool {
 	if !ok {
 		return false
 	}
-	sub := ""
-	if len(rest) > 0 {
-		sub = rest[0]
-	}
-	return f(sub)
+	return f(rest)
 }
 
 // ctxVersion is the ctx version bin/ctx passes in CTX_VERSION, else the build version.
@@ -78,6 +110,9 @@ func ctxVersion() string {
 	}
 	return version
 }
+
+// setCtxVersionEnv makes CTX_VERSION the version to print (bin/ctx's, else the build's).
+func setCtxVersionEnv() { _ = os.Setenv("CTX_VERSION", ctxVersion()) }
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -116,12 +151,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cli.Config(stdout, stderr, args[1:])
 	case "deactivate":
 		return cli.Deactivate(stdout, stderr, args[1:])
+	case "activate":
+		return cli.Activate(osTerm(stdout, stderr), args[1:])
+	case "hook-env":
+		return cli.HookEnv(osTerm(stdout, stderr), args[1:])
 	case "use":
 		term := osTerm(stdout, stderr)
 		return cli.UseIn(term, args[1:])
 	case "remove":
 		term := osTerm(stdout, stderr)
 		return cli.Remove(term, args[1:])
+	case "setup", "import", "add":
+		term := osTerm(stdout, stderr)
+		return cli.SetupIn(term, args[1:])
+	case "agent-rules":
+		return cli.AgentRules(osTerm(stdout, stderr), args[1:])
+	case "edit":
+		return cli.Edit(osTerm(stdout, stderr), args[1:])
+	case "undo":
+		return cli.Undo(osTerm(stdout, stderr), args[1:])
+	case "uninstall":
+		return cli.Uninstall(osTerm(stdout, stderr), args[1:])
+	case "verify":
+		return cli.Verify(osTerm(stdout, stderr), args[1:])
+	case "clone":
+		return cli.Clone(osTerm(stdout, stderr), args[1:])
+	case "install-hook":
+		return cli.InstallHook(osTerm(stdout, stderr), args[1:])
+	case "init":
+		return cli.Init(osTerm(stdout, stderr), args[1:])
+	case "upgrade":
+		return cli.Upgrade(osTerm(stdout, stderr), args[1:])
+	case "doctor":
+		cli.CoreVersion = version
+		return cli.Doctor(osTerm(stdout, stderr), args[1:])
 	case "guard":
 		sub := ""
 		if len(args) > 1 {
@@ -143,6 +206,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stderr, "ctx-core: guard supports only status, install, uninstall and check")
 		return 127
+	case "ctx-version":
+		setCtxVersionEnv()
+		return cli.Version(stdout)
+	case "help":
+		setCtxVersionEnv()
+		return cli.Help(osTerm(stdout, stderr), args[1:])
+	case "completion":
+		return cli.Completion(stdout, stderr, args[1:])
 	case "implements":
 		if len(args) >= 2 && implements(args[1], args[2:]) {
 			return 0

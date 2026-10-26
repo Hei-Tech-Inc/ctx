@@ -132,3 +132,54 @@ func TestSecretProviderLastWins(t *testing.T) {
 		t.Errorf("SecretProvider = %q, want last value after the first =", cfg.SecretProvider)
 	}
 }
+
+func TestWorkRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", "/home/u")
+	t.Setenv("CTX_DIR", dir)
+	t.Setenv("CTX_WORK_ROOT", "")
+	if got := WorkRoot(); got != "/home/u/clients" {
+		t.Errorf("default = %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config"), []byte("work_root=~/w\nwork_root=~/x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := WorkRoot(); got != "/home/u/x" {
+		t.Errorf("config = %q", got)
+	}
+	t.Setenv("CTX_WORK_ROOT", "/env")
+	if got := WorkRoot(); got != "/env" {
+		t.Errorf("env = %q", got)
+	}
+}
+
+func TestParseNotify(t *testing.T) {
+	for v, want := range map[string]bool{
+		"": false, "1": true, "on": true, "ON": true, " Yes ": true, "tr ue": true, "TRUE\r": true,
+		"0": false, "off": false, "2": false, "enabled": false, "true1": false,
+	} {
+		if got := ParseNotify(v); got != want {
+			t.Errorf("ParseNotify(%q) = %v, want %v", v, got, want)
+		}
+	}
+	c := &Config{AutoswitchNotify: true}
+	if c.NotifyEnabled("0") || !c.NotifyEnabled("") || !(&Config{}).NotifyEnabled("on") {
+		t.Error("NotifyEnabled precedence wrong")
+	}
+}
+
+func TestParseHookFields(t *testing.T) {
+	cfg := Parse([]byte("active=b\nactive=a=x\r\nactive_source=Manual\r\nmanual_pwd=L3cvYQ==\r\n"))
+	if cfg.Active != "b\na" {
+		t.Errorf("Active = %q", cfg.Active)
+	}
+	if cfg.ActiveLast != "a=x\r" {
+		t.Errorf("ActiveLast = %q, want the whole last value", cfg.ActiveLast)
+	}
+	if got := DecodeManualPWD(stripCR(cfg.Last["manual_pwd"])); got != "/w/a" {
+		t.Errorf("DecodeManualPWD = %q", got)
+	}
+	if got := DecodeManualPWD("not base64!"); got != "not base64!" {
+		t.Errorf("raw fallback = %q", got)
+	}
+}

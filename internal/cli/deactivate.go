@@ -28,47 +28,64 @@ func Deactivate(stdout, stderr io.Writer, args []string) int {
 		}
 	}
 
-	_ = ctxconfig.InitDirs()
-	agentDropAddedKey()
 	quiet := os.Getenv("CTX_QUIET")
 	if quiet == "" {
 		quiet = "0"
 	}
-	cfg, err := ctxconfig.Load()
-	if err != nil {
-		return u.die(err.Error())
+	p, wd, code, ok := deactivateApply(u, quiet != "0")
+	if !ok {
+		return code
 	}
-	current := cfg.Active
-	if current == "" {
-		if quiet == "0" {
-			u.dim("No active profile.")
-		}
-		return 0
-	}
-
-	dir := profile.Dir()
-	if st, err := os.Stat(filepath.Join(dir, current+".conf")); err != nil || !st.Mode().IsRegular() {
-		return u.die(fmt.Sprintf("Profile '%s' not found. Run: ctx list", current))
-	}
-	p, err := profile.Load(dir, current)
-	if err != nil {
-		return u.die(err.Error())
-	}
-	wd := ""
-	if p.WorkDir != "" && strings.HasPrefix(currentPWD(), p.WorkDir) {
-		wd = p.WorkDir
-	}
-
-	_ = ctxconfig.ClearActivation()
 
 	fish := echoLower(shell) == "fish"
-	_, _ = io.WriteString(stdout, deactivateUnsets(p, fish, wd))
+	_, _ = io.WriteString(stdout, DeactivateUnsets(p, fish, wd))
 
 	if !wantEval && quiet == "0" {
 		u.dim("Tip (fish): ctx deactivate --eval fish | source")
 		u.dim("Tip (bash/zsh): eval \"$(ctx deactivate)\"")
 	}
 	return 0
+}
+
+// deactivateApply is cmd_deactivate's side effects: drop the ssh key ctx
+// added, clear the machine-wide activation. It returns the profile that was
+// active and its WORK_DIR when $PWD is under it (the git identity to unset),
+// for the caller's unset lines. A deleted profile clears the activation with
+// a warning and yields an empty profile (only the fixed names are unset).
+// ok is false when nothing was active (code 0) or the profile could not be
+// parsed (Bash's die, before the config changes).
+func deactivateApply(u ui, quiet bool) (p *profile.Profile, wd string, code int, ok bool) {
+	_ = ctxconfig.InitDirs()
+	agentDropAddedKey()
+	cfg, err := ctxconfig.Load()
+	if err != nil {
+		return nil, "", u.die(err.Error()), false
+	}
+	current := cfg.Active
+	if current == "" {
+		if !quiet {
+			u.dim("No active profile.")
+		}
+		return nil, "", 0, false
+	}
+
+	dir := profile.Dir()
+	if st, err := os.Stat(filepath.Join(dir, current+".conf")); err != nil || !st.Mode().IsRegular() {
+		// R13: a deleted profile still leaves the context, with the fixed unsets.
+		u.warnErr(fmt.Sprintf("Profile '%s' no longer exists; cleared the active context", current))
+		_ = ctxconfig.ClearActivation()
+		return &profile.Profile{Name: current}, "", 0, true
+	}
+	p, err = profile.Load(dir, current)
+	if err != nil {
+		return nil, "", u.die(err.Error()), false
+	}
+	if p.WorkDir != "" && strings.HasPrefix(currentPWD(), p.WorkDir) {
+		wd = p.WorkDir
+	}
+
+	_ = ctxconfig.ClearActivation()
+	return p, wd, 0, true
 }
 
 // currentPWD is Bash's $PWD: the inherited PWD when it names the current
@@ -88,8 +105,8 @@ func currentPWD() string {
 	return cwd
 }
 
-// deactivateUnsets mirrors _ctx_deactivate_emit_unsets.
-func deactivateUnsets(p *profile.Profile, fish bool, wd string) string {
+// DeactivateUnsets (exported for hookenv) mirrors _ctx_deactivate_emit_unsets.
+func DeactivateUnsets(p *profile.Profile, fish bool, wd string) string {
 	var b strings.Builder
 	line := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	isSep := func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' }

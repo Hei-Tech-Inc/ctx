@@ -26,7 +26,7 @@ func (f *fixture) bashText(dir string, args ...string) (string, int) {
 	f.t.Helper()
 	cmd := exec.Command(bashOld(), append([]string{filepath.Join(repoRoot, "bin", "ctx"), "--no-gum"}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "CTX_CORE=off", "HOME="+f.home, "CTX_DIR="+f.dir)
+	cmd.Env = append(f.environ(), "CTX_CORE=off", "HOME="+f.home, "CTX_DIR="+f.dir)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	code := 0

@@ -50,9 +50,7 @@ func writeUseFakes(t *testing.T, names ...string) string {
 	}
 	for _, n := range names {
 		body := "#!/bin/sh\n{ printf '%s' " + n + "; for a in \"$@\"; do printf '\\037%s' \"$a\"; done; printf '\\n'; } >>\"$CTX_TEST_CALLS\"\n" + useFakes[n] + "\n"
-		if err := os.WriteFile(filepath.Join(dir, n), []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		testutil.Script(t, filepath.Join(dir, n), body)
 	}
 	return dir
 }
@@ -196,9 +194,22 @@ func runUseDiff(t *testing.T, quiet bool) {
 				f.write("secrets/demo/WORK_DIR", "from-secret")
 			}},
 	}
+	// Built once and shared by every scenario (read-only): the git wrapper,
+	// the fake tool sets and the system-tools-only dir.
+	gitDir := t.TempDir()
+	testutil.Script(t, filepath.Join(gitDir, "git"), "#!/bin/sh\n{ printf git; for a in \"$@\"; do printf '\\037%s' \"$a\"; done; printf '\\n'; } >>\"$CTX_TEST_CALLS\"\nexec '"+realGit+"' \"$@\"\n")
+	minimal := minimalPath(t)
+	fakeDirs := map[string]string{}
+	for _, sc := range scenarios {
+		key := strings.Join(sc.only, " ")
+		if _, ok := fakeDirs[key]; !ok {
+			fakeDirs[key] = writeUseFakes(t, sc.only...)
+		}
+	}
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
-			f := newFixture(t)
+			p := newPtest(t)
+			f := newPFixture(p)
 			work := filepath.Join(f.home, "w", "demo")
 			cwd := filepath.Join(work, "sub")
 			if sc.cwdHome {
@@ -206,15 +217,16 @@ func runUseDiff(t *testing.T, quiet bool) {
 			}
 			state := t.TempDir()
 			calls, agent := filepath.Join(state, "calls"), filepath.Join(state, "agent")
-			gitDir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(gitDir, "git"), []byte("#!/bin/sh\n{ printf git; for a in \"$@\"; do printf '\\037%s' \"$a\"; done; printf '\\n'; } >>\"$CTX_TEST_CALLS\"\nexec '"+realGit+"' \"$@\"\n"), 0o755); err != nil {
-				t.Fatal(err)
-			}
 			path := gitDir + string(os.PathListSeparator)
-			if sc.minimal {
-				path += minimalPath(t)
-			} else {
-				path += writeUseFakes(t, sc.only...) + string(os.PathListSeparator) + os.Getenv("PATH")
+			switch {
+			case sc.minimal:
+				path += minimal
+			case sc.only != nil:
+				// Only these fakes and system tools: a real mise (or other
+				// tool) on the caller's PATH must not stand in for an absent one.
+				path += fakeDirs[strings.Join(sc.only, " ")] + string(os.PathListSeparator) + minimal
+			default:
+				path += fakeDirs[""] + string(os.PathListSeparator) + p.Getenv("PATH")
 			}
 			conf := fmt.Sprintf("PROFILE_NAME=demo\nGIT_NAME=\"Dev\"\nGIT_EMAIL=\"dev@demo.com\"\nWORK_DIR=\"%s\"\n"+
 				"GITHUB_USER=\"devgh\"\nSSH_KEY_PATH=\"%s\"\nAWS_PROFILE_NAME=\"demo-prod\"\n"+
@@ -252,25 +264,25 @@ func runUseDiff(t *testing.T, quiet bool) {
 					sc.home(f)
 				}
 			}
-			t.Setenv("PATH", path)
-			t.Setenv("PWD", cwd)
+			p.Setenv("PATH", path)
+			p.Setenv("PWD", cwd)
 			if quiet {
-				t.Setenv("CTX_QUIET", "1")
+				p.Setenv("CTX_QUIET", "1")
 			} else {
-				t.Setenv("CTX_QUIET", "")
+				p.Setenv("CTX_QUIET", "")
 			}
-			t.Setenv("CTX_AUTO_SWITCH", "")
+			p.Setenv("CTX_AUTO_SWITCH", "")
 			if sc.auto {
-				t.Setenv("CTX_AUTO_SWITCH", "1")
+				p.Setenv("CTX_AUTO_SWITCH", "1")
 			}
-			t.Setenv("CTX_SECRET_PROVIDER", "")
-			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-			t.Setenv("GIT_NAME", "leaked-from-env") // load_profile unsets it before tools run
-			t.Setenv("AWS_PROFILE", "")
-			t.Setenv("CTX_TEST_CALLS", calls)
-			t.Setenv("CTX_TEST_AGENT", agent)
+			p.Setenv("CTX_SECRET_PROVIDER", "")
+			p.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			p.Setenv("GIT_NAME", "leaked-from-env") // load_profile unsets it before tools run
+			p.Setenv("AWS_PROFILE", "")
+			p.Setenv("CTX_TEST_CALLS", calls)
+			p.Setenv("CTX_TEST_AGENT", agent)
 			for k, v := range sc.env {
-				t.Setenv(k, v)
+				p.Setenv(k, v)
 			}
 			collect := func(out, errb string, code int) useRun {
 				var lines []string
@@ -282,7 +294,7 @@ func runUseDiff(t *testing.T, quiet bool) {
 
 			setup()
 			cmd := exec.Command(filepath.Join(repoRoot, "bin", "ctx"), sc.args...)
-			cmd.Dir, cmd.Env = cwd, append(os.Environ(), "CTX_CORE=off")
+			cmd.Dir, cmd.Env = cwd, p.Environ("CTX_CORE=off")
 			var bo, be bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &bo, &be
 			code := 0
@@ -296,11 +308,9 @@ func runUseDiff(t *testing.T, quiet bool) {
 			want := collect(bo.String(), be.String(), code)
 
 			setup()
-			t.Chdir(cwd)
-			saved := os.Environ()
 			var gout, gerr bytes.Buffer
-			gcode := UseIn(tui.Term{Out: &gout, Err: &gerr}, sc.args[1:])
-			restoreEnv(saved)
+			var gcode int
+			p.inProc(cwd, func() { gcode = UseIn(tui.Term{Out: &gout, Err: &gerr}, sc.args[1:]) })
 			got := collect(gout.String(), gerr.String(), gcode)
 
 			isEval, shell := false, "bash"
@@ -336,6 +346,9 @@ func runUseDiff(t *testing.T, quiet bool) {
 			}
 			if !quiet && sc.name == "no eval" && (!strings.Contains(want.stdout, "Active context: demo") || !strings.Contains(want.stdout, "SSH key → id_demo") || !strings.Contains(want.stdout, "Secret → API_KEY") || !strings.Contains(want.stderr, "not applied to this shell")) {
 				t.Errorf("bash non-quiet run looks vacuous: %q", want.stdout)
+			}
+			if sc.name == "mise absent falls back to direnv" && !strings.Contains(strings.Join(want.calls, "\n"), "direnv") {
+				t.Errorf("bash run did not fall back to direnv: calls %q", want.calls)
 			}
 			if sc.name == "full profile auto switch" && (len(want.calls) < 8 || !strings.Contains(want.tree[".ctx/ctx.log"], "Switched to profile: demo")) {
 				t.Errorf("bash run looks vacuous: calls %q", want.calls)
