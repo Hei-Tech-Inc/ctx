@@ -179,8 +179,16 @@ var repoRoot = func() string {
 // pinned unknownCommandWant stays.
 func bashUnknownCommand(t *testing.T) result {
 	t.Helper()
+	return bashEntry(t, "frobnicate")
+}
+
+// bashEntry runs `CTX_CORE=off bin/ctx --no-gum ARGS…` in an empty HOME and
+// returns its output. It goes away with the Bash code; the pinned literals
+// compared alongside it stay.
+func bashEntry(t *testing.T, args ...string) result {
+	t.Helper()
 	home := t.TempDir()
-	cmd := exec.Command("bash", filepath.Join(repoRoot, "bin", "ctx"), "--no-gum", "frobnicate")
+	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot, "bin", "ctx"), "--no-gum"}, args...)...)
 	cmd.Env = []string{"HOME=" + home, "CTX_DIR=" + filepath.Join(home, ".ctx"), "CTX_CORE=off",
 		"PATH=" + os.Getenv("PATH"), "LC_ALL=en_US.UTF-8"}
 	var out, errb bytes.Buffer
@@ -210,6 +218,36 @@ func TestUnknownCommand(t *testing.T) {
 		if r := callCtx(c); r.code != 1 || !strings.Contains(r.err, "Unknown command: "+c) {
 			t.Errorf("ctx %s = %+v, want unknown command", c, r)
 		}
+	}
+}
+
+// TestSecretUsage covers cmd_secret's fallback: usage on stdout, exit 0.
+func TestSecretUsage(t *testing.T) {
+	want := result{0, "Usage: ctx secret <set|get|list|delete|migrate> <profile> [KEY]\n", ""}
+	for _, args := range [][]string{{"secret"}, {"secret", "bogus"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			ctxTestEnv(t)
+			got := callCtx(args...)
+			if got != want {
+				t.Errorf("ctx %q = %+v, want %+v", args, got, want)
+			}
+			if bash := bashEntry(t, args...); got != bash {
+				t.Errorf("ctx %q = %+v, bin/ctx (Bash) = %+v", args, got, bash)
+			}
+		})
+	}
+}
+
+// TestGuardUsage covers cmd_guard's fallback: the error line on stderr, exit 1.
+func TestGuardUsage(t *testing.T) {
+	ctxTestEnv(t)
+	want := result{1, "", "\u2717 Usage: ctx guard [status|install|uninstall]\n"}
+	got := callCtx("guard", "bogus")
+	if got != want {
+		t.Errorf("ctx guard bogus = %+v, want %+v", got, want)
+	}
+	if bash := bashEntry(t, "guard", "bogus"); got != bash {
+		t.Errorf("ctx guard bogus = %+v, bin/ctx (Bash) = %+v", got, bash)
 	}
 }
 

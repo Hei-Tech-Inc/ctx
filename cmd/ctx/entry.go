@@ -90,17 +90,30 @@ func runCtx(args []string, stdout, stderr io.Writer) int {
 		return run([]string{"init"}, stdout, stderr)
 	case cmd == "version":
 		return run([]string{"ctx-version"}, stdout, stderr)
+	case cmd == "secret" && !secretSubs[first(rest)]:
+		// cmd_secret's `*)` branch.
+		_, _ = io.WriteString(stdout, "Usage: ctx secret <set|get|list|delete|migrate> <profile> [KEY]\n")
+		return 0
+	case cmd == "guard" && !guardSubs[first(rest)]:
+		// cmd_guard's `*)` branch.
+		bashError(stdout, stderr, "Usage: ctx guard [status|install|uninstall]")
+		return 1
 	case ctxCommands[cmd]:
 		return run(append([]string{cmd}, rest...), stdout, stderr)
 	}
-	// bin/ctx's error helper: red mark when stdout is a terminal, echo -e.
+	bashError(stdout, stderr, "Unknown command: "+cmd)
+	_, _ = io.WriteString(stdout, "\n  Run 'ctx help' for usage.\n\n")
+	return 1
+}
+
+// bashError prints msg as lib/core.sh's error helper does: `echo -e` on
+// stderr, the mark red when stdout is a terminal.
+func bashError(stdout, stderr io.Writer, msg string) {
 	red, reset := "", ""
 	if tui.TTYColors(stdout) {
 		red, reset = "\033[0;31m", "\033[0m"
 	}
-	_, _ = io.WriteString(stderr, tui.EchoE(red+"✗"+reset+" Unknown command: "+cmd))
-	_, _ = io.WriteString(stdout, "\n  Run 'ctx help' for usage.\n\n")
-	return 1
+	_, _ = io.WriteString(stderr, tui.EchoE(red+"✗"+reset+" "+msg))
 }
 
 // exitOnInterrupt makes SIGINT exit 130, as bin/ctx's `trap 'exit 130' INT`,
