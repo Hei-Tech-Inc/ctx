@@ -220,7 +220,12 @@ func doBuildCore() {
 	}
 	coreDir = dir
 	coreBin = filepath.Join(dir, "ctx-core")
-	cmd := exec.Command(coreGo, "build", "-o", coreBin, "./cmd/ctx-core")
+	ver, err := os.ReadFile(filepath.Join(repoRoot, "VERSION"))
+	if err != nil {
+		coreErr = err
+		return
+	}
+	cmd := exec.Command(coreGo, "build", "-ldflags", "-X main.version="+strings.TrimSpace(string(ver)), "-o", coreBin, "./cmd/ctx-core")
 	cmd.Dir = repoRoot
 	cmd.Env = coreEnv // nil (the process environment) if TestMain did not start it
 	if out, err := cmd.CombinedOutput(); err != nil {

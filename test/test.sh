@@ -128,6 +128,17 @@ test_ctx_profile_read_work_dir() {
   pass "ctx_profile_read_work_dir"
 }
 
+# VERSION is the Go build's version source; until lib/core.sh is deleted the
+# two must agree.
+test_version_file_matches_core_sh() {
+  local file core
+  file="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
+  core="$(parse_ctx_version_from_core_sh_file "$ROOT_DIR/lib/core.sh")"
+  [[ "$file" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail "VERSION is not a version: '$file'"
+  [[ "$file" == "$core" ]] || fail "VERSION ($file) != CTX_VERSION in lib/core.sh ($core)"
+  pass "VERSION matches lib/core.sh CTX_VERSION"
+}
+
 test_ctx_cli_version() {
   local out want
   want="$CTX_VERSION"
@@ -900,7 +911,7 @@ test_install_builds_ctx_core() {
     out="$(CTX_INSTALL_BIN="$td/bin" CTX_INSTALL_LIB="$td/lib" CTX_UPGRADE_ONLY=1 \
       bash "$ROOT_DIR/install.sh" 2>&1)" || { echo "$out"; exit 1; }
     [[ -x "$td/lib/ctx-core" ]] || { echo "no executable $td/lib/ctx-core: $out"; exit 1; }
-    want="$(parse_ctx_version_from_core_sh_file "$ROOT_DIR/lib/core.sh")"
+    want="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
     out="$("$td/lib/ctx-core" version)"
     [[ "$out" == "ctx-core $want" ]] || { echo "version: '$out' want 'ctx-core $want'"; exit 1; }
     [[ -x "$td/bin/ctx" ]] || exit 1
@@ -995,7 +1006,7 @@ test_ctx_core_is_exercised() {
       pass "ctx-core coverage guard skipped (bin/ctx-core missing, CTX_CORE_OPTIONAL=1)"
       return 0
     fi
-    fail "bin/ctx-core is missing: build it (go build -o bin/ctx-core ./cmd/ctx-core) or set CTX_CORE_OPTIONAL=1 to run Bash-only locally"
+    fail "bin/ctx-core is missing: build it (go build -ldflags \"-X main.version=\$(cat VERSION)\" -o bin/ctx-core ./cmd/ctx-core) or set CTX_CORE_OPTIONAL=1 to run Bash-only locally"
   fi
   (
     set -euo pipefail
@@ -2929,6 +2940,7 @@ EOF
       'exit "${CTX_TEST_INSTALL_EXIT:-0}"' >"$td/install.sh"
     cp "$td/install.sh" "$td/repo/install.sh"
     printf 'CTX_VERSION="9.9.9"\r\n' >"$td/repo/lib/core.sh"
+    printf '9.9.9\r\n' >"$td/repo/VERSION"
     export CTX_UPGRADE_REPO="file://$td/repo" CTX_TEST_RAN="$td/ran"
     [[ "$CTX_UPGRADE_REPO" == file://* ]] || exit 1
     export PATH="$td/fake:$p/bin:$PATH"
@@ -3058,6 +3070,7 @@ test_parse_ctx_version_from_core_sh_file
 test_secret_file_path
 test_secret_provider_resolution
 test_ctx_profile_read_work_dir
+test_version_file_matches_core_sh
 test_ctx_cli_version
 test_ctx_rel_path_depth_under
 test_ctx_resolve_path_profile

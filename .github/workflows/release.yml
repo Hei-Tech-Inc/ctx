@@ -19,7 +19,11 @@ jobs:
       - name: Build ctx-core
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+            exit 1
+          fi
           mkdir -p dist
           for os in darwin linux; do
             for arch in amd64 arm64; do
