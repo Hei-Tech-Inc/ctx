@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
 )
 
 var ctxCoreBin string
@@ -28,6 +30,10 @@ func TestMain(m *testing.M) {
 	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
+	if stampedPath != "" {
+		_ = os.RemoveAll(filepath.Dir(stampedPath))
+	}
+	testutil.CleanupSystemPath()
 	os.Exit(code)
 }
 

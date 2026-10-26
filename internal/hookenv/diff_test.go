@@ -44,7 +44,7 @@ func buildCore(t *testing.T) string {
 			return
 		}
 		coreBin = filepath.Join(coreDir, "ctx-core")
-		cmd := exec.Command("go", "build", "-o", coreBin, "./cmd/ctx-core")
+		cmd := exec.Command("go", "build", "-o", coreBin, "./cmd/ctx")
 		cmd.Dir = repoRoot()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			coreErr = fmt.Errorf("%v: %s", err, out)

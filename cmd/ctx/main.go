@@ -1,5 +1,5 @@
-// Command ctx-core is the Go companion to the ctx Bash CLI. It hosts the
-// MCP server and the knowledge store; bin/ctx dispatches to it.
+// Command ctx is the ctx CLI. Invoked as ctx-core (argv[0]) it keeps the
+// ctx-core surface that bin/ctx and already-loaded shell hooks call.
 package main
 
 import (
@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -103,19 +104,17 @@ func implements(cmd string, rest []string) bool {
 	return f(rest)
 }
 
-// ctxVersion is the ctx version bin/ctx passes in CTX_VERSION, else the build version.
-func ctxVersion() string {
-	if v := os.Getenv("CTX_VERSION"); v != "" {
-		return v
-	}
-	return version
-}
+// ctxVersion is the build-stamped version; CTX_VERSION in the environment is not read.
+func ctxVersion() string { return version }
 
-// setCtxVersionEnv makes CTX_VERSION the version to print (bin/ctx's, else the build's).
+// setCtxVersionEnv hands the build version to internal/cli, which reads it from CTX_VERSION.
 func setCtxVersionEnv() { _ = os.Setenv("CTX_VERSION", ctxVersion()) }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	if filepath.Base(os.Args[0]) == "ctx-core" {
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	}
+	os.Exit(runCtx(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -123,6 +122,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	setCtxVersionEnv()
 	switch args[0] {
 	case "version":
 		fmt.Fprintf(stdout, "ctx-core %s\n", version)
@@ -207,10 +207,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "ctx-core: guard supports only status, install, uninstall and check")
 		return 127
 	case "ctx-version":
-		setCtxVersionEnv()
 		return cli.Version(stdout)
 	case "help":
-		setCtxVersionEnv()
 		return cli.Help(osTerm(stdout, stderr), args[1:])
 	case "completion":
 		return cli.Completion(stdout, stderr, args[1:])

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
+	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
 // upgrade downloads a script and runs it, so these tests never reach the
@@ -60,6 +62,17 @@ exit "${CTX_TEST_INSTALL_EXIT:-0}"
 
 // curlMS is the timing in curl's connect errors ("after 3 ms").
 var curlMS = regexp.MustCompile(`after \d+ ms`)
+
+// parseCtxVersion is Bash's parse_ctx_version_from_core_sh_file: the stub
+// lib/core.sh the Bash side of the parity test reads.
+func parseCtxVersion(core string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(core, "\r", ""), "\n") {
+		if strings.HasPrefix(line, "CTX_VERSION=") {
+			return strings.ReplaceAll(strings.TrimPrefix(line, "CTX_VERSION="), `"`, "")
+		}
+	}
+	return ""
+}
 
 func crlf(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
 
@@ -220,6 +233,13 @@ func (e *upEnv) handle(w http.ResponseWriter, r *http.Request) {
 func (e *upEnv) setServed(t *testing.T, files map[string]string) {
 	t.Helper()
 	_ = os.RemoveAll(e.serve)
+	// Bash reads the version from lib/core.sh, Go from VERSION: serve both.
+	if core, ok := files["lib/core.sh"]; ok {
+		if v := parseCtxVersion(core); v != "" {
+			files = maps.Clone(files)
+			files["VERSION"] = crlf(v + "\n")
+		}
+	}
 	for rel, c := range files {
 		f := filepath.Join(e.serve, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
@@ -414,15 +434,28 @@ func (e *upEnv) run(t *testing.T, goImpl bool, c upCase) upRun {
 	norm := func(s string) string {
 		return curlMS.ReplaceAllString(strings.ReplaceAll(s, srvHost, "<srv>"), "after N ms")
 	}
+	curlArgv, wgetArgv := e.tmpArgs(testutil.ReadArgv(t, e.curlLog)), e.tmpArgs(testutil.ReadArgv(t, e.wgetLog))
+	if goImpl {
+		// Go fetches /VERSION where Bash fetches /lib/core.sh; same request otherwise.
+		swap := func(s string) string { return strings.Replace(s, "/VERSION", "/lib/core.sh", 1) }
+		for i := range reqs {
+			reqs[i] = swap(reqs[i])
+		}
+		for _, argv := range append(curlArgv, wgetArgv...) {
+			for i := range argv {
+				argv[i] = swap(argv[i])
+			}
+		}
+	}
 	return upRun{norm(o.String()), norm(eb.String()), code, testutil.Snapshot(t, e.root),
-		e.tmpArgs(testutil.ReadArgv(t, e.curlLog)), e.tmpArgs(testutil.ReadArgv(t, e.wgetLog)), reqs}
+		curlArgv, wgetArgv, reqs}
 }
 
 func TestUpgradeMatchesBash(t *testing.T) {
 	paths := newUpPaths(t)
-	cur := parseCtxVersion(mustRead(t, filepath.Join(repoRoot, "lib", "core.sh")))
+	cur := parseVersionFile(mustRead(t, filepath.Join(repoRoot, "VERSION")))
 	if cur == "" {
-		t.Fatal("no CTX_VERSION in lib/core.sh")
+		t.Fatal("no valid VERSION file")
 	}
 	core := func(v string) string { return crlf("#!/usr/bin/env bash\nCTX_VERSION=\"" + v + "\"\n") }
 	installed := func(e *upEnv) string {
@@ -441,9 +474,6 @@ func TestUpgradeMatchesBash(t *testing.T) {
 			vacuous: "Already on latest advertised version (" + cur + ")."},
 		{name: "check newer remote", args: []string{"--check"}, files: map[string]string{"lib/core.sh": core("9.9.9")},
 			vacuous: "Update available: " + cur + " → 9.9.9 (run: ctx upgrade)"},
-		{name: "check quoted value, CRLF, second CTX_VERSION ignored", args: []string{"--check"},
-			files:   map[string]string{"lib/core.sh": crlf("# x\nCTX_VERSION=\"1.\"2\"\nCTX_VERSION=\"3\"\n")},
-			vacuous: "Remote main: ctx version 1.2"},
 		{name: "check 404 (offline)", args: []string{"--check"}, files: map[string]string{},
 			vacuous: "Could not fetch remote version (offline?)."},
 		{name: "check offline (connection refused)", args: []string{"--check"}, repo: "http://127.0.0.1:1/main",
@@ -618,5 +648,56 @@ func TestUpgradeCtrlC(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParseVersionFile(t *testing.T) {
+	for in, want := range map[string]string{
+		"3.2.0\n":       "3.2.0",
+		"3.2.0\r\n":     "3.2.0",
+		"  4.0.0-rc.1 ": "4.0.0-rc.1",
+		"<html>":        "",
+		"":              "",
+		"3.2\n":         "",
+		"3.2.0\n4.0.0":  "",
+	} {
+		if got := parseVersionFile([]byte(in)); got != want {
+			t.Errorf("parseVersionFile(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestUpgradeCheckReadsVersionFile: --check reads <repo>/VERSION through a
+// file:// repo, whatever lib/core.sh there says.
+func TestUpgradeCheckReadsVersionFile(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not installed")
+	}
+	ctxDir := t.TempDir()
+	bin := filepath.Join(ctxDir, "ctx")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", ctxDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CTX_VERSION", "3.2.0")
+	check := func(files map[string]string) (string, int) {
+		repo := t.TempDir()
+		for name, c := range files {
+			if err := os.WriteFile(filepath.Join(repo, name), []byte(c), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Setenv("CTX_UPGRADE_REPO", "file://"+repo)
+		var out, errb bytes.Buffer
+		code := Upgrade(tui.Term{Out: &out, Err: &errb}, []string{"--check"})
+		return out.String() + errb.String(), code
+	}
+	got, code := check(map[string]string{"VERSION": "9.9.9\n", "core.sh": "CTX_VERSION=\"1.1.1\"\n"})
+	if code != 0 || !strings.Contains(got, "Update available: 3.2.0 → 9.9.9 (run: ctx upgrade)") {
+		t.Errorf("with VERSION: code %d\n%s", code, got)
+	}
+	got, code = check(map[string]string{})
+	if code != 0 || !strings.Contains(got, "Could not fetch remote version (offline?).") {
+		t.Errorf("without VERSION: code %d\n%s", code, got)
 	}
 }
