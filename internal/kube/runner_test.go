@@ -254,7 +254,10 @@ func TestStartRunsInBackground(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- p.Wait() }()
-	for i := 0; !strings.Contains(buf.String(), "to stderr") && i < 200; i++ {
+	// Wait for both lines before Kill. A fixed 2s budget was too short on a
+	// loaded machine (the fake's shell had not printed yet, so the output
+	// check below failed); the deadline only bounds a hang.
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(buf.String(), "to stderr") && time.Now().Before(deadline); {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if err := p.Kill(); err != nil {

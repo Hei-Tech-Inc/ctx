@@ -4,6 +4,151 @@
 # Sets CTX_PROMPT_SHOW / CTX_PROMPT_WORK_DIR / CTX_PROMPT_PROFILE for prompts (see README).
 # Runs on every prompt: the no-switch path must stay builtin-only (no subprocesses).
 
+# ── ctx-core shim ──
+# With ctx-core installed and CTX_CORE not "off", this file evals `ctx-core activate`
+# (the Go hook, ctx hook-env) and stops; the shell code after the shim is the fallback
+# when ctx-core is missing, CTX_CORE=off, or activate fails or prints nothing. ctx-core
+# is found as bin/ctx finds it: CTX_CORE_BIN (which then must be executable), ../bin or
+# this file's dir (a checkout, an install), then PATH. Either way a re-source, also
+# after a CTX_CORE flip, leaves one hook: activate removes the hook below, and the
+# fallback first removes activate's _ctx_hook.
+
+# _ctx_shim_core: the activate glue for this shell in _ctx_shim_out; false without it.
+_ctx_shim_core() {
+  local _ctx_s _ctx_c _ctx_sh=bash
+  _ctx_shim_out=""
+  [[ -z "${ZSH_VERSION:-}" ]] || _ctx_sh=zsh
+  if [[ -n "${CTX_CORE_BIN:-}" ]]; then
+    _ctx_c="$CTX_CORE_BIN"
+  else
+    if [[ "$_ctx_sh" == zsh ]]; then
+      eval '_ctx_s=${(%):-%x}'
+    else
+      _ctx_s="${BASH_SOURCE[0]:-}"
+    fi
+    case "$_ctx_s" in
+      */*) _ctx_s="${_ctx_s%/*}" ;;
+      *) _ctx_s=. ;;
+    esac
+    for _ctx_c in "$_ctx_s/../bin/ctx-core" "$_ctx_s/ctx-core" ""; do
+      [[ -z "$_ctx_c" || ( -x "$_ctx_c" && ! -d "$_ctx_c" ) ]] && break
+    done
+    if [[ -z "$_ctx_c" ]]; then
+      if [[ "$_ctx_sh" == zsh ]]; then
+        _ctx_c="$(whence -p ctx-core 2>/dev/null)"
+      else
+        _ctx_c="$(type -P ctx-core 2>/dev/null)"
+      fi
+    fi
+  fi
+  [[ -n "$_ctx_c" && -x "$_ctx_c" && ! -d "$_ctx_c" ]] || return 1
+  _ctx_shim_out="$("$_ctx_c" activate "$_ctx_sh" 2>/dev/null)" || _ctx_shim_out=""
+  [[ -n "$_ctx_shim_out" ]]
+}
+
+# _ctx_shim_drop: removes activate's hook (registrations, functions, state) before
+# the fallback registers its own. Every step tolerates errexit.
+_ctx_shim_drop() {
+  local _ctx_c _ctx_f _ctx_pc _ctx_arr=""
+  local -a _ctx_new
+  _ctx_new=()
+  typeset -f _ctx_hook >/dev/null 2>&1 || return 0
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    autoload -Uz add-zsh-hook 2>/dev/null || true
+    add-zsh-hook -d chpwd _ctx_hook 2>/dev/null || true
+    add-zsh-hook -d precmd _ctx_hook 2>/dev/null || true
+  elif declare -F _ctx_pc_strip >/dev/null 2>&1; then
+    if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+      eval '[[ -n "${PROMPT_COMMAND+x}" && "${PROMPT_COMMAND@a}" == *a* ]]' && _ctx_arr=1
+    fi
+    if [[ -n "$_ctx_arr" ]]; then
+      for _ctx_c in "${PROMPT_COMMAND[@]}"; do
+        _ctx_pc_strip "$_ctx_c"
+        [[ -z "$_ctx_pc" && "$_ctx_c" != "$_ctx_pc" ]] || _ctx_new+=("$_ctx_pc")
+      done
+      # (eval: to ShellCheck PROMPT_COMMAND stays the string the fallback below uses)
+      eval 'PROMPT_COMMAND=(${_ctx_new[@]+"${_ctx_new[@]}"})'
+    else
+      _ctx_pc_strip "${PROMPT_COMMAND:-}"
+      PROMPT_COMMAND="$_ctx_pc"
+    fi
+    if [[ -n "${_PRESERVED_PROMPT_COMMAND:-}" ]]; then
+      _ctx_pc_strip "$_PRESERVED_PROMPT_COMMAND"
+      _PRESERVED_PROMPT_COMMAND="$_ctx_pc"
+    fi
+    _ctx_new=()
+    if [[ -n "${precmd_functions+x}" ]]; then
+      for _ctx_f in ${precmd_functions[@]+"${precmd_functions[@]}"}; do
+        [[ "$_ctx_f" == _ctx_hook ]] || _ctx_new+=("$_ctx_f")
+      done
+      precmd_functions=(${_ctx_new[@]+"${_ctx_new[@]}"})
+    fi
+  fi
+  unset -f _ctx_hook _ctx_register _ctx_bp_live _ctx_pc_strip 2>/dev/null || true
+  # activate's state; the fallback recomputes from scratch (its own cache too).
+  unset __CTX_STATE __CTX_PWD _CTX_AS_STATE 2>/dev/null || true
+}
+
+if [[ "${CTX_CORE:-}" != off ]] && _ctx_shim_core; then
+  unset -f _ctx_shim_core _ctx_shim_drop
+  unset _CTX_AS_STATE _CTX_AS_MANUAL_RAW _CTX_AS_MANUAL_DEC 2>/dev/null || true
+  eval "$_ctx_shim_out"
+  unset _ctx_shim_out
+  return 0
+fi
+_ctx_shim_drop
+unset -f _ctx_shim_core _ctx_shim_drop
+unset _ctx_shim_out
+
+# ctx runs as a child process, so `ctx use` / `ctx deactivate` cannot change this shell's
+# environment by themselves. This function evals their --eval output; every other
+# subcommand goes straight to the binary. Global flags may come before the subcommand.
+ctx() {
+  local -a _ctx_pre=()
+  local _ctx_a _ctx_out _ctx_rc
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --quiet|-q|--no-gum|--dry-run|--json) _ctx_pre+=("$1"); shift ;;
+      *) break ;;
+    esac
+  done
+  case "${1:-}" in
+    use|deactivate) ;;
+    *) command ctx ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$@"; return ;;
+  esac
+  # --dry-run must not touch the shell; an explicit --eval means the caller evals it.
+  for _ctx_a in ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$@"; do
+    [[ "$_ctx_a" == -- ]] && break
+    case "$_ctx_a" in
+      --dry-run|--eval|--eval=*) command ctx ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$@"; return ;;
+    esac
+  done
+  _ctx_a="$1"
+  shift
+  _ctx_out="$(command ctx ${_ctx_pre[@]+"${_ctx_pre[@]}"} "$_ctx_a" --eval bash "$@")"
+  _ctx_rc=$?
+  eval "$_ctx_out"
+  return "$_ctx_rc"
+}
+
+# True when the ctx executable (not this function) is on PATH.
+_ctx_as_have_bin() {
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    whence -p ctx >/dev/null 2>&1
+  else
+    type -P ctx >/dev/null 2>&1
+  fi
+}
+
+# Run ctx use for the hook and apply its exports to this shell. Returns ctx use's status.
+_ctx_as_use() {
+  local out rc
+  out="$(CTX_QUIET=1 CTX_AUTO_SWITCH=1 command ctx use --eval bash "$1" 2>/dev/null)"
+  rc=$?
+  eval "$out"
+  return "$rc"
+}
+
 # Last-wins KEY=value lookup (same result as grep | tail -1). Sets _ctx_kv.
 _ctx_as_kv_get() {
   local file="$1" key="$2" line
@@ -36,6 +181,7 @@ _ctx_as_profile_work_dir() {
       ;;
   esac
   _ctx_wd="${v/#\~/$HOME}"
+  [[ "$_ctx_wd" == "/" ]] || _ctx_wd="${_ctx_wd%/}"
 }
 
 # Per-terminal gh login: GH_TOKEN for the profile's GITHUB_USER, so a switch in one shell
@@ -130,7 +276,7 @@ _ctx_prompt_update_exports() {
 }
 
 _ctx_profile_autoswitch() {
-  command -v ctx &>/dev/null || return 0
+  _ctx_as_have_bin || return 0
   local profiles_dir="${CTX_DIR:-$HOME/.ctx}/profiles"
   local active_conf="${CTX_DIR:-$HOME/.ctx}/config"
   [[ -d "$profiles_dir" ]] || return 0
@@ -221,9 +367,13 @@ _ctx_profile_autoswitch() {
   if [[ "$src_manual" == "1" && -n "$_cfg_manual_pwd" ]]; then
     # Decode once per change: the manual lock persists across many prompts.
     if [[ "$_cfg_manual_pwd" != "${_CTX_AS_MANUAL_RAW:-}" ]]; then
-      local raw="$_cfg_manual_pwd" dec
-      dec="$(printf '%s' "$raw" | base64 -d 2>/dev/null || printf '%s' "$raw" | base64 -D 2>/dev/null || printf '%s' "$raw" | base64 --decode 2>/dev/null || true)"
-      _CTX_AS_MANUAL_RAW="$raw"
+      local raw="${_cfg_manual_pwd//$'\r'/}" dec="" _f
+      # First flag spelling with output wins; GNU prints then exits 1 on stray padding.
+      for _f in -d -D --decode; do
+        dec="$(printf '%s' "$raw" | base64 "$_f" 2>/dev/null)"
+        [[ -n "$dec" ]] && break
+      done
+      _CTX_AS_MANUAL_RAW="$_cfg_manual_pwd"
       _CTX_AS_MANUAL_DEC="${dec:-$raw}"
     fi
     manual_anchor="$_CTX_AS_MANUAL_DEC"
@@ -253,19 +403,23 @@ _ctx_profile_autoswitch() {
   if [[ -n "$target" ]]; then
     if [[ -n "$current" && "$current" != "$target" ]]; then
       [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ← ${current} → ${target}${rst}" >&2
-      eval "$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)" || true
-      if CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null; then
+      eval "$(CTX_QUIET=1 command ctx deactivate --eval bash 2>/dev/null)" || true
+      if _ctx_as_use "$target"; then
         _ctx_applied=1
       else
         [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
       fi
     elif [[ -z "$current" ]]; then
       [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] → ${target}${rst}" >&2
-      if CTX_QUIET=1 CTX_AUTO_SWITCH=1 ctx use "$target" 2>/dev/null; then
+      if _ctx_as_use "$target"; then
         _ctx_applied=1
       else
         [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ctx use ${target} failed — run: ctx use ${target}${rst}" >&2
       fi
+    elif [[ "${CTX_ACTIVE_PROFILE:-}" != "$target" ]]; then
+      # Already active machine-wide (e.g. a new terminal): this shell still needs the exports.
+      _ctx_as_use "$target" || true
+      _ctx_applied=1
     else
       _ctx_applied=1
     fi
@@ -277,7 +431,7 @@ _ctx_profile_autoswitch() {
   else
     if [[ -n "$current" ]]; then
       [[ "$_ctx_notify" == "1" ]] && echo -e "${dim}[ctx] ← ${current}${rst}" >&2
-      eval "$(CTX_QUIET=1 ctx deactivate --eval bash 2>/dev/null)" || true
+      eval "$(CTX_QUIET=1 command ctx deactivate --eval bash 2>/dev/null)" || true
     fi
     unset CTX_ACTIVE_PROFILE 2>/dev/null || true
     unset CTX_ACTIVATION_TRIGGER 2>/dev/null || true

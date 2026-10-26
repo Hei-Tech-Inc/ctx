@@ -38,7 +38,7 @@ Profiles auto-activate when you `cd` into a client directory.
 - bash or zsh
 - Internet connection (for the one-liner install)
 
-Everything else (`mise`, `gum`, `gh`, `git`, `awscli`) is installed automatically.
+Everything else (`mise`, `gh`, `git`, `awscli`) is installed automatically; `gum` is installed by `install.sh` for the Bash fallback, but the rich UI does not need it when `ctx-core` is installed (see below).
 
 ### Windows support
 
@@ -187,14 +187,17 @@ ctx setup --extend <profile>
 
 | Command | Description |
 |---------|-------------|
-| `ctx use <name>` | Activate a profile (git, SSH, AWS, GCP, Azure, kubectl) |
-| `ctx deactivate` | Clear `active=` in `~/.ctx/config`; stdout is `eval`-able unsets for secrets/env (run `eval "$(ctx deactivate)"` in bash/zsh) |
+| `ctx use <name>` | Activate a profile (git, SSH, AWS, GCP, Azure, kubectl) and set `AWS_PROFILE`, secrets and `CTX_ACTIVE_PROFILE` in your shell (needs the `ctx` shell function, see below) |
+| `ctx use <name> --eval bash\|fish` | Same, but stdout is only shell code: `eval "$(ctx use acme --eval bash)"` or `ctx use acme --eval fish \| source` |
+| `ctx deactivate` | Clear `active=` in `~/.ctx/config` and unset the profile's variables in your shell (without the shell function: `eval "$(ctx deactivate)"`) |
 | `ctx list` | List all profiles |
 | `ctx status` | Show active profile + live service checks |
 | `ctx clone [-p <profile>] <url> [-- git-args...]` | `git clone` with GitHub URL rewrite for `github-<profile>` (see below) |
 | `ctx run [-p <profile>] -- <cmd>` | Run one command with the folder's profile identity (see **AI agents and scripts** below) |
 | `ctx env [-p <profile>] [--fish] [--secrets]` | Print that identity as `export` lines for `eval` |
 | `ctx agent-rules [--write [file]]` | Print, or write into `AGENTS.md`, instructions that tell AI agents how to use ctx |
+
+**Why a shell function:** `ctx` is a separate program, and a program can't change the environment of the shell that started it. The hook installed by `ctx install-hook` therefore also defines a `ctx` shell function (bash, zsh, fish). For `use` and `deactivate` it runs `ctx … --eval <shell>` (`ctx-core` directly when the hook comes from `ctx activate`) and evaluates the result in your shell; every other subcommand goes straight to the `ctx` program. Global flags work as before (`ctx -q use acme`), and `ctx --dry-run use acme` doesn't touch your shell. If the function isn't loaded, `ctx use` still switches git, SSH, gh and cloud CLIs, and prints a warning listing the variables it couldn't set.
 
 ### AI agents and scripts
 
@@ -219,6 +222,10 @@ It sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, `GIT_SSH_COMMAND` (the profile's key o
 It is scoped to the profile that owns the folder the agent was started in. Outside any client folder it offers a single `client_context` tool that says no client is active. It never falls back to the profile marked active in `~/.ctx/config`, and one client's clusters, services, recipes and activity are never visible from another client's folder. If the open folders change mid-session so they no longer resolve to that one client (for example `/add-dir` of another client's folder), ctx stops serving that session: only `client_context` stays, it explains why, and the session's port-forwards are stopped. Start a new session to continue.
 
 It needs `ctx-core`, the Go binary that `install.sh`, `ctx upgrade` and the Homebrew formula install next to the ctx libs. Check with `ctx doctor` (`ctx-core: <version> (<path>)`). If no build exists for your OS and CPU the installer warns `ctx mcp unavailable` and the rest of ctx works as before.
+
+#### ctx-core in everyday commands
+
+`ctx mcp` and `ctx knowledge` always run in `ctx-core` and error if it is missing. **Every other command also runs in `ctx-core` when it is installed**, for speed, and falls back to the Bash implementation silently when it is not; their output is unchanged except for the bug fixes listed in the CHANGELOG. That covers `list`, `status`, `use`, `deactivate`, `remove` (`rm`, `del`), `secret`, `config`, `guard`, `env`, `run`, `workdir-prompt`, `setup` (with `import`, `add`, `--config`, `--scope`, `--extend`, `--dry-run`, `--help`), `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `help`, `completion` and `version`. Set `CTX_CORE=off` to force Bash; the Bash fallback stays until phase E6 drops it. In a terminal (stdin and stdout both terminals, `CTX_NO_GUM` not `1`, no `--no-gum`) `ctx-core` draws the rich UI itself (lipgloss/huh), so **gum is optional** when `ctx-core` is installed; the Bash fallback still uses gum if present. Piped output is plain. The shell autoswitch hook also runs in `ctx-core` (`ctx activate` and `ctx hook-env`, see **Auto-switch**); with `CTX_CORE=off` or without `ctx-core` the Bash/fish hook runs.
 
 #### 1. Describe the client
 
@@ -355,7 +362,7 @@ Secrets are intentionally excluded; restore with your provider (`keychain`/`pass
 
 For ongoing cross-machine sync, see [`docs/chezmoi.md`](docs/chezmoi.md) for a `chezmoi`-based workflow.
 
-Secrets are exported into your shell session by `ctx use` and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
+Secrets are exported into your shell session by `ctx use` (through the `ctx` shell function from `ctx install-hook`, or `eval "$(ctx use <name> --eval bash)"`) and loaded into your env by `mise.toml` hooks when you `cd` into the client directory.
 
 ### Maintenance
 
@@ -411,14 +418,24 @@ Limits:
 
 ## Auto-switch
 
-The shell hook (`ctx install-hook` / `install.sh`) appends **`lib/ctx_autoswitch.bash`** (bash/zsh) or **`lib/ctx_autoswitch.fish`** (fish) to your rc file. It:
+The shell hook (`ctx install-hook` / `install.sh`) adds a block to your rc file that sources **`lib/ctx_autoswitch.bash`** (bash/zsh) or **`lib/ctx_autoswitch.fish`** (fish) from ctx's lib dir, so upgrades apply without editing the rc. When `ctx-core` is installed, that file runs **`ctx activate <shell>`**: a small hook that calls **`ctx hook-env`** only when `$PWD` changed, `~/.ctx/config` changed (a `ctx use` in another terminal) or a profile was added, removed or replaced, so a plain prompt runs no extra process. Without `ctx-core`, or with **`CTX_CORE=off`** set when the rc runs, the file runs the original shell hook instead. Both behave the same, apart from the fixes listed in the CHANGELOG.
+
+You can also skip the block and add the hook yourself, after `mise activate`:
+
+```bash
+eval "$(ctx activate zsh)"     # ~/.zshrc  (bash: eval "$(ctx activate bash)" in ~/.bashrc)
+ctx activate fish | source     # ~/.config/fish/config.fish
+```
+
+This line needs `ctx-core`: with `CTX_CORE=off` or without `ctx-core`, `ctx activate` prints an error and no hook, so keep the block if you want the shell-hook fallback. Loading both, or re-sourcing your rc, still registers one hook. `ctx doctor` accepts either form and says which one your rc uses; an old inline paste of the hook is flagged, run `ctx install-hook` to replace it. The hook:
 
 - Picks the profile whose **`WORK_DIR`** is the **longest path prefix** of `$PWD` (nested clients supported).
 - Prefers a **sibling profile** when a broad `WORK_DIR` covers `…/clients` and `…/clients/<name>.conf` exists.
 - Applies **nearest** `.ctx` with `profile=<name>` when walking from `$PWD` up to the git root (must be a valid profile).
 - Prints **`[ctx] → name`**, **`[ctx] ← old → new`**, or **`[ctx] ← name`** on stderr when the active profile changes — **off by default** (screen-share safe). Enable with **`ctx config autoswitch-notify on`**, or for one session: **`export CTX_AUTOSWITCH_NOTIFY=1`**.
-- Runs **`eval "$(ctx deactivate --eval bash)"`** (or fish equivalent) before switching, so secrets and env vars from the previous profile are cleared in your shell.
-- Calls **`CTX_AUTO_SWITCH=1 ctx use <name>`** so `~/.ctx/config` marks activation as **auto** (not manual-lock).
+- Deactivates the previous profile before switching, as **`eval "$(ctx deactivate --eval bash)"`** would (fish: `… --eval fish | source`), so its secrets and env vars are cleared in your shell. With `ctx activate` the hook also unsets exactly the variables it set, even if that profile's `.conf` was deleted or edited meanwhile.
+- Applies the profile as **`eval "$(CTX_AUTO_SWITCH=1 command ctx use --eval bash <name>)"`** would, so `AWS_PROFILE`, secrets and the other profile variables land in your shell, and `~/.ctx/config` marks activation as **auto** (not manual-lock). A new terminal opened inside a profile's folder gets the same variables even when that profile is already active.
+- Defines the **`ctx` shell function** described under **Daily use**, so a manual `ctx use` / `ctx deactivate` also changes your shell.
 - Sets **`GH_TOKEN`** for this terminal from `gh auth token -u <GITHUB_USER>` instead of running `gh auth switch`, which changes the account for every terminal on the machine. Two tabs in two client folders use two GitHub accounts at the same time. A `GH_TOKEN` you exported yourself is left alone. Needs gh 2.40 or newer; a manual `ctx use` still runs `gh auth switch`.
 - Exports **`CTX_PROMPT_SHOW`**, **`CTX_PROMPT_PROFILE`**, and **`CTX_PROMPT_WORK_DIR`** for your prompt: by default the prompt scope is **only** under each profile’s `WORK_DIR` for **up to two extra path segments** (configurable). Folders outside any profile (e.g. a random `cd` or alias) get **`CTX_PROMPT_SHOW=0`**. See **`ctx config prompt-workdir-depth`** and **`prompt_extra_paths`**.
 
@@ -580,7 +597,7 @@ rm -rf /usr/local/lib/ctx
 rm -rf ~/.ctx
 ```
 
-Remove the `ctx profile autoswitch` block (or legacy `# ── ctx auto-switch`) and `mise activate` blocks from your shell rc file, then reload.
+Remove the `ctx profile autoswitch` block (or legacy `# ── ctx auto-switch`), any `ctx activate` line, and the `mise activate` blocks from your shell rc file, then reload.
 
 ---
 
