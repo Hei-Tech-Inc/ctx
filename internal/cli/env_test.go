@@ -225,7 +225,7 @@ func doBuildCore() {
 		coreErr = err
 		return
 	}
-	cmd := exec.Command(coreGo, "build", "-ldflags", "-X main.version="+strings.TrimSpace(string(ver)), "-o", coreBin, "./cmd/ctx-core")
+	cmd := exec.Command(coreGo, "build", "-ldflags", "-X main.version="+strings.TrimSpace(string(ver)), "-o", coreBin, "./cmd/ctx")
 	cmd.Dir = repoRoot
 	cmd.Env = coreEnv // nil (the process environment) if TestMain did not start it
 	if out, err := cmd.CombinedOutput(); err != nil {

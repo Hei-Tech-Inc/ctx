@@ -331,8 +331,8 @@ _sha256_of() {
 # Build ctx-core from a checkout. Args: source dir, dest file, version.
 _build_ctx_core() {
   local src="$1" dest="$2" ver="$3"
-  command -v go &>/dev/null && [[ -d "$src/cmd/ctx-core" ]] || return 1
-  ( cd "$src" && go build -ldflags "-X main.version=${ver}" -o "$dest" ./cmd/ctx-core ) &>/dev/null
+  command -v go &>/dev/null && [[ -d "$src/cmd/ctx" ]] || return 1
+  ( cd "$src" && go build -ldflags "-X main.version=${ver}" -o "$dest" ./cmd/ctx ) &>/dev/null
 }
 
 # Download the release build of ctx-core. Args: dest file, version.

@@ -1,5 +1,5 @@
-// Command ctx-core is the Go companion to the ctx Bash CLI. It hosts the
-// MCP server and the knowledge store; bin/ctx dispatches to it.
+// Command ctx is the ctx CLI. Invoked as ctx-core (argv[0]) it keeps the
+// ctx-core surface that bin/ctx and already-loaded shell hooks call.
 package main
 
 import (
@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -110,7 +111,10 @@ func ctxVersion() string { return version }
 func setCtxVersionEnv() { _ = os.Setenv("CTX_VERSION", ctxVersion()) }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	if filepath.Base(os.Args[0]) == "ctx-core" {
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	}
+	os.Exit(runCtx(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {

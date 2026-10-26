@@ -1006,7 +1006,7 @@ test_ctx_core_is_exercised() {
       pass "ctx-core coverage guard skipped (bin/ctx-core missing, CTX_CORE_OPTIONAL=1)"
       return 0
     fi
-    fail "bin/ctx-core is missing: build it (go build -ldflags \"-X main.version=\$(cat VERSION)\" -o bin/ctx-core ./cmd/ctx-core) or set CTX_CORE_OPTIONAL=1 to run Bash-only locally"
+    fail "bin/ctx-core is missing: build it (go build -ldflags \"-X main.version=\$(cat VERSION)\" -o bin/ctx-core ./cmd/ctx) or set CTX_CORE_OPTIONAL=1 to run Bash-only locally"
   fi
   (
     set -euo pipefail
