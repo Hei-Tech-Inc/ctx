@@ -602,6 +602,24 @@ func TestInstallHookRemovesHistoricPastes(t *testing.T) {
 					t.Errorf(".zshrc:\n%s", s)
 				}
 			}},
+		// R3: the block is unchanged (it sources the lib shim, which runs ctx
+		// activate); a user's own `ctx activate` line is not the block and stays
+		// byte for byte, also next to an old block that is replaced.
+		ihCase{name: "a user's ctx activate line is kept", shell: "/bin/zsh",
+			files:   map[string]string{".zshrc": "u\neval \"$(ctx activate zsh)\"\n" + autoswitchBegin + "\nold\n" + autoswitchEnd + "\nz\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				s := readHomeFile(t, home, ".zshrc")
+				if !strings.HasPrefix(s, "u\neval \"$(ctx activate zsh)\"\nz\n\n"+autoswitchBegin+"\n") || strings.Contains(s, "\nold\n") {
+					t.Errorf(".zshrc:\n%s", s)
+				}
+			}},
+		ihCase{name: "a user's fish ctx activate line is kept", shell: "/usr/bin/fish",
+			files:   map[string]string{".config/fish/config.fish": "ctx activate fish | source\n"},
+			vacuous: "refreshed", check: func(t *testing.T, home string, r cvRun) {
+				if s := readHomeFile(t, home, ".config/fish/config.fish"); !strings.HasPrefix(s, "ctx activate fish | source\n\n"+autoswitchBegin+"\n") {
+					t.Errorf("config.fish:\n%s", s)
+				}
+			}},
 		ihCase{name: "BEGIN inside an open BEGIN block is refused", shell: "/bin/zsh",
 			files: map[string]string{".zshrc": "a\n" + autoswitchBegin + "\nx\n" + autoswitchBegin + "\ny\n" + autoswitchEnd + "\nz\n"}, code: 1,
 			vacuous: "Unterminated ctx block in $HOME/.zshrc"},

@@ -239,7 +239,7 @@ func Uninstall(t tui.Term, args []string) int {
 	}
 
 	u.say("")
-	u.info("Remove the ctx blocks from your shell rc if desired (search for '# BEGIN ctx profile autoswitch').")
+	u.info("Remove the ctx blocks from your shell rc if desired (search for '# BEGIN ctx profile autoswitch' and 'ctx activate').")
 	u.say("")
 	if failed {
 		return 1

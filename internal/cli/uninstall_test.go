@@ -414,7 +414,7 @@ func TestUninstallMatchesBash(t *testing.T) {
 			"    \"svce\"<blob>=\"ctx-acme-API_KEY\"\n    \"svce\"<blob>=\"ctx-beta-TOKEN\"\n    \"svce\"<blob>=\"other\"\n"), 0o600)
 	}
 	runUnCases(t, []unCase{
-		{name: "plain", stdin: "y\n", vacuous: "# BEGIN ctx profile autoswitch", check: removed(false)},
+		{name: "plain", stdin: "y\n", vacuous: "'# BEGIN ctx profile autoswitch' and 'ctx activate')", check: removed(false)},
 		{name: "purge file store", stdin: "y\n", args: []string{"--purge"}, vacuous: "Deleted 2 secret(s) of acme from the file store", check: removed(true)},
 		{name: "purge keychain delete fails", darwinOnly: true, stdin: "y\n", args: []string{"--purge"}, tweak: keychain,
 			env:      func(*unEnv) []string { return []string{"CTX_SECRET_PROVIDER=keychain", "KEYCHAIN_RO=1"} },

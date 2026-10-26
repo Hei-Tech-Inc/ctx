@@ -123,6 +123,7 @@ func TestCompletionSyntax(t *testing.T) {
 	for shell, tool := range map[string]string{"bash": "bash", "zsh": "zsh", "fish": "fish"} {
 		path, err := exec.LookPath(tool)
 		if err != nil {
+			testutil.ShellMissing(t, tool)
 			t.Logf("%s not installed; skipping its syntax check", tool)
 			continue
 		}

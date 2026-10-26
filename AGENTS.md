@@ -34,7 +34,8 @@ When adding scripting fields, extend **`ctx --json`** handlers in `lib/cmd_ops.s
 |------|--------|
 | Core helpers, mise/SSH/gitconfig | `lib/core.sh` |
 | Commands | `lib/cmd_ops.sh`, `lib/cmd_import.sh` |
-| Shell autoswitch hook | `lib/ctx_autoswitch.bash`, `lib/ctx_autoswitch.fish` |
+| Shell autoswitch hook (shims: run `ctx activate` when `ctx-core` is found, else the legacy hook) | `lib/ctx_autoswitch.bash`, `lib/ctx_autoswitch.fish` |
+| Autoswitch decisions for `ctx hook-env` (enter/leave/switch, manual lock, prompt scope, state); the `activate` glue and `hook-env` command | `internal/hookenv/`; `internal/cli/text/activate.*`, `internal/cli/` |
 | CLI entry | `bin/ctx` |
 | Installer (also builds/downloads `ctx-core`) | `install.sh` |
 | `ctx-core` entry, `mcp install` | `cmd/ctx-core/` |

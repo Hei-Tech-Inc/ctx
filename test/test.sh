@@ -230,6 +230,15 @@ test_cmd_workdir_prompt() {
     cd /
     out="$("$ROOT/bin/ctx" workdir-prompt)"
     [[ -z "$out" ]] || exit 1
+    # R5: the last prompt_extra_paths entry counts (no trailing colon needed).
+    mkdir -p "$td/x1" "$td/x2/sub"
+    printf 'prompt_extra_paths=%s:%s\n' "$td/x1" "$td/x2" >"$td/config"
+    cd "$td/x2/sub"
+    out="$("$ROOT/bin/ctx" workdir-prompt)"
+    [[ "$out" == "work_dir='WORK_DIR=$td/x2'" ]] || { echo "got: $out" >&2; exit 1; }
+    cd "$td/x1"
+    out="$("$ROOT/bin/ctx" workdir-prompt)"
+    [[ "$out" == "work_dir='WORK_DIR=$td/x1'" ]] || exit 1
     rm -rf "$td"
   ) || fail "cmd_workdir_prompt"
   pass "workdir-prompt"
@@ -330,11 +339,38 @@ test_config_upsert_literal_values() {
   pass "config upsert writes values literally"
 }
 
+# The sourced-hook tests run in two modes: legacy (`CTX_CORE=off source
+# lib/ctx_autoswitch.bash`, the shell hook) and, with bin/ctx-core built and CTX_CORE not
+# off, core (a plain source: the shim evals ctx-core activate, the Go hook-env).
+_t_hook_modes() {
+  echo legacy
+  if [[ "${CTX_CORE:-}" != off && -x "$ROOT_DIR/bin/ctx-core" ]]; then echo core; fi
+}
+
+# _t_source_hook MODE: source the autoswitch lib in MODE (in the calling shell).
+_t_source_hook() {
+  if [[ "$1" == legacy ]]; then
+    # shellcheck source=../lib/ctx_autoswitch.bash
+    CTX_CORE=off source "$ROOT_DIR/lib/ctx_autoswitch.bash"
+    declare -F _ctx_profile_autoswitch >/dev/null || { echo "legacy hook not defined" >&2; return 1; }
+  else
+    # shellcheck source=../lib/ctx_autoswitch.bash
+    source "$ROOT_DIR/lib/ctx_autoswitch.bash"
+    declare -F _ctx_hook >/dev/null || { echo "the shim did not eval ctx-core activate" >&2; return 1; }
+  fi
+}
+
+# _t_hook: one run of whichever hook _t_source_hook installed (as a prompt would).
+_t_hook() {
+  if declare -F _ctx_hook >/dev/null; then _ctx_hook; else _ctx_profile_autoswitch; fi
+}
+
 test_autoswitch_hook_resolution() {
+  local mode
+  for mode in $(_t_hook_modes); do
   (
     set -euo pipefail
-    local ROOT td used
-    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local td used
     td="$(cd "$(mktemp -d)" && pwd -P)"
     export HOME="$td/home" CTX_DIR="$td/ctx"
     mkdir -p "$CTX_DIR/profiles" "$HOME/b/sub" "$td/w/a/deep" "$td/w/c d" "$td/w/clients/acme" "$td/w/mono/.git" "$td/w/mono/svc"
@@ -348,8 +384,9 @@ test_autoswitch_hook_resolution() {
     printf 'WORK_DIR=%s\nGITHUB_USER="bob"\n' "$td/w/mono" >"$CTX_DIR/profiles/mono.conf"
     printf 'profile= a \r\n' >"$td/w/mono/svc/.ctx"
     used="$td/used"
-    unset GH_TOKEN _CTX_GH_PROFILE
-    # Stub binary on PATH: the hook runs `command ctx use --eval bash <name>`, never a shell function.
+    unset GH_TOKEN _CTX_GH_PROFILE CTX_ACTIVE_PROFILE
+    # Stub binary on PATH: the legacy hook runs `command ctx use --eval bash <name>`, never a
+    # shell function (the Go hook runs use in-process). gh is a stub binary for both.
     mkdir -p "$td/bin"
     cat >"$td/bin/ctx" <<'STUB'
 #!/bin/sh
@@ -357,16 +394,18 @@ test_autoswitch_hook_resolution() {
 for a; do last=$a; done
 printf '%s\n' "$last" >>"$CTX_TEST_USED"
 STUB
-    chmod +x "$td/bin/ctx"
+    printf '#!/bin/sh\n[ "$1 $2 $3" = "auth token -u" ] && printf "tok-%%s" "$4"\n' >"$td/bin/gh"
+    chmod +x "$td/bin/ctx" "$td/bin/gh"
     export PATH="$td/bin:$PATH" CTX_TEST_USED="$used"
-    gh() { [[ "$1 $2 $3" == "auth token -u" ]] && printf 'tok-%s' "$4"; }
-    # shellcheck source=../lib/ctx_autoswitch.bash
-    source "$ROOT/lib/ctx_autoswitch.bash"
+    _t_source_hook "$mode" || exit 1
     _expect() {
       cd "$1"
       : >"$used"
-      _ctx_profile_autoswitch 2>"$td/stderr"
-      [[ "$(cat "$used")" == "$2" ]] || { echo "in $1: used='$(cat "$used")' want '$2'" >&2; exit 1; }
+      _t_hook 2>"$td/stderr"
+      [[ "${CTX_ACTIVE_PROFILE:-}" == "$2" ]] || { echo "in $1: CTX_ACTIVE_PROFILE='${CTX_ACTIVE_PROFILE:-}' want '$2'" >&2; exit 1; }
+      if [[ "$mode" == legacy ]]; then
+        [[ "$(cat "$used")" == "$2" ]] || { echo "in $1: used='$(cat "$used")' want '$2'" >&2; exit 1; }
+      fi
       [[ ! -s "$td/stderr" ]] || { echo "unexpected stderr: $(cat "$td/stderr")" >&2; exit 1; }
     }
     _expect "$td/w/a/deep" a
@@ -381,21 +420,21 @@ STUB
     _expect "$td/w/mono" mono
     [[ "${GH_TOKEN:-}" == tok-bob ]] || { echo "GH_TOKEN in mono: '${GH_TOKEN:-}'" >&2; exit 1; }
     cd "$td"
-    _ctx_profile_autoswitch
-    [[ -z "${GH_TOKEN:-}" ]] || { echo "GH_TOKEN kept outside profiles" >&2; exit 1; }
+    _t_hook
+    [[ -z "${GH_TOKEN:-}" && -z "${CTX_ACTIVE_PROFILE:-}" ]] || { echo "GH_TOKEN or CTX_ACTIVE_PROFILE kept outside profiles" >&2; exit 1; }
     export GH_TOKEN=mine
     _expect "$td/w/a/deep" a
     [[ "$GH_TOKEN" == mine ]] || { echo "user GH_TOKEN overwritten" >&2; exit 1; }
     rm -rf "$td"
-  ) || fail "autoswitch hook resolution"
-  pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx, per-shell GH_TOKEN)"
+  ) || fail "autoswitch hook resolution ($mode)"
+  done
+  pass "autoswitch hook resolution (plain, \$HOME, escaped, sibling, .ctx, per-shell GH_TOKEN; legacy hook and ctx-core)"
 }
 
 test_trailing_slash_work_dir() {
   (
     set -euo pipefail
-    local td ROOT mode out rc used
-    ROOT="$ROOT_DIR"
+    local td mode out rc used
     td="$(cd "$(mktemp -d)" && pwd -P)"
     export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
     unset GIT_COMMITTER_EMAIL CTX_GUARD
@@ -418,7 +457,7 @@ test_trailing_slash_work_dir() {
       fi
       [[ $rc -ne 0 && "$out" == *"commit blocked"* ]] || { echo "guard ($mode): rc=$rc out=$out"; exit 1; }
     done
-    # Autoswitch hook
+    # Autoswitch hook (legacy: a stub ctx on PATH logs the use; ctx-core: use runs in-process)
     used="$td/used"
     # Stub binary on PATH: the hook runs `command ctx use --eval bash <name>`, never a shell function.
     mkdir -p "$td/bin"
@@ -430,12 +469,17 @@ printf '%s\n' "$last" >>"$CTX_TEST_USED"
 STUB
     chmod +x "$td/bin/ctx"
     export PATH="$td/bin:$PATH" CTX_TEST_USED="$used"
-    # shellcheck source=../lib/ctx_autoswitch.bash
-    source "$ROOT/lib/ctx_autoswitch.bash"
-    cd "$td/w/acme/r"
-    : >"$used"
-    _ctx_profile_autoswitch 2>/dev/null
-    [[ "$(cat "$used")" == acme ]] || { echo "autoswitch: '$(cat "$used")'"; exit 1; }
+    for mode in $(_t_hook_modes); do
+      (
+        unset CTX_ACTIVE_PROFILE
+        _t_source_hook "$mode" || exit 1
+        cd "$td/w/acme/r"
+        : >"$used"
+        _t_hook 2>/dev/null
+        [[ "${CTX_ACTIVE_PROFILE:-}" == acme ]] || { echo "autoswitch ($mode): CTX_ACTIVE_PROFILE='${CTX_ACTIVE_PROFILE:-}'"; exit 1; }
+        [[ "$mode" != legacy || "$(cat "$used")" == acme ]] || { echo "autoswitch: '$(cat "$used")'"; exit 1; }
+      ) || exit 1
+    done
     rm -rf "$td"
   ) || fail "trailing-slash WORK_DIR"
   pass "trailing-slash WORK_DIR matches in Bash and Go (resolver, guard, autoswitch)"
@@ -1057,63 +1101,673 @@ test_use_eval_exports() {
 }
 
 test_shell_wrapper_applies_use() {
-  local sh
-  for sh in bash zsh; do
-    command -v "$sh" >/dev/null 2>&1 || continue
-    (
-      set -euo pipefail
-      local td
-      _use_eval_fixture
-      cd "$td"
-      # shellcheck disable=SC2016
-      "$sh" -c '
-        source "$1/lib/ctx_autoswitch.bash"
-        ctx --no-gum use demo >/dev/null 2>&1 || { echo "use failed"; exit 1; }
-        [[ "$AWS_PROFILE" == demo-prod && "$API_KEY" == "$CTX_TEST_SECRET" && "$CTX_ACTIVE_PROFILE" == demo ]] || { echo "use: AWS=${AWS_PROFILE:-}"; exit 1; }
-        ctx deactivate >/dev/null 2>&1
-        [[ -z "${AWS_PROFILE+x}${API_KEY+x}${CTX_ACTIVE_PROFILE+x}" ]] || { echo "deactivate left vars"; exit 1; }
-        ctx -q use demo || { echo "-q use failed"; exit 1; }
-        [[ "$AWS_PROFILE" == demo-prod ]] || { echo "-q use: AWS unset"; exit 1; }
-        ctx deactivate >/dev/null 2>&1
-        ctx --dry-run use demo >/dev/null 2>&1 || true
-        [[ -z "${AWS_PROFILE+x}" ]] || { echo "--dry-run use changed the shell"; exit 1; }
-        [[ "$(ctx list 2>&1)" == "$(command ctx list 2>&1)" ]] || { echo "list passthrough"; exit 1; }
-        ctx version | grep -q "^ctx version" || { echo "version passthrough"; exit 1; }
-        ctx use nosuch >/dev/null 2>&1 && { echo "bad profile exit 0"; exit 1; }
-        ctx nosuchcmd >/dev/null 2>&1 && { echo "bad command exit 0"; exit 1; }
-        exit 0
-      ' _ "$ROOT_DIR" || exit 1
-      rm -rf "$td"
-    ) || fail "shell wrapper ($sh)"
+  local sh glue
+  # legacy: lib/ctx_autoswitch.bash with CTX_CORE=off; shim: the same lib sourced plainly
+  # (it evals ctx-core activate); activate: the glue of ctx-core activate (when built).
+  for glue in legacy shim activate; do
+    if [[ "$glue" != legacy && ! -x "$ROOT_DIR/bin/ctx-core" ]]; then continue; fi
+    if [[ "$glue" == shim && "${CTX_CORE:-}" == off ]]; then continue; fi
+    for sh in bash zsh; do
+      command -v "$sh" >/dev/null 2>&1 || continue
+      (
+        set -euo pipefail
+        local td
+        _use_eval_fixture
+        cd "$td"
+        # shellcheck disable=SC2016
+        "$sh" -c '
+          if [[ "$2" == activate ]]; then
+            eval "$("$1/bin/ctx-core" activate "$3")"
+          elif [[ "$2" == shim ]]; then
+            source "$1/lib/ctx_autoswitch.bash"
+            typeset -f _ctx_hook >/dev/null || { echo "shim did not activate"; exit 1; }
+          else
+            CTX_CORE=off source "$1/lib/ctx_autoswitch.bash"
+            typeset -f _ctx_profile_autoswitch >/dev/null || { echo "legacy hook not defined"; exit 1; }
+          fi
+          ctx --no-gum use demo >/dev/null 2>&1 || { echo "use failed"; exit 1; }
+          [[ "$AWS_PROFILE" == demo-prod && "$API_KEY" == "$CTX_TEST_SECRET" && "$CTX_ACTIVE_PROFILE" == demo ]] || { echo "use: AWS=${AWS_PROFILE:-}"; exit 1; }
+          ctx deactivate >/dev/null 2>&1
+          [[ -z "${AWS_PROFILE+x}${API_KEY+x}${CTX_ACTIVE_PROFILE+x}" ]] || { echo "deactivate left vars"; exit 1; }
+          ctx -q use demo || { echo "-q use failed"; exit 1; }
+          [[ "$AWS_PROFILE" == demo-prod ]] || { echo "-q use: AWS unset"; exit 1; }
+          ctx deactivate >/dev/null 2>&1
+          ctx --dry-run use demo >/dev/null 2>&1 || true
+          [[ -z "${AWS_PROFILE+x}" ]] || { echo "--dry-run use changed the shell"; exit 1; }
+          [[ "$(ctx list 2>&1)" == "$(command ctx list 2>&1)" ]] || { echo "list passthrough"; exit 1; }
+          ctx version | grep -q "^ctx version" || { echo "version passthrough"; exit 1; }
+          ctx use nosuch >/dev/null 2>&1 && { echo "bad profile exit 0"; exit 1; }
+          ctx nosuchcmd >/dev/null 2>&1 && { echo "bad command exit 0"; exit 1; }
+          exit 0
+        ' _ "$ROOT_DIR" "$glue" "$sh" || exit 1
+        rm -rf "$td"
+      ) || fail "shell wrapper ($glue, $sh)"
+    done
   done
-  pass "ctx shell wrapper applies use/deactivate to the current shell (bash, zsh)"
+  pass "ctx shell wrapper applies use/deactivate to the current shell (bash, zsh; legacy hook, lib shim and ctx activate)"
 }
 
 test_autoswitch_exports_profile_env() {
+  local mode
+  for mode in $(_t_hook_modes); do
   (
     set -euo pipefail
     local td
     _use_eval_fixture
     cd "$td"
+    # $3: legacy sources with CTX_CORE=off (the shell hook); core lets the shim eval
+    # ctx-core activate. hook runs whichever hook that installed, as a prompt would.
     # shellcheck disable=SC2016
     bash -c '
-      source "$1/lib/ctx_autoswitch.bash"
-      cd "$2/w/demo/r" && _ctx_profile_autoswitch
+      if [[ "$3" == legacy ]]; then CTX_CORE=off source "$1/lib/ctx_autoswitch.bash"; else source "$1/lib/ctx_autoswitch.bash"; fi
+      hook() { if declare -F _ctx_hook >/dev/null; then _ctx_hook; else _ctx_profile_autoswitch; fi; }
+      [[ "$3" == legacy ]] || declare -F _ctx_hook >/dev/null || { echo "shim did not activate"; exit 1; }
+      cd "$2/w/demo/r" && hook
       [[ "${AWS_PROFILE:-}" == demo-prod && "${API_KEY:-}" == "$CTX_TEST_SECRET" ]] || { echo "hook did not export: AWS=${AWS_PROFILE:-}"; exit 1; }
-      cd "$2" && _ctx_profile_autoswitch
+      cd "$2" && hook
       [[ -z "${AWS_PROFILE+x}${API_KEY+x}" ]] || { echo "hook left vars after leaving"; exit 1; }
-      cd "$2/w/demo/r" && _ctx_profile_autoswitch
-    ' _ "$ROOT_DIR" "$td" || exit 1
+      cd "$2/w/demo/r" && hook
+    ' _ "$ROOT_DIR" "$td" "$mode" || exit 1
     grep -qx 'active=demo' "$CTX_DIR/config" || { echo "not active"; exit 1; }
     # A new terminal opened in the folder while demo is already active still gets the env.
     # shellcheck disable=SC2016
     bash -c '
-      cd "$2/w/demo/r" && source "$1/lib/ctx_autoswitch.bash"
+      cd "$2/w/demo/r"
+      if [[ "$3" == legacy ]]; then CTX_CORE=off source "$1/lib/ctx_autoswitch.bash"; else source "$1/lib/ctx_autoswitch.bash"; fi
       [[ "${AWS_PROFILE:-}" == demo-prod ]] || { echo "new shell: AWS unset"; exit 1; }
-    ' _ "$ROOT_DIR" "$td" || exit 1
+    ' _ "$ROOT_DIR" "$td" "$mode" || exit 1
     rm -rf "$td"
-  ) || fail "autoswitch exports profile env"
-  pass "autoswitch hook applies AWS_PROFILE and secrets to the shell"
+  ) || fail "autoswitch exports profile env ($mode)"
+  done
+  pass "autoswitch hook applies AWS_PROFILE and secrets to the shell (legacy hook and ctx-core)"
+}
+
+# lib/ctx_autoswitch.bash is a shim: with ctx-core it evals `ctx-core activate`, else (or
+# CTX_CORE=off, or activate failing or printing nothing) the legacy hook runs. Re-sourcing,
+# also across a CTX_CORE flip, leaves exactly one hook (bash 3.2, bash, zsh).
+test_autoswitch_shim() {
+  if [[ "${CTX_CORE:-}" == off || ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    pass "autoswitch lib shim check skipped (CTX_CORE=off or no bin/ctx-core)"
+    return 0
+  fi
+  local sh
+  for sh in /bin/bash bash zsh; do
+    command -v "$sh" >/dev/null 2>&1 || continue
+    (
+      set -euo pipefail
+      local td d
+      td="$(cd "$(mktemp -d)" && pwd -P)"
+      export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1
+      unset CTX_CORE_BIN CTX_ACTIVE_PROFILE CTX_AUTOSWITCH_NOTIFY GH_TOKEN _CTX_GH_PROFILE
+      mkdir -p "$CTX_DIR/profiles" "$td/w/p/r" "$td/alone" "$td/syspath"
+      printf 'secret_provider=file\n' >"$CTX_DIR/config"
+      printf 'PROFILE_NAME=p\nWORK_DIR=%s\nAWS_PROFILE_NAME=pa\n' "$td/w/p" >"$CTX_DIR/profiles/p.conf"
+      cp "$ROOT_DIR/lib/ctx_autoswitch.bash" "$td/alone/"
+      for d in noexec fail empty log; do mkdir -p "$td/$d"; done
+      printf '#!/bin/sh\nexit 0\n' >"$td/noexec/ctx-core"
+      printf '#!/bin/sh\necho "_ctx_hook() { :; }"\nexit 1\n' >"$td/fail/ctx-core"
+      printf '#!/bin/sh\nexit 0\n' >"$td/empty/ctx-core"
+      printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/log/calls"\nexec "%s/bin/ctx-core" "$@"\n' "$td" "$ROOT_DIR" >"$td/log/ctx-core"
+      chmod +x "$td/fail/ctx-core" "$td/empty/ctx-core" "$td/log/ctx-core"
+      # A PATH without ctx-core (and without ctx, so the legacy hook just returns).
+      for d in /usr/bin /bin; do ln -sf "$d"/* "$td/syspath/" 2>/dev/null || true; done
+      rm -f "$td/syspath/ctx" "$td/syspath/ctx-core"
+      # shellcheck disable=SC2016
+      "$sh" -c '
+        set -u
+        R=$1 T=$2 SH=$3
+        fail() { echo "$SH: $*"; exit 1; }
+        kind() {
+          local h=0 l=0
+          typeset -f _ctx_hook >/dev/null 2>&1 && h=1
+          typeset -f _ctx_profile_autoswitch >/dev/null 2>&1 && l=1
+          case $h$l in 10) echo core ;; 01) echo legacy ;; 11) echo both ;; *) echo none ;; esac
+        }
+        # regs: registrations of the new and the legacy hook, "new legacy".
+        regs() {
+          local n=0 l=0 x
+          if [[ -n "${ZSH_VERSION:-}" ]]; then
+            for x in ${chpwd_functions[@]+"${chpwd_functions[@]}"} ${precmd_functions[@]+"${precmd_functions[@]}"}; do
+              case $x in _ctx_hook) n=$((n+1)) ;; _ctx_profile_autoswitch) l=$((l+1)) ;; esac
+            done
+          else
+            x=";${PROMPT_COMMAND[*]:-};"
+            x=${x//$'"'"'\n'"'"'/;}
+            while [[ $x == *";_ctx_hook keep && :;"* ]]; do x=${x/;_ctx_hook keep && :;/;}; n=$((n+1)); done
+            while [[ $x == *_ctx_profile_autoswitch* ]]; do x=${x/_ctx_profile_autoswitch/}; l=$((l+1)); done
+            [[ $x != *_ctx_hook* ]] || n=99
+          fi
+          echo "$n $l"
+        }
+        prompt() {
+          if [[ -n "${ZSH_VERSION:-}" ]]; then local f; for f in ${precmd_functions[@]+"${precmd_functions[@]}"}; do "$f"; done
+          else eval "${PROMPT_COMMAND:-}"; fi
+        }
+        leftovers() {
+          typeset -f _ctx_shim_core _ctx_shim_drop >/dev/null 2>&1 && fail "shim functions left"
+          [[ -z "${_ctx_shim_out+x}" ]] || fail "_ctx_shim_out left"
+          return 0
+        }
+        ONE_NEW="1 0" ONE_OLD="1 0"
+        [[ -n "${ZSH_VERSION:-}" ]] && ONE_NEW="2 0"
+        ONE_OLD="0 ${ONE_NEW% *}"
+        if [[ -n "${ZSH_VERSION:-}" ]]; then precmd_functions=(user1); else PROMPT_COMMAND=user1; fi
+        user_kept() {
+          if [[ -n "${ZSH_VERSION:-}" ]]; then [[ " ${precmd_functions[*]} " == *" user1 "* ]] || fail "user precmd lost";
+          else [[ ";$PROMPT_COMMAND;" == *";user1;"* ]] || fail "user PROMPT_COMMAND lost: $PROMPT_COMMAND"; fi
+        }
+        user1() { :; }
+
+        # Fallbacks: CTX_CORE_BIN not executable, activate failing, activate printing nothing.
+        for d in noexec fail empty; do
+          (
+            [[ $d == noexec ]] && chmod -x "$T/noexec/ctx-core"
+            CTX_CORE_BIN="$T/$d/ctx-core" source "$R/lib/ctx_autoswitch.bash"
+            [[ $(kind) == legacy ]] || fail "CTX_CORE_BIN=$d: $(kind)"
+            leftovers
+          ) || exit 1
+        done
+        # No ctx-core next to the lib, in ../bin or on PATH: legacy. On PATH: core.
+        ( PATH="$T/syspath"; source "$T/alone/ctx_autoswitch.bash"; [[ $(kind) == legacy ]] || fail "no ctx-core: $(kind)"; leftovers ) || exit 1
+        ( PATH="$R/bin:$T/syspath"; source "$T/alone/ctx_autoswitch.bash"; [[ $(kind) == core ]] || fail "ctx-core on PATH: $(kind)"; leftovers ) || exit 1
+
+        # The repo lib finds ../bin/ctx-core; CTX_CORE_BIN wins.
+        CTX_CORE_BIN="$T/log/ctx-core" source "$R/lib/ctx_autoswitch.bash"
+        [[ $(kind) == core ]] || fail "CTX_CORE_BIN: $(kind)"
+        grep -qx "activate $SH" "$T/log/calls" || fail "activate not run by CTX_CORE_BIN: $(cat "$T/log/calls")"
+        export PATH="$R/bin:$PATH"
+        # Re-source: core, core, off, off, core. One hook each time; user hooks kept.
+        for m in core core off off core; do
+          if [[ $m == off ]]; then
+            CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"; want=legacy; wr=$ONE_OLD
+          else
+            source "$R/lib/ctx_autoswitch.bash"; want=core; wr=$ONE_NEW
+          fi
+          [[ $(kind) == "$want" ]] || fail "after $m: $(kind)"
+          [[ $(regs) == "$wr" ]] || fail "after $m: registrations $(regs), want $wr (PROMPT_COMMAND=${PROMPT_COMMAND:-})"
+          user_kept
+          leftovers
+          # The hook that is registered works: enter and leave the profile.
+          cd "$T/w/p/r" && prompt 2>/dev/null
+          [[ "${CTX_ACTIVE_PROFILE:-}" == p ]] || fail "after $m: enter: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
+          cd "$T" && prompt 2>/dev/null
+          [[ -z "${CTX_ACTIVE_PROFILE:-}" ]] || fail "after $m: leave: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
+        done
+        # Core in p, flip to the legacy hook, leave p there, set a variable of
+        # the user, flip back: activate starts clean, without a stale
+        # __CTX_STATE that would "leave" p again, unset AWS_PROFILE and notify.
+        # The notify output is checked both ways: entering p notifies (the capture works).
+        CTX_AUTOSWITCH_NOTIFY=1
+        source "$R/lib/ctx_autoswitch.bash"
+        { cd "$T/w/p/r" && prompt; } 2>"$T/enter.err"
+        grep -q "→ p" "$T/enter.err" || fail "flip: enter did not notify: $(cat "$T/enter.err")"
+        [[ "${CTX_ACTIVE_PROFILE:-}" == p ]] || fail "flip: enter: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
+        [[ "${AWS_PROFILE:-}" == pa ]] || fail "flip: enter: AWS_PROFILE=${AWS_PROFILE:-}"
+        CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
+        { cd "$T" && prompt; } 2>/dev/null
+        [[ -z "${CTX_ACTIVE_PROFILE:-}" ]] || fail "flip: legacy leave: CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE:-}"
+        export AWS_PROFILE=mine
+        # The source itself runs the hook once: a phantom leave would show there, too.
+        { source "$R/lib/ctx_autoswitch.bash" && prompt; } 2>"$T/flip.err"
+        unset CTX_AUTOSWITCH_NOTIFY
+        [[ "${AWS_PROFILE-<unset>}" == mine ]] || fail "flip: AWS_PROFILE=${AWS_PROFILE-<unset>}, want mine"
+        ! grep -q "←" "$T/flip.err" || fail "flip: phantom leave: $(cat "$T/flip.err")"
+        unset AWS_PROFILE
+        # bash 5.1+: an array PROMPT_COMMAND keeps the user entries across flips.
+        if [[ -n "${BASH_VERSION:-}" ]] && (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+          PROMPT_COMMAND=(user1 user2)
+          source "$R/lib/ctx_autoswitch.bash"
+          [[ "${PROMPT_COMMAND[*]}" == "_ctx_hook keep && : user1 user2" ]] || fail "array core: ${PROMPT_COMMAND[*]}"
+          CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
+          [[ "${PROMPT_COMMAND[*]}" == "_ctx_profile_autoswitch;user1 user2" ]] || fail "array off: ${PROMPT_COMMAND[*]}"
+          source "$R/lib/ctx_autoswitch.bash"
+          [[ "${PROMPT_COMMAND[*]}" == "_ctx_hook keep && : user1 user2" ]] || fail "array core again: ${PROMPT_COMMAND[*]}"
+        fi
+        exit 0
+      ' _ "$ROOT_DIR" "$td" "$(basename "$sh")" || exit 1
+      rm -rf "$td"
+    ) || fail "autoswitch lib shim ($sh)"
+  done
+  if command -v fish >/dev/null 2>&1; then
+    (
+      set -euo pipefail
+      local td d k
+      td="$(cd "$(mktemp -d)" && pwd -P)"
+      export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1 PATH="$ROOT_DIR/bin:$PATH"
+      unset CTX_CORE_BIN CTX_ACTIVE_PROFILE CTX_AUTOSWITCH_NOTIFY GH_TOKEN _CTX_GH_PROFILE
+      mkdir -p "$CTX_DIR/profiles" "$td/w/p/r" "$td/fail" "$td/empty"
+      printf 'secret_provider=file\n' >"$CTX_DIR/config"
+      printf 'PROFILE_NAME=p\nWORK_DIR=%s\nAWS_PROFILE_NAME=pa\n' "$td/w/p" >"$CTX_DIR/profiles/p.conf"
+      printf '#!/bin/sh\necho "function _ctx_hook; end"\nexit 1\n' >"$td/fail/ctx-core"
+      printf '#!/bin/sh\nexit 0\n' >"$td/empty/ctx-core"
+      chmod +x "$td/fail/ctx-core" "$td/empty/ctx-core"
+      export CTX_T_LIB="$ROOT_DIR/lib/ctx_autoswitch.fish" CTX_T_TD="$td"
+      # kind: 10 = activate's hook only, 01 = the legacy hook only.
+      # shellcheck disable=SC2016
+      local kind='function kind; set -l h 0; set -l l 0; functions -q _ctx_hook; and set h 1; functions -q _ctx_profile_autoswitch; and set l 1; echo $h$l; end'
+      for d in fail empty; do
+        k="$(CTX_CORE_BIN="$td/$d/ctx-core" fish --no-config -c "$kind"'; source $CTX_T_LIB; kind')"
+        [[ "$k" == 01 ]] || { echo "fish CTX_CORE_BIN=$d: $k"; exit 1; }
+      done
+      # shellcheck disable=SC2016
+      fish --no-config -c "$kind"'
+        function fail; echo "fish: $argv"; exit 1; end
+        set -l lib $CTX_T_LIB
+        for m in core core off off core
+          if test $m = off
+            set -gx CTX_CORE off
+            source $lib
+            test (kind) = 01; or fail "after $m:" (kind)
+            set -e CTX_CORE
+          else
+            source $lib
+            test (kind) = 10; or fail "after $m:" (kind)
+            functions -q _ctx_profile_autoswitch_postexec; and fail "legacy postexec left"
+          end
+          set -q _ctx_shim_ok; and fail "_ctx_shim_ok left"
+          set -q _ctx_c; and fail "_ctx_c left"
+          cd $CTX_T_TD/w/p/r
+          emit fish_postexec
+          test "$CTX_ACTIVE_PROFILE" = p; or fail "after $m: enter: $CTX_ACTIVE_PROFILE"
+          cd $CTX_T_TD
+          emit fish_postexec
+          test -z "$CTX_ACTIVE_PROFILE"; or fail "after $m: leave: $CTX_ACTIVE_PROFILE"
+        end
+        # Core in p, legacy leaves p, the user sets AWS_PROFILE, core again:
+        # no stale __CTX_STATE "leave" (unsetting it, notifying) on the prompt.
+        # The notify output goes to the shell stderr (a redirection on emit need not
+        # reach the handlers): test.sh checks it between markers, both ways.
+        set -g CTX_AUTOSWITCH_NOTIFY 1
+        source $lib
+        echo M-enter-start >&2
+        cd $CTX_T_TD/w/p/r
+        emit fish_postexec
+        echo M-enter-end >&2
+        test "$CTX_ACTIVE_PROFILE" = p; or fail "flip: enter: $CTX_ACTIVE_PROFILE"
+        test "$AWS_PROFILE" = pa; or fail "flip: enter: AWS_PROFILE=$AWS_PROFILE"
+        set -gx CTX_CORE off
+        source $lib
+        set -e CTX_CORE
+        cd $CTX_T_TD
+        emit fish_postexec
+        test -z "$CTX_ACTIVE_PROFILE"; or fail "flip: legacy leave: $CTX_ACTIVE_PROFILE"
+        set -gx AWS_PROFILE mine
+        echo M-flip-start >&2
+        source $lib
+        emit fish_postexec
+        echo M-flip-end >&2
+        set -e CTX_AUTOSWITCH_NOTIFY
+        test "$AWS_PROFILE" = mine; or fail "flip: AWS_PROFILE=$AWS_PROFILE, want mine"
+        echo FISH-OK
+      ' >"$td/out" 2>"$td/err" || true
+      [[ "$(cat "$td/out")" == FISH-OK ]] || { echo "fish: $(cat "$td/out") $(cat "$td/err")"; exit 1; }
+      sed -n '/^M-enter-start$/,/^M-enter-end$/p' "$td/err" | grep -q "→ p" || { echo "fish: enter did not notify: $(cat "$td/err")"; exit 1; }
+      ! sed -n '/^M-flip-start$/,/^M-flip-end$/p' "$td/err" | grep -q "←" || { echo "fish: phantom leave: $(cat "$td/err")"; exit 1; }
+      rm -rf "$td"
+    ) || fail "autoswitch lib shim (fish)"
+    pass "autoswitch lib evals ctx-core activate, falls back to the legacy hook, and keeps one hook across re-sources (bash, zsh, fish)"
+  else
+    pass "autoswitch lib evals ctx-core activate, falls back to the legacy hook, and keeps one hook across re-sources (bash, zsh; fish not installed, skipped)"
+  fi
+}
+
+# _hook_it_fixture: profiles a (a secret) and b under $td/w, and $td/log/ctx-core, a
+# canary that logs every call to $td/log/calls and runs the real ctx-core. For
+# `activate` it bakes its own path into the glue, so the hook's calls are logged too.
+_hook_it_fixture() {
+  td="$(cd "$(mktemp -d)" && pwd -P)"
+  export HOME="$td/home" CTX_DIR="$td/home/.ctx" GIT_CONFIG_NOSYSTEM=1 LC_ALL=C
+  unset CTX_CORE_BIN CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER CTX_AUTOSWITCH_NOTIFY CTX_QUIET GH_TOKEN _CTX_GH_PROFILE AWS_PROFILE A_SECRET
+  mkdir -p "$CTX_DIR/profiles" "$CTX_DIR/secrets/a" "$td/w/a/r" "$td/w/b/r" "$td/x" "$td/log" "$td/syspath"
+  printf 'secret_provider=file\nprompt_extra_paths=%s\n' "$td/x" >"$CTX_DIR/config"
+  printf 'PROFILE_NAME=a\nWORK_DIR=%s\nAWS_PROFILE_NAME=pa\nSECRET_KEYS=A_SECRET\nEXTRA_ENVS=\n' "$td/w/a" >"$CTX_DIR/profiles/a.conf"
+  printf 'PROFILE_NAME=b\nWORK_DIR=%s\nAWS_PROFILE_NAME=pb\nSECRET_KEYS=\nEXTRA_ENVS=\n' "$td/w/b" >"$CTX_DIR/profiles/b.conf"
+  printf 'sa' >"$CTX_DIR/secrets/a/A_SECRET"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/log/calls"\nif [ "$1" = activate ]; then\n  out="$("%s/bin/ctx-core" "$@")" || exit $?\n  printf "%%s\\n" "$out" | sed "s|%s/bin/ctx-core|%s/log/ctx-core|g"\n  exit 0\nfi\nexec "%s/bin/ctx-core" "$@"\n' \
+    "$td" "$ROOT_DIR" "$ROOT_DIR" "$td" "$ROOT_DIR" >"$td/log/ctx-core"
+  chmod +x "$td/log/ctx-core"
+  # A hermetic PATH: ctx from this checkout, then only the system dirs (no cloud CLIs).
+  for d in /usr/bin /bin; do ln -sf "$d"/* "$td/syspath/" 2>/dev/null || true; done
+  rm -f "$td/syspath/ctx" "$td/syspath/ctx-core"
+  export PATH="$ROOT_DIR/bin:$td/syspath"
+}
+
+# The plan's Review Focus 1-5 end to end, through lib/ctx_autoswitch.bash and the real
+# ctx-core (real bash 3.2, bash, zsh; fish when installed, required in CI):
+#   1. 50 prompts without a change run no ctx-core (the logging canary) and the guard has
+#      no command substitution (a $(…) fork the canary cannot see);
+#   2. `ctx use` / `ctx deactivate` in another terminal: the next prompt here runs
+#      hook-env once and ends as the legacy hook does (SNAP lines, compared), also when a
+#      third shell's hook ran first (per-shell stamps, R12);
+#   3. leaving a profile whose .conf was deleted unsets what it exported;
+#   4. an old rc block (legacy hook), the upgraded lib and an added `ctx activate` line,
+#      each sourced twice, leave one hook that runs once per prompt; user hooks kept;
+#      re-sourcing in a hooked shell changes nothing;
+#   5. bash 5.1+ with PROMPT_COMMAND as an array.
+test_hook_integration() {
+  local sh v out want got
+  if [[ -n "${CI:-}" ]]; then
+    command -v zsh >/dev/null 2>&1 || fail "CI must install zsh (the hook tests would skip it)"
+    command -v fish >/dev/null 2>&1 || fail "CI must install fish (the hook tests would skip it)"
+  fi
+  if [[ "${CTX_CORE:-}" == off || ! -x "$ROOT_DIR/bin/ctx-core" ]]; then
+    pass "hook integration check skipped (CTX_CORE=off or no bin/ctx-core)"
+    return 0
+  fi
+  for sh in /bin/bash bash zsh; do
+    command -v "$sh" >/dev/null 2>&1 || continue
+    for v in legacy string array; do
+      [[ "$v" != array || "$sh" != zsh ]] || continue
+      out="$(
+        set -euo pipefail
+        local td
+        _hook_it_fixture
+        _hook_it_session >"$td/session.sh"
+        cd "$td"
+        "$sh" "$td/session.sh" "$ROOT_DIR" "$td" "$(basename "$sh")" "$v" 2>&1 || true
+        rm -rf "$td"
+      )"
+      case "$out" in
+        *$'\n'SKIP | SKIP) continue ;;
+        *$'\n'OK) ;;
+        *) fail "hook integration ($sh, $v): $out" ;;
+      esac
+      got="$(grep '^SNAP ' <<<"$out")"
+      if [[ "$v" == legacy ]]; then
+        want="$got"
+        [[ -n "$want" ]] || fail "hook integration ($sh): no legacy snapshots"
+        # Absolute anchors, so the reference itself cannot drift: after another
+        # terminal's `use b` the extra-path prompt shows b; its deactivate puts this
+        # shell back on a, with the notify.
+        grep -q '^SNAP f2 .* prof=b ' <<<"$want" || fail "hook integration ($sh): legacy f2 lacks prof=b:"$'\n'"$want"
+        grep -q '^SNAP m3 .* err=.*→ a' <<<"$want" || fail "hook integration ($sh): legacy m3 lacks the → a notify:"$'\n'"$want"
+      elif [[ "$got" != "$want" ]]; then
+        fail "hook integration ($sh, $v): another terminal's change differs from the legacy hook:"$'\n'"legacy:"$'\n'"$want"$'\n'"core:"$'\n'"$got"
+      fi
+    done
+  done
+  if command -v fish >/dev/null 2>&1; then
+    out="$(
+      set -euo pipefail
+      local td
+      _hook_it_fixture
+      _hook_it_session_fish >"$td/session.fish"
+      cd "$td"
+      fish --no-config "$td/session.fish" "$ROOT_DIR" "$td" 2>"$td/err" || echo "fish exited $?; stderr: $(cat "$td/err")"
+      # The notify output of a step is the stderr between its markers (event handlers
+      # write to the shell's own stderr, whatever a redirection on `emit` says): entering
+      # a notifies, re-applying the other terminal's lock does not (as legacy, m1 and m2).
+      sed -n '/^M-enter-start$/,/^M-enter-end$/p' "$td/err" | grep -qF '[ctx] → a' || echo "enter notify: $(cat "$td/err")"
+      [[ "$(sed -n '/^M-reapply-start$/,/^M-reapply-end$/p' "$td/err")" == $'M-reapply-start\nM-reapply-end' ]] \
+        || echo "re-apply notified: $(cat "$td/err")"
+      rm -rf "$td"
+    )"
+    [[ "$(grep -v '^SNAP ' <<<"$out")" == FISH-OK ]] || fail "hook integration (fish): $out"
+    # The fish snapshots, against the bash legacy hook's of the same steps.
+    got="$(grep '^SNAP ' <<<"$out" | sed 's/ err=.*$//')"
+    want="$(sed 's/ err=.*$//' <<<"$want")"
+    [[ -n "$got" && "$got" == "$want" ]] || fail "hook integration (fish): differs from the legacy hook:"$'\n'"legacy:"$'\n'"$want"$'\n'"fish:"$'\n'"$got"
+    pass "hook integration: no fork on unchanged prompts, other terminals as legacy, deleted profile, re-source, array PROMPT_COMMAND (bash 3.2, bash, zsh, fish)"
+  else
+    pass "hook integration: no fork on unchanged prompts, other terminals as legacy, deleted profile, re-source, array PROMPT_COMMAND (bash 3.2, bash, zsh; fish not installed, skipped)"
+  fi
+}
+
+# _hook_it_session: test_hook_integration's script for bash and zsh, run as
+# SHELL script R T SH V (V: legacy = the legacy hook; string, array = the core hook with
+# that PROMPT_COMMAND). Prints SNAP lines and OK, or the failure.
+_hook_it_session() {
+  cat <<'EOF'
+R=$1 T=$2 SH=$3 V=$4
+fail() { echo "$SH ($V): $*"; exit 1; }
+CORE=$T/log/ctx-core LOG=$T/log/calls
+count() { N=0; if [ -f "$LOG" ]; then while IFS= read -r _l; do N=$((N+1)); done <"$LOG"; fi; }
+settle() { count; _base=$N; }
+delta() {
+  [ "$V" != legacy ] || return 0
+  count; [ $((N-_base)) = "$1" ] || fail "$2: $((N-_base)) ctx-core calls, want $1"; _base=$N
+}
+ran1=0 ran2=0
+user1() { ran1=$((ran1+1)); }
+user2() { ran2=$((ran2+1)); }
+# prompt: one prompt's hooks, run as the shell runs them. regs: the hook is registered
+# once (zsh: chpwd and precmd), the legacy one not at all, the user's hooks kept.
+if [ -n "${ZSH_VERSION-}" ]; then
+  precmd_functions=(user1 user2)
+  prompt() { local _f; for _f in $precmd_functions; do "$_f"; done; }
+  regs() {
+    local _f n=0 l=0
+    for _f in $precmd_functions $chpwd_functions; do
+      case $_f in _ctx_hook) n=$((n+1)) ;; _ctx_profile_autoswitch|_ctx_auto_switch) l=$((l+1)) ;; esac
+    done
+    [ "$n $l" = "2 0" ] && [ "${precmd_functions[*]}" = "user1 user2 _ctx_hook" ] || fail "$1: hooks $n $l, precmd_functions=(${precmd_functions[*]})"
+  }
+elif [ "$V" = array ]; then
+  if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then echo SKIP; exit 0; fi
+  PROMPT_COMMAND=(user1 user2)
+  prompt() { local _c; for _c in "${PROMPT_COMMAND[@]}"; do eval "$_c"; done; }
+  regs() {
+    [[ "$(declare -p PROMPT_COMMAND)" == "declare -a"* && "${#PROMPT_COMMAND[@]}" == 3 && "${PROMPT_COMMAND[*]}" == "_ctx_hook keep && : user1 user2" ]] \
+      || fail "$1: PROMPT_COMMAND=(${PROMPT_COMMAND[*]})"
+  }
+else
+  PROMPT_COMMAND='user1;user2'
+  prompt() { eval "$PROMPT_COMMAND"; }
+  regs() { [ "$PROMPT_COMMAND" = '_ctx_hook keep && :;user1;user2' ] || fail "$1: PROMPT_COMMAND=$PROMPT_COMMAND"; }
+fi
+# indir DIR CMD...: CMD in another process with cwd DIR (a cd here would run zsh's chpwd hook).
+indir() { sh -c 'cd "$1" && shift && exec "$@"' _ "$@"; }
+# other DIR ARGS: ctx in another terminal (cwd DIR), with the real ctx-core.
+other() { CTX_CORE_BIN="$R/bin/ctx-core" CTX_QUIET=1 indir "$1" "$R/bin/ctx" "${@:2}" --eval bash >/dev/null 2>&1; }
+# snap STEP: what a prompt shows after STEP (paths relative to @T, notify without ESC).
+snap() {
+  local _a _e
+  _a="$(sed -n 's/^active=//p' "$CTX_DIR/config" | tail -n 1)"
+  _e="$(tr -d '\033' <"$T/err" | tr '\n' '|')"
+  printf 'SNAP %s active=%s aws=%s show=%s prof=%s wd=%s cfg=%s err=%s|\n' "$1" "${CTX_ACTIVE_PROFILE-<u>}" "${AWS_PROFILE-<u>}" \
+    "${CTX_PROMPT_SHOW-<u>}" "${CTX_PROMPT_PROFILE-<u>}" "${CTX_PROMPT_WORK_DIR-<u>}" "$_a" "$_e" | sed "s|$T|@T|g"
+}
+# stale: this shell's stamp is from a while ago (-nt has 1 s resolution in bash 3.2 and
+# zsh), the profiles older still: only the other terminal's config write is newer.
+stale() {
+  [ -n "${__CTX_STAMP-}" ] || return 0
+  touch -t 200001010000 "$CTX_DIR/profiles" "$CTX_DIR/profiles/"*.conf && touch -t 200001010001 "$__CTX_STAMP"
+}
+
+if [ "$V" = legacy ]; then
+  CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
+  typeset -f _ctx_profile_autoswitch >/dev/null || fail "legacy hook not installed"
+else
+  export CTX_CORE_BIN="$CORE"
+  # 4. An old rc block (CTX_CORE=off: the legacy hook), the same block after the
+  # upgrade (the lib evals activate) and an added eval line; then both again.
+  CTX_CORE=off source "$R/lib/ctx_autoswitch.bash"
+  typeset -f _ctx_profile_autoswitch >/dev/null || fail "legacy hook not installed"
+  source "$R/lib/ctx_autoswitch.bash"
+  eval "$("$CORE" activate "$SH")"
+  source "$R/lib/ctx_autoswitch.bash"
+  eval "$("$CORE" activate "$SH")"
+  typeset -f _ctx_profile_autoswitch >/dev/null 2>&1 && fail "legacy hook still defined"
+  regs "after sourcing"
+  grep -qx "activate $SH" "$LOG" || fail "the lib did not run the canary's activate"
+  settle
+  cd "$T/w/a/r" && prompt
+  delta 1 "cd into a and a prompt"
+  [ "$ran1 $ran2" = "1 1" ] || fail "user hooks ran $ran1/$ran2 times in one prompt"
+  [ "${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-}/${CTX_PROMPT_SHOW-}" = "a/pa/sa/1" ] \
+    || fail "enter: ${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-}/${CTX_PROMPT_SHOW-}"
+
+  # 1. Unchanged prompts: no ctx-core call; the guard is builtins only.
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 \
+    26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50; do prompt; done
+  delta 0 "50 unchanged prompts"
+  [ "$ran1 $ran2" = "51 51" ] || fail "user hooks ran $ran1/$ran2 times in 51 prompts"
+  # The guard as the shell loaded it: _ctx_hook from after its header to the ctx-core
+  # check (-x), plus _ctx_bp_live (bash), which it calls on every prompt. No $( or
+  # backtick, no pipe (| once || is removed), no ( subshell and so no <( either.
+  # What this cannot see: an external command run by name (it forks with none of these
+  # characters, and the canary only logs ctx-core), and the body of any other helper
+  # the guard calls (only _ctx_bp_live is checked). And it can over-match: the ( check
+  # also rejects non-forking [[ ( … ) ]] grouping and $((…)) arithmetic, so a failure
+  # here means look at the guard, not that it forks.
+  _g="$(typeset -f _ctx_hook)"
+  _g="${_g#*'{'}"
+  _g="${_g%%-x *}"
+  _h="$(typeset -f _ctx_bp_live 2>/dev/null)" && _g="$_g ${_h#*'{'}"
+  case $_g in *' -nt '*) ;; *) fail "guard not found in: $_g" ;; esac
+  case $_g in *'$('*|*'`'*|*'('*) fail "the guard forks: $_g" ;; esac
+  case ${_g//'||'/} in *'|'*) fail "the guard pipes: $_g" ;; esac
+  cd "$T" && prompt 2>/dev/null
+  [ -z "${CTX_ACTIVE_PROFILE+x}${A_SECRET+x}" ] || fail "leave a: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+fi
+
+# 2. Other terminals, each followed by one prompt here. f*: in an extra prompt path
+# (CTX_PROMPT_PROFILE is the machine-wide profile); m*: in a's folder, where the other
+# terminal's manual lock takes effect.
+CTX_AUTOSWITCH_NOTIFY=1
+settle
+{ cd "$T/x" && prompt; } 2>"$T/err"; delta 1 "cd x"; snap f1
+stale; other "$T/w/b" use b
+# A third shell's hook runs first: it has its own stamp and leaves ours alone.
+[ "$V" = legacy ] || __CTX_STATE= __CTX_STAMP= indir "$T/w/b" "$R/bin/ctx-core" hook-env "$SH" >/dev/null 2>&1
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's use b"; snap f2
+stale; other "$T" deactivate
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's deactivate"; snap f3
+{ cd "$T/w/a/r" && prompt; } 2>"$T/err"; delta 1 "cd into a"; snap m1  # zsh: the chpwd hook, too
+stale; other "$T/w/a/r" use b
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's use b in a"; snap m2
+prompt 2>"$T/err"; delta 0 "the next prompt"
+stale; other "$T" deactivate
+settle; prompt 2>"$T/err"; delta 1 "the prompt after another terminal's deactivate"; snap m3
+unset CTX_AUTOSWITCH_NOTIFY
+[ "$V" != legacy ] || { echo OK; exit 0; }
+
+# 3. Leave a after its .conf was deleted: what the hook exported is unset.
+[ "${CTX_ACTIVE_PROFILE-}/${A_SECRET-}" = a/sa ] || fail "before the delete: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+mv "$CTX_DIR/profiles/a.conf" "$T/a.conf"
+cd "$T" && prompt 2>/dev/null
+[ -z "${A_SECRET+x}${AWS_PROFILE+x}${CTX_ACTIVE_PROFILE+x}${CTX_ACTIVATION_TRIGGER+x}" ] \
+  || fail "deleted profile left: A_SECRET=${A_SECRET-} AWS_PROFILE=${AWS_PROFILE-} CTX_ACTIVE_PROFILE=${CTX_ACTIVE_PROFILE-}"
+[ "${CTX_PROMPT_SHOW-}" = 0 ] || fail "CTX_PROMPT_SHOW=${CTX_PROMPT_SHOW-}"
+grep -qx active=a "$CTX_DIR/config" && fail "the deleted profile is still active"
+mv "$T/a.conf" "$CTX_DIR/profiles/a.conf"
+cd "$T/w/a/r" && prompt
+[ "${CTX_ACTIVE_PROFILE-}/${A_SECRET-}" = a/sa ] || fail "re-enter: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+
+# 4. Re-sourcing the rc in the hooked shell: still one hook, no extra ctx-core run.
+source "$R/lib/ctx_autoswitch.bash"
+eval "$("$CORE" activate "$SH")"
+regs "after re-sourcing"
+settle
+_r=$ran1
+prompt
+delta 0 "a prompt after re-sourcing"
+[ $((ran1 - _r)) = 1 ] || fail "user hook ran $((ran1 - _r)) times after re-sourcing"
+[ "${CTX_ACTIVE_PROFILE-}/${A_SECRET-}" = a/sa ] || fail "after re-sourcing: ${CTX_ACTIVE_PROFILE-}/${A_SECRET-}"
+cd "$T/w/b/r" && prompt
+delta 1 "switch to b"
+[ "${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-unset}" = b/pb/unset ] || fail "switch: ${CTX_ACTIVE_PROFILE-}/${AWS_PROFILE-}/${A_SECRET-unset}"
+echo OK
+EOF
+}
+
+# _hook_it_session_fish: the same with fish (the core hook only), run as
+# fish script R T. Prints the f* and m* SNAP lines and FISH-OK, or the failure.
+_hook_it_session_fish() {
+  cat <<'EOF'
+set -g R $argv[1]
+set -g T $argv[2]
+set -g CORE $T/log/ctx-core
+function fail; echo "fish: $argv"; exit 1; end
+function calls; if test -f $T/log/calls; wc -l <$T/log/calls | string trim; else; echo 0; end; end
+function settle; set -g base (calls); end
+function delta -a want what
+    set -l n (calls)
+    test (math $n - $base) = $want; or fail "$what: "(math $n - $base)" ctx-core calls, want $want"
+    set -g base $n
+end
+function prompt; emit fish_postexec; end
+set -g ran 0
+function user1 --on-event fish_postexec; set -g ran (math $ran + 1); end
+function other -a dir
+    env CTX_CORE_BIN=$R/bin/ctx-core CTX_QUIET=1 sh -c 'cd "$1" && shift && exec "$@" >/dev/null 2>&1' _ $dir $R/bin/ctx $argv[2..-1] --eval fish
+end
+function handlers; functions --handlers | string match '*_ctx_hook*' | count; end
+function v -a name; if set -q $name; echo $$name; else; echo '<u>'; end; end
+function snap
+    set -l a (sed -n 's/^active=//p' $CTX_DIR/config | tail -n 1)
+    printf 'SNAP %s active=%s aws=%s show=%s prof=%s wd=%s cfg=%s err=|\n' $argv[1] (v CTX_ACTIVE_PROFILE) (v AWS_PROFILE) \
+        (v CTX_PROMPT_SHOW) (v CTX_PROMPT_PROFILE) (v CTX_PROMPT_WORK_DIR) "$a" | string replace -a $T @T
+end
+function stale; touch -t 200001010000 $CTX_DIR/profiles $CTX_DIR/profiles/*.conf; and touch -t 200001010001 $__CTX_STAMP; end
+set -gx CTX_CORE_BIN $CORE
+
+# 4. The old block (legacy), the upgraded lib, an activate line; then both again.
+set -gx CTX_CORE off; source $R/lib/ctx_autoswitch.fish; set -e CTX_CORE
+functions -q _ctx_profile_autoswitch; or fail "legacy hook not installed"
+source $R/lib/ctx_autoswitch.fish
+set -g h (handlers)
+$CORE activate fish | source
+source $R/lib/ctx_autoswitch.fish
+$CORE activate fish | source
+functions -q _ctx_profile_autoswitch; and fail "legacy hook still defined"
+functions -q _ctx_profile_autoswitch_postexec; and fail "legacy postexec still defined"
+test $h -ge 1; and test (handlers) = $h; or fail "handlers: $h, then "(handlers)
+grep -qx "activate fish" $T/log/calls; or fail "the lib did not run the canary's activate"
+settle
+cd $T/w/a/r; prompt
+delta 1 "cd into a and a prompt"
+test $ran = 1; or fail "user hook ran $ran times"
+test "$CTX_ACTIVE_PROFILE/$AWS_PROFILE/$A_SECRET/$CTX_PROMPT_SHOW" = a/pa/sa/1; or fail "enter: $CTX_ACTIVE_PROFILE/$AWS_PROFILE/$A_SECRET"
+
+# 1. Unchanged prompts.
+for i in (seq 50); prompt; end
+delta 0 "50 unchanged prompts"
+test $ran = 51; or fail "user hook ran $ran times in 51 prompts"
+cd $T; prompt
+
+# 2. Other terminals (the notify output between the markers is checked by test.sh).
+set -g CTX_AUTOSWITCH_NOTIFY 1
+settle
+cd $T/x; prompt; delta 1 "cd x"; snap f1
+stale; other $T/w/b use b
+settle; prompt; delta 1 "the prompt after another terminal's use b"; snap f2
+stale; other $T deactivate
+settle; prompt; delta 1 "the prompt after another terminal's deactivate"; snap f3
+echo M-enter-start >&2
+cd $T/w/a/r; prompt; delta 1 "cd into a"; snap m1
+echo M-enter-end >&2
+stale; other $T/w/a/r use b
+settle
+echo M-reapply-start >&2
+prompt; delta 1 "the prompt after another terminal's use b in a"; snap m2
+echo M-reapply-end >&2
+stale; other $T deactivate
+settle; prompt; delta 1 "the prompt after another terminal's deactivate"; snap m3
+set -e CTX_AUTOSWITCH_NOTIFY
+
+# 3. Leave a deleted profile.
+mv $CTX_DIR/profiles/a.conf $T/a.conf
+cd $T; prompt
+set -q A_SECRET; or set -q AWS_PROFILE; or set -q CTX_ACTIVE_PROFILE; or set -q CTX_ACTIVATION_TRIGGER
+and fail "deleted profile left: A_SECRET=$A_SECRET AWS_PROFILE=$AWS_PROFILE CTX_ACTIVE_PROFILE=$CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER=$CTX_ACTIVATION_TRIGGER"
+test "$CTX_PROMPT_SHOW" = 0; or fail "CTX_PROMPT_SHOW=$CTX_PROMPT_SHOW"
+grep -qx active=a $CTX_DIR/config; and fail "the deleted profile is still active"
+mv $T/a.conf $CTX_DIR/profiles/a.conf
+cd $T/w/a/r; prompt
+test "$CTX_ACTIVE_PROFILE/$A_SECRET" = a/sa; or fail "re-enter: $CTX_ACTIVE_PROFILE/$A_SECRET"
+
+# 4. Re-source in the hooked shell.
+source $R/lib/ctx_autoswitch.fish
+$CORE activate fish | source
+test (handlers) = $h; or fail "handlers after re-sourcing: "(handlers)
+settle
+set -l r $ran
+prompt
+delta 0 "a prompt after re-sourcing"
+test (math $ran - $r) = 1; or fail "user hook ran "(math $ran - $r)" times"
+echo FISH-OK
+EOF
 }
 
 test_autoswitch_keeps_manual_lock() {
@@ -1130,6 +1784,29 @@ test_autoswitch_keeps_manual_lock() {
     rm -rf "$td"
   ) || fail "autoswitch keeps manual lock"
   pass "autoswitch re-applying the active profile keeps a manual lock"
+}
+
+# Bash deactivate (bin/ctx runs under set -u) on a profile without a SECRET_KEYS= line.
+test_deactivate_without_secret_keys() {
+  (
+    set -euo pipefail
+    local td out mode
+    _use_eval_fixture
+    printf 'PROFILE_NAME=plain\nWORK_DIR=%s\n' "$td/w/demo" >"$CTX_DIR/profiles/plain.conf"
+    unset SECRET_KEYS
+    for mode in off default; do
+      printf 'secret_provider=file\nactive=plain\n' >"$CTX_DIR/config"
+      if [[ $mode == off ]]; then
+        out="$(CTX_CORE=off "$ROOT_DIR/bin/ctx" deactivate --eval bash 2>"$td/err")" || { echo "deactivate ($mode) failed: $(cat "$td/err")"; exit 1; }
+      else
+        out="$("$ROOT_DIR/bin/ctx" deactivate --eval bash 2>"$td/err")" || { echo "deactivate ($mode) failed: $(cat "$td/err")"; exit 1; }
+      fi
+      grep -q '^unset AWS_PROFILE ' <<<"$out" || { echo "deactivate ($mode) unsets: $out"; exit 1; }
+      ! grep -qx 'active=plain' "$CTX_DIR/config" || { echo "deactivate ($mode) kept active="; exit 1; }
+    done
+    rm -rf "$td"
+  ) || fail "deactivate without SECRET_KEYS"
+  pass "ctx deactivate works on a profile without SECRET_KEYS (Bash and Go)"
 }
 
 test_quiet_use_cloud_tools_succeed() {
@@ -2405,7 +3082,10 @@ test_doctor_reports_ctx_core
 test_use_eval_exports
 test_shell_wrapper_applies_use
 test_autoswitch_exports_profile_env
+test_autoswitch_shim
+test_hook_integration
 test_autoswitch_keeps_manual_lock
+test_deactivate_without_secret_keys
 test_quiet_use_cloud_tools_succeed
 test_inherited_quiet_use
 test_use_deactivate_served_by_go
