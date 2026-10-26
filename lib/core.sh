@@ -29,9 +29,16 @@ user_cancelled() {
   # Print to stderr so command substitutions never capture this as field input.
   echo -e "${YELLOW}!${RESET} Cancelled by user." >&2
   # If we're inside command substitution, exit only aborts the subshell.
-  # Bubble cancellation to the parent ctx process with INT.
+  # Signal the main ctx shell ($$ is its PID even in a subshell; bin/ctx traps
+  # INT and exits 130). $PPID would be ctx's caller.
+  # Then die by SIGINT instead of exiting 130: when the main shell takes the
+  # signal while it already waits for this subshell, bash runs its INT trap
+  # only if the child was killed by SIGINT (a normal exit means the child
+  # handled it), and ctx would go on with an empty answer. exec keeps this
+  # PID; exit 130 is the fallback where SIGINT is ignored.
   if [[ ${BASH_SUBSHELL:-0} -gt 0 ]]; then
-    kill -INT "$PPID" 2>/dev/null || true
+    kill -INT "$$" 2>/dev/null || true
+    exec /bin/sh -c 'kill -INT $$; exit 130'
   fi
   exit 130
 }
@@ -91,11 +98,7 @@ ask() {
       echo -e "${CYAN}?${RESET} $prompt: \c" >&2
     fi
     local var
-    if [[ -t 0 ]]; then
-      read -r var || user_cancelled
-    else
-      read -r var < /dev/tty 2>/dev/null || user_cancelled
-    fi
+    read -r var || user_cancelled
     echo "${var:-$default}"
   fi
 }
@@ -113,10 +116,10 @@ ask_secret() {
       --width 60 \
       < /dev/tty || user_cancelled
   else
-    echo -e "${CYAN}?${RESET} $prompt ${DIM}(hidden)${RESET}: \c"
+    echo -e "${CYAN}?${RESET} $prompt ${DIM}(hidden)${RESET}: \c" >&2
     local var
     read -rs var || user_cancelled
-    echo ""
+    echo "" >&2
     echo "$var"
   fi
 }
@@ -137,7 +140,7 @@ ask_yn() {
     return $rc
   else
     local hint; [[ "$default" == "y" ]] && hint="Y/n" || hint="y/N"
-    echo -e "${CYAN}?${RESET} $prompt ${DIM}[$hint]${RESET}: \c"
+    echo -e "${CYAN}?${RESET} $prompt ${DIM}[$hint]${RESET}: \c" >&2
     local answer
     read -r answer || user_cancelled
     answer="${answer:-$default}"
@@ -169,12 +172,12 @@ pick_one() {
       < /dev/tty) || user_cancelled
     echo "$result"
   else
-    echo ""
+    echo "" >&2
     for i in "${!items[@]}"; do
-      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}"
+      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}" >&2
     done
-    echo ""
-    echo -e "${CYAN}?${RESET} $prompt (1-${#items[@]}, 0 to skip): \c"
+    echo "" >&2
+    echo -e "${CYAN}?${RESET} $prompt (1-${#items[@]}, 0 to skip): \c" >&2
     local choice
     read -r choice || user_cancelled
     if [[ "$choice" =~ ^[0-9]+$ ]] \
@@ -206,12 +209,12 @@ pick_many() {
       "${items[@]}" \
       < /dev/tty || user_cancelled
   else
-    echo ""
+    echo "" >&2
     for i in "${!items[@]}"; do
-      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}"
+      echo -e "  ${DIM}$((i+1))${RESET}  ${items[$i]}" >&2
     done
-    echo ""
-    echo -e "${CYAN}?${RESET} $prompt (comma-separated numbers, e.g. 1,3): \c"
+    echo "" >&2
+    echo -e "${CYAN}?${RESET} $prompt (comma-separated numbers, e.g. 1,3): \c" >&2
     local input
     read -r input || user_cancelled
     for n in $(echo "$input" | tr ',' ' '); do
@@ -251,9 +254,9 @@ ctx_setup_cfg_get() {
   val="${val%"${val##*[![:space:]]}"}"
   val="${val%$'\r'}"
   if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
-    val="${val:1:-1}"
+    val="${val:1:${#val}-2}"
   elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
-    val="${val:1:-1}"
+    val="${val:1:${#val}-2}"
   fi
   printf '%s' "${val:-$default}"
 }
@@ -303,7 +306,7 @@ ctx_setup_review_confirm() {
 
   hr
   bold "  Step 8 / 8 — Review"
-  dim "  Nothing is written until you confirm. No = exit without changes."
+  dim "  Profile, git and SSH config are written only after you confirm. No = exit without writing them."
   echo ""
 
   if $HAS_GUM; then
@@ -398,6 +401,7 @@ ctx_profile_read_work_dir() {
   [[ -f "$conf" ]] || return 1
   wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
   wd="${wd/#\~/$HOME}"
+  [[ "$wd" == "/" ]] || wd="${wd%/}"
   [[ -n "$wd" ]] || return 1
   printf '%s\n' "$wd"
 }
@@ -432,6 +436,7 @@ ctx_resolve_path_with_root() {
     [[ -e "$conf" ]] || continue
     work_dir="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "$conf")"
     work_dir="${work_dir/#\~/$HOME}"
+    [[ "$work_dir" == "/" ]] || work_dir="${work_dir%/}"
     [[ -z "$work_dir" ]] && continue
     if [[ "$pwd" == "$work_dir" || "$pwd" == "$work_dir/"* ]]; then
       len=${#work_dir}
@@ -450,6 +455,7 @@ ctx_resolve_path_with_root() {
       local wdc
       wdc="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${first}.conf")"
       wdc="${wdc/#\~/$HOME}"
+      [[ "$wdc" == "/" ]] || wdc="${wdc%/}"
       [[ -z "$wdc" ]] && wdc="${best_work_dir%/}/$first"
       if [[ -d "$wdc" && ( "$pwd" == "$wdc" || "$pwd" == "$wdc/"* ) ]]; then
         local cand_len=${#wdc}
@@ -489,6 +495,7 @@ ctx_resolve_path_with_root() {
   if [[ -n "$path_profile" ]]; then
     display_wd="$(bash -c 'source "$1" 2>/dev/null || true; printf %s "${WORK_DIR:-}"' _ "${pdir}/${path_profile}.conf")"
     display_wd="${display_wd/#\~/$HOME}"
+    [[ "$display_wd" == "/" ]] || display_wd="${display_wd%/}"
     [[ -n "$display_wd" ]] && best_work_dir="$display_wd"
     [[ -z "$display_wd" && -n "$best_work_dir" ]] && display_wd="$best_work_dir"
   fi
@@ -573,12 +580,25 @@ ctx_activation_get_source() {
   [[ "$v" == "manual" ]] && echo manual || echo auto
 }
 
+# First base64 flag spelling that produces output wins (GNU -d, BSD -D, --decode).
+# GNU base64 prints the decoded text and then exits 1 on stray padding, so an
+# `a || b` chain would print it twice; never concatenate attempts.
+ctx_base64_decode() {
+  local f out
+  for f in -d -D --decode; do
+    out="$(printf '%s' "$1" | base64 "$f" 2>/dev/null)"
+    [[ -n "$out" ]] && { printf '%s' "$out"; return 0; }
+  done
+  return 1
+}
+
 # Decoded manual anchor PWD (when active_source=manual), or empty.
 ctx_activation_get_manual_pwd() {
   local raw dec
   raw="$(grep "^manual_pwd=" "$CTX_CONFIG" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  raw="${raw//$'\r'/}"
   [[ -z "$raw" ]] && return 1
-  dec="$(printf '%s' "$raw" | base64 -d 2>/dev/null || printf '%s' "$raw" | base64 -D 2>/dev/null || printf '%s' "$raw" | base64 --decode 2>/dev/null || true)"
+  dec="$(ctx_base64_decode "$raw")"
   [[ -n "$dec" ]] && printf '%s\n' "$dec" && return 0
   printf '%s\n' "$raw"
 }
@@ -686,15 +706,77 @@ ctx_secret_provider_available() {
 }
 
 # ─── Backup ────────────────────────────────────────────────────────────────────
+# Returns 1 when the copy could not be made (a missing src is not an error).
 backup_file() {
   local src="$1"
   [[ -f "$src" ]] || return 0
   local stamp; stamp=$(date '+%Y%m%d-%H%M%S')
   local bdir="${CTX_DIR}/backups/$stamp"
-  mkdir -p "$bdir"
-  cp "$src" "$bdir/$(basename "$src")"
+  { mkdir -p "$bdir" && cp -f "$src" "$bdir/$(basename "$src")"; } 2>/dev/null || return 1
   echo "$src" >> "$bdir/manifest.txt"
   log "Backed up $src → $bdir"
+}
+
+# Mode bits of a file, octal (GNU stat, else BSD stat).
+_ctx_file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+
+# The file FILE names after following its symlinks (also a dangling last
+# one: the file is then created where it points); at most 40 links.
+_ctx_link_target() {
+  local target="$1" dest n=0
+  while [[ -L "$target" && $n -lt 40 ]]; do
+    dest="$(readlink "$target")" || break
+    case "$dest" in /*) target="$dest" ;; *) target="$(dirname -- "$target")/$dest" ;; esac
+    n=$((n + 1))
+  done
+  printf '%s\n' "$target"
+}
+
+# Atomic write-through: put SRC's content at FILE. Symlinks are followed; the
+# result is built in a temp file next to the target (same filesystem, mode kept
+# via cp -p, or the umask default for a new file; MODE, when given, wins) and
+# moved over it. A read-only target is not replaced behind the user's back,
+# nor is a link chain that does not end (a loop).
+# Returns 1 on any failure, and FILE is then as it was.
+_ctx_write_through() {
+  local src="$1" mode="${3:-}" target d new
+  target="$(_ctx_link_target "$2")"
+  [[ ! -L "$target" ]] || return 1 # a link loop (or over 40 links)
+  [[ ! -e "$target" || -w "$target" ]] || return 1
+  d="$(cd -P -- "$(dirname -- "$target")" 2>/dev/null && pwd)" || return 1
+  new="$(mktemp "$d/.ctx-write.XXXXXX" 2>/dev/null)" || return 1
+  if {
+    if [[ -e "$target" ]]; then
+      cp -p -- "$target" "$new"
+    else
+      chmod "$(printf '%03o' $((0666 & ~$(umask))))" "$new"
+    fi &&
+      cat "$src" >"$new" &&
+      { [[ -z "$mode" ]] || chmod "$mode" "$new"; } &&
+      mv -f -- "$new" "$d/$(basename -- "$target")"
+  } 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$new"
+  return 1
+}
+
+# Remove temp file FILE if ctx exits (die, Ctrl+C, TERM) before
+# _ctx_temp_done; one at a time. The EXIT and TERM traps set before are saved.
+_ctx_temp_guard() {
+  _ctx_guarded_tmp="$1"
+  _ctx_saved_traps="$(trap -p EXIT; trap -p TERM)"
+  trap 'rm -f "$_ctx_guarded_tmp"' EXIT
+  trap 'exit 143' TERM
+}
+
+# Remove the guarded temp file and put the EXIT and TERM traps back as they were.
+_ctx_temp_done() {
+  rm -f "${_ctx_guarded_tmp:-}"
+  _ctx_guarded_tmp=""
+  trap - EXIT TERM
+  eval "${_ctx_saved_traps:-}"
+  _ctx_saved_traps=""
 }
 
 latest_backup() {
@@ -726,19 +808,25 @@ _secret_keychain_delete() {
   security delete-generic-password -a "$USER" -s "ctx-${1}-${2}" &>/dev/null || true
 }
 
+# Fails (status 1) when `security dump-keychain` fails: no keys and "could
+# not list" must not look alike.
 _secret_keychain_list_keys() {
-  security dump-keychain 2>/dev/null \
+  local dump
+  dump="$(security dump-keychain 2>/dev/null)" || return 1
+  printf '%s\n' "$dump" \
     | grep -o "\"ctx-${1}-[^\"]*\"" \
     | sed "s/\"ctx-${1}-//;s/\"//" | sort
+  return 0
 }
 
 _secret_file_set() {
   local profile="$1" key="$2" value="$3"
   local f
   f="$(_secret_file "$profile" "$key")"
-  mkdir -p "$(dirname "$f")" || return 1
+  # umask 077: dirs and the file are created private from the start.
+  ( umask 077; mkdir -p "$(dirname "$f")" ) || return 1
   chmod 700 "${CTX_DIR}/secrets" "${CTX_DIR}/secrets/${profile}" 2>/dev/null || true
-  printf '%s' "$value" > "$f" || return 1
+  ( umask 077; printf '%s' "$value" > "$f" ) || return 1
   chmod 600 "$f" 2>/dev/null || true
   return 0
 }
@@ -759,6 +847,7 @@ _secret_file_delete() {
 _secret_file_list_keys() {
   local d="${CTX_DIR}/secrets/${1}"
   [[ -d "$d" ]] || return 0
+  [[ -r "$d" && -x "$d" ]] || return 1 # exists but cannot be listed
   local f
   for f in "$d"/*; do
     [[ -e "$f" ]] || continue
@@ -794,6 +883,7 @@ _secret_pass_delete() {
 _secret_pass_list_keys() {
   local base="${PASSWORD_STORE_DIR:-$HOME/.password-store}/ctx/${1}"
   [[ -d "$base" ]] || return 0
+  [[ -r "$base" && -x "$base" ]] || return 1 # exists but cannot be listed
   local f
   for f in "$base"/*.gpg; do
     [[ -e "$f" ]] || continue
@@ -1014,23 +1104,49 @@ ensure_ssh_include() {
     return 0  # Already present
   fi
 
+  # Rewritten atomically through symlinks (a dotfile manager's link stays a
+  # link). A private mode (no group/other write) is kept; a group- or
+  # world-writable one becomes 600 (ssh refuses such a file); a new file is
+  # 600. A file that cannot be read or written is left alone.
+  local target mode="" failed="Could not add Include $CTX_SSH_CONFIG to $ssh_main" tight=0
+  target="$(_ctx_link_target "$ssh_main")"
+  if [[ -e "$target" ]]; then
+    if [[ ! -r "$target" || ! -w "$target" ]]; then
+      warn "$failed" >&2
+      return 1
+    fi
+    mode="$(_ctx_file_mode "$target")" || mode=600
+    if (( 8#$mode & 8#022 )); then
+      mode=600 tight=1
+    else
+      mode=""
+    fi
+  else
+    mode=600
+  fi
+
   # Back up before touching
-  backup_file "$ssh_main"
+  backup_file "$ssh_main" || warn "Could not back up $ssh_main" >&2
 
   # Include must be FIRST line(s) in ssh/config to take effect
-  local tmp; tmp=$(mktemp)
-  {
-    echo "# ctx managed hosts — added by ctx installer"
-    echo "Include $CTX_SSH_CONFIG"
-    echo ""
-    cat "$ssh_main" 2>/dev/null || true
-  } > "$tmp"
-  mv "$tmp" "$ssh_main"
-  chmod 600 "$ssh_main"
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ctx-ssh.XXXXXX")" || { warn "$failed" >&2; return 1; }
+  if ! {
+    printf '%s\n' "# ctx managed hosts — added by ctx installer" "Include $CTX_SSH_CONFIG" "" &&
+      { [[ ! -e "$target" ]] || cat "$target"; }
+  } >"$tmp" 2>/dev/null || ! _ctx_write_through "$tmp" "$ssh_main" "$mode"; then
+    rm -f "$tmp"
+    warn "$failed" >&2
+    return 1
+  fi
+  rm -f "$tmp"
+  [[ $tight -eq 1 ]] && warn "$ssh_main was writable by group or others; it is now 600 (ssh refuses such a file)" >&2
   log "Added Include $CTX_SSH_CONFIG to $ssh_main"
+  return 0
 }
 
-# Write a host block to our ctx_config file, never to ~/.ssh/config
+# Write a host block to our ctx_config file, never to ~/.ssh/config.
+# Returns 0 added, 1 already present, 2 the file could not be written.
 ctx_ssh_add_host() {
   local host="$1" key_path="$2"
 
@@ -1047,7 +1163,7 @@ ctx_ssh_add_host() {
     echo "  User git"
     echo "  IdentityFile $key_path"
     echo "  IdentitiesOnly yes"
-  } >> "$CTX_SSH_CONFIG"
+  } 2>/dev/null >>"$CTX_SSH_CONFIG" || return 2
   chmod 600 "$CTX_SSH_CONFIG"
   log "Added SSH host $host to $CTX_SSH_CONFIG"
   return 0
@@ -1068,34 +1184,96 @@ ctx_ssh_remove_host() {
 }
 
 # ─── Safe .gitconfig (writes includeIf, deduped) ─────────────────────────────
+# Returns 0 added, 1 already present, 2 ~/.gitconfig could not be written.
 gitconfig_add_include() {
   local work_dir="$1" identity_file="$2"
   local gitconfig="$HOME/.gitconfig"
 
   grep -qF "$identity_file" "$gitconfig" 2>/dev/null && return 1  # already present
 
-  backup_file "$gitconfig"
+  backup_file "$gitconfig" || warn "Could not back up $gitconfig" >&2
   {
     echo ""
     echo "[includeIf \"gitdir:${work_dir}/\"]"
     echo "  path = ${identity_file}"
-  } >> "$gitconfig"
+  } 2>/dev/null >>"$gitconfig" || return 2
   log "Added includeIf for $work_dir to ~/.gitconfig"
   return 0
 }
 
+# Remove what gitconfig_add_include wrote for one identity file: the exact
+# "  path = <file>" line, the [includeIf …] header directly above it, and the
+# blank separator line directly above that header. Other profiles' includes
+# (e.g. ctx-acme-old when removing ctx-acme) and user sections are kept.
 gitconfig_remove_include() {
   local identity_file="$1"
   local gitconfig="$HOME/.gitconfig"
   [[ -f "$gitconfig" ]] || return 0
-  local tmp; tmp=$(mktemp)
-  grep -v "$identity_file" "$gitconfig" \
-    | grep -v "\[includeIf.*$(basename "$identity_file")" \
-    > "$tmp" || true
-  mv "$tmp" "$gitconfig"
+  local tmp rc=0; tmp=$(mktemp)
+  ID="  path = ${identity_file}" awk '
+    { l[NR] = $0 }
+    END {
+      for (i = 2; i <= NR; i++) {
+        if (l[i] == ENVIRON["ID"] && l[i-1] ~ /^\[includeIf/) {
+          del[i] = 1; del[i-1] = 1; hit = 1
+          if (i > 2 && l[i-2] == "") del[i-2] = 1
+        }
+      }
+      for (i = 1; i <= NR; i++) if (!del[i]) print l[i]
+      exit(hit ? 10 : 0)
+    }
+  ' "$gitconfig" > "$tmp" || rc=$?
+  # Rewrite in place (keeps a symlink and the file's mode) only if a line was dropped.
+  if [[ $rc -eq 10 ]]; then
+    backup_file "$gitconfig" || warn "Could not back up $gitconfig" >&2
+    cat "$tmp" > "$gitconfig"
+  fi
+  rm -f "$tmp"
 }
 
 # ─── mise.toml generation ─────────────────────────────────────────────────────
+# Body of a TOML basic string: \ → \\, " → \", control chars (0x00-0x1F, 0x7F) → \uXXXX.
+# Byte-wise under LC_ALL=C, so UTF-8 passes through unchanged.
+_ctx_toml_escape() {
+  local LC_ALL=C s="$1" out="" c i
+  if [[ "$s" != *[\\\"[:cntrl:]]* ]]; then
+    printf '%s' "$s"
+    return 0
+  fi
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\) out+='\\' ;;
+      \") out+='\"' ;;
+      [[:cntrl:]]) out+="$(printf '\\u%04X' "'$c")" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# Text for a comment line: control characters (newline, CR, tab, …) become a
+# space, so a value cannot end the comment and start a command. Then TOML-escaped.
+_ctx_toml_comment_text() {
+  local LC_ALL=C s="$1"
+  _ctx_toml_escape "${s//[[:cntrl:]]/ }"
+}
+
+# A value for inside "…" in a hook script, which is itself inside a TOML """ string:
+# \ " $ ` get a shell backslash first, then the result is TOML-escaped.
+_ctx_toml_sh_dq() {
+  local LC_ALL=C s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\|\"|\$|\`) out+="\\$c" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  _ctx_toml_escape "$out"
+}
+
+# Returns 2 when the file could not be written.
 generate_mise_toml() {
   local profile="$1"
   local work_dir="$2"
@@ -1114,24 +1292,24 @@ generate_mise_toml() {
   mkdir -p "$work_dir"
 
   {
-    echo "# mise.toml — ctx managed environment for: $profile"
+    echo "# mise.toml — ctx managed environment for: $(_ctx_toml_comment_text "$profile")"
     echo "# Edit freely. This file is safe to commit (no secrets here)."
     echo "# Secrets load in [hooks.enter]: macOS Keychain, or ~/.ctx/secrets on other OSes."
     echo ""
 
     # Environment variables
     echo "[env]"
-    [[ -n "$aws_profile"  ]] && echo "AWS_PROFILE = \"$aws_profile\""
-    [[ -n "$azure_sub"    ]] && echo "AZURE_SUBSCRIPTION = \"$azure_sub\""
-    [[ -n "$gcp_project"  ]] && echo "GCLOUD_PROJECT = \"$gcp_project\""
-    [[ -n "$kube_ctx"     ]] && echo "CTX_KUBE_CONTEXT = \"$kube_ctx\""
+    [[ -n "$aws_profile"  ]] && echo "AWS_PROFILE = \"$(_ctx_toml_escape "$aws_profile")\""
+    [[ -n "$azure_sub"    ]] && echo "AZURE_SUBSCRIPTION = \"$(_ctx_toml_escape "$azure_sub")\""
+    [[ -n "$gcp_project"  ]] && echo "GCLOUD_PROJECT = \"$(_ctx_toml_escape "$gcp_project")\""
+    [[ -n "$kube_ctx"     ]] && echo "CTX_KUBE_CONTEXT = \"$(_ctx_toml_escape "$kube_ctx")\""
 
     if [[ -n "$extra_envs" ]]; then
       while IFS= read -r pair; do
         [[ -z "$pair" ]] && continue
         local k="${pair%%=*}" v="${pair#*=}"
         is_valid_env_key "$k" || continue
-        echo "$k = \"$v\""
+        echo "$k = \"$(_ctx_toml_escape "$v")\""
       done <<< "$extra_envs"
     fi
 
@@ -1149,18 +1327,18 @@ generate_mise_toml() {
     # Git identity
     echo "  # Set git identity for this directory"
     if is_sensible_git_email "$git_email"; then
-      echo "  git config user.name  \"$git_name\""
-      echo "  git config user.email \"$git_email\""
+      echo "  git config user.name  \"$(_ctx_toml_sh_dq "$git_name")\""
+      echo "  git config user.email \"$(_ctx_toml_sh_dq "$git_email")\""
     else
-      echo "  # Skipped invalid git email (looks like a username, not an address): \"$git_email\""
-      echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/${profile}.conf and re-run setup, or edit mise.toml."
+      echo "  # Skipped invalid git email (looks like a username, not an address): \"$(_ctx_toml_comment_text "$git_email")\""
+      echo "  # Fix GIT_EMAIL in ~/.ctx/profiles/$(_ctx_toml_comment_text "$profile").conf and re-run setup, or edit mise.toml."
     fi
     echo ""
 
     # Cloud context switches
-    [[ -n "$azure_sub"  ]] && echo "  az account set --subscription \"$azure_sub\" 2>/dev/null || true"
-    [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$gcp_project\" --quiet 2>/dev/null || true"
-    [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$kube_ctx\" 2>/dev/null || true"
+    [[ -n "$azure_sub"  ]] && echo "  az account set --subscription \"$(_ctx_toml_sh_dq "$azure_sub")\" 2>/dev/null || true"
+    [[ -n "$gcp_project" ]] && echo "  gcloud config set project \"$(_ctx_toml_sh_dq "$gcp_project")\" --quiet 2>/dev/null || true"
+    [[ -n "$kube_ctx"   ]] && echo "  kubectl config use-context \"$(_ctx_toml_sh_dq "$kube_ctx")\" 2>/dev/null || true"
 
     # Secret injection (provider-aware: keychain/file/pass)
     if [[ -n "$secret_keys" ]]; then
@@ -1205,7 +1383,7 @@ generate_mise_toml() {
     fi
     echo "\"\"\""
 
-  } > "$toml_file"
+  } 2>/dev/null >"$toml_file" || return 2
 
   # Trust the file so mise doesn't prompt
   if command -v mise &>/dev/null; then
@@ -1226,9 +1404,15 @@ detect_ssh_keys() {
 
 detect_gh_accounts() {
   command -v gh &>/dev/null || return 0
+  # gh prints "Logged in to github.com account USER (…)" (newer) or "… as USER (…)" (older).
+  # "Failed to log in to github.com account USER" (invalid token) is not a login.
   run_with_timeout 8 gh auth status 2>&1 \
-    | grep "Logged in to github.com account" \
-    | awk '{print $NF}' | tr -d '()'
+    | awk '/Logged in to github\.com (account|as) / {
+        for (i = 1; i + 2 <= NF; i++)
+          if ($i == "github.com" && ($(i+1) == "account" || $(i+1) == "as") && $(i-1) == "to") {
+            print $(i+2); break
+          }
+      }'
 }
 
 detect_aws_profiles() {

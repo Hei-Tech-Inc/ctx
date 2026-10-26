@@ -1,0 +1,23 @@
+                
+[38;5;99m╭──────────────╮[m
+[38;5;99m│[m  [1mctx status[m  [38;5;99m│[m
+[38;5;99m╰──────────────╯[m
+                
+┌───────────────────────┐
+│ Profile  : [1macme[m       │
+│ Git      : A <a@x.io> │
+│ Dir      : /w/acme    │
+│ GitHub   : gooduser   │
+│ SSH key  : id_good    │
+│ AWS      : awsp       │
+│ Azure    : —          │
+│ GCP      : —          │
+│ kubectl  : —          │
+│ Secrets  : K1 K2      │
+└───────────────────────┘
+[2m  Activation: auto (directory hook + longest WORK_DIR prefix)[m
+
+[1m  Live checks[m
+
+[;33m![m SSH key file not found: /k/id_good
+

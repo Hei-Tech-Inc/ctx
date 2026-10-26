@@ -13,7 +13,7 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck
-        run: shellcheck -x -S warning bin/ctx lib/*.sh lib/*.bash install.sh test/*.sh scripts/install-git-hooks.sh scripts/git-hooks/commit-msg scripts/git-hooks/prepare-commit-msg scripts/git-hooks/post-commit
+        run: shellcheck -x -S warning bin/ctx lib/*.sh lib/*.bash install.sh test/*.sh scripts/bench-hook.sh scripts/install-git-hooks.sh scripts/git-hooks/commit-msg scripts/git-hooks/prepare-commit-msg scripts/git-hooks/post-commit
 
   go:
     runs-on: ubuntu-latest
@@ -22,10 +22,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Install zsh and fish
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test ./...
+        run: go test -timeout 20m ./...
       - name: Build
         run: go build ./cmd/ctx-core
       - name: Cross-build
@@ -44,10 +46,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Install zsh and fish
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
       - name: Build ctx-core
         run: go build -o bin/ctx-core ./cmd/ctx-core
       - name: Run unit tests
         run: bash test/test.sh
+      - name: Run unit tests (Bash only, ctx-core disabled)
+        run: CTX_CORE=off bash test/test.sh
+      - name: Shell hook latency (budget x5)
+        run: bash scripts/bench-hook.sh
 
   # Ensures default-branch history never credits the IDE vendor bot (GitHub Contributors graph keys off authors + Co-authored-by lines).
   git-history-hygiene:

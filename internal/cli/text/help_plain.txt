@@ -1,0 +1,75 @@
+
+{{BOLD}}ctx{{RESET}} — client context switcher v{{VERSION}}
+
+{{BOLD}}SETUP{{RESET}}
+  init                  Check deps, install hooks
+  setup                 Configure a new profile (optional: --config FILE -y)
+  import / add          Alias for setup
+
+{{BOLD}}DAILY USE{{RESET}}
+  use  <name>           Activate a profile (gh, SSH, AWS, Azure, GCP, kubectl)
+                        --eval bash|fish prints exports; the ctx shell function evals it
+  deactivate            Clear active profile from ~/.ctx/config; run eval \"$(ctx deactivate)\"
+  list (ls)             List all profiles
+  status (st)           Active profile + live checks
+  clone                 git clone with GitHub host rewrite (see README)
+  workdir-prompt        Print work_dir='WORK_DIR=…' when cwd is in prompt scope (for PS1)
+  run [-p name] -- <cmd>  Run one command (e.g. an AI agent) with this folder's profile identity
+  env [-p name]         Print the profile's identity as exports (eval; --secrets, --fish)
+  agent-rules [--write [file]]  Print or write AI agent instructions (default: AGENTS.md)
+  mcp [--profile name]  Run the ctx MCP server (stdio) for AI agents
+  mcp install <claude|cursor>  Register the MCP server with Claude Code or Cursor
+  knowledge init [name] Create per-client knowledge notes
+
+{{BOLD}}SECRETS  (macOS Keychain; Linux: ~/.ctx/secrets, 0600 — encrypt disk){{RESET}}
+  secret set   <profile> <KEY>
+  secret get   <profile> <KEY>
+  secret list  <profile>
+  secret delete <profile> <KEY>
+
+{{BOLD}}MAINTENANCE{{RESET}}
+  help setup            Full setup wizard + --config reference
+  config [show]         Show ctx config values
+  config work-root <p>  Set default client directory root
+  config autoswitch-notify <on|off>  [ctx] ←/→ messages (default off)
+  config export <dir>   Export config for laptop migration (no secrets)
+  config import <dir>   Import config bundle on a new machine
+  verify [name]         One profile: live ssh -T, gh match, paths, email
+  edit   <name>         Open profile config in $EDITOR
+  remove <name>         Delete profile + stored secrets (rm, del)
+  undo                  Restore last backup
+  install-hook [rc]     Install mise + ctx hooks into shell rc
+  upgrade [--check]     Re-run installer, or compare to latest on main
+  uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
+  doctor                Machine-wide: tools, hooks, SSH layout, all profiles
+  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity
+  completion <zsh|bash|fish> Print shell completion script
+  version               Print version (-v, --version)
+  help [setup]          This screen (-h, --help)
+
+{{BOLD}}FLAGS{{RESET}}
+  --dry-run             Preview changes, write nothing
+  --quiet, -q           Suppress output (auto-switch hook uses this)
+  --no-gum              Force plain text prompts
+  --json                Machine-readable JSON for supported commands (list, status)
+  setup --scope clone   Profile + SSH host for ctx clone only
+  setup --extend NAME   Add git/folder/cloud/secrets to a profile
+  setup --config FILE   Non-interactive wizard (KEY=value file)
+  setup -y              With --config: confirm without prompting
+  setup --help          Same as: ctx help setup
+
+{{BOLD}}SETUP CONFIG FILE{{RESET}}
+  See {{BOLD}}examples/setup.noninteractive.conf.example{{RESET}} in the repo.
+  1. ctx setup           → wizard detects your existing keys/accounts
+  2. ctx writes:
+     - ~/.ctx/profiles/<name>.conf   (metadata)
+     - ~/.config/git/ctx-<name>      (git identity)
+     - ~/.gitconfig                  (one includeIf line, deduped)
+     - ~/.ssh/ctx_config             (SSH hosts — never ~/.ssh/config)
+     - ~/clients/<name>/mise.toml    (env vars + hooks, auto-loads on cd)
+  3. Secrets → macOS Keychain (or ~/.ctx/secrets elsewhere), loaded by mise hooks.enter
+
+{{BOLD}}INSTALL REQUIREMENTS{{RESET}}
+  Everything is installed by install.sh:
+    mise (env/tools per dir), gum (TUI), gh (GitHub auth), git, awscli
+
