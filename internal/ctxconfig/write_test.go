@@ -296,3 +296,39 @@ func TestBackupStampAndLatest(t *testing.T) {
 		t.Errorf("LatestBackup with no backups = %q", got)
 	}
 }
+
+// TestNewBackupDirFresh: a stamp dir that exists is never reused (undo backs
+// up into a new dir even in the second of the backup it restores).
+func TestNewBackupDirFresh(t *testing.T) {
+	root := goRoot(t)
+	old := Now
+	defer func() { Now = old }()
+	fixed := time.Date(2026, 10, 20, 10, 10, 10, 0, time.Local)
+	Now = func() time.Time { return fixed }
+	base := filepath.Join(os.Getenv("CTX_DIR"), "backups")
+	if err := os.MkdirAll(filepath.Join(base, "20261020-101010"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"20261020-101010-2", "20261020-101010-3"} {
+		d, err := NewBackupDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d != filepath.Join(base, want) {
+			t.Errorf("NewBackupDir = %q, want %s", d, want)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := filepath.Join(base, "20261020-101010-2")
+	if err := BackupFileIn(d, filepath.Join(root, "f")); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := os.ReadFile(filepath.Join(d, "manifest.txt")); string(m) != filepath.Join(root, "f")+"\n" {
+		t.Errorf("manifest %q", m)
+	}
+	if st, err := os.Stat(filepath.Join(d, "f")); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("backup copy: %v %v", st, err)
+	}
+}

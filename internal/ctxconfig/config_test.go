@@ -152,3 +152,34 @@ func TestWorkRoot(t *testing.T) {
 		t.Errorf("env = %q", got)
 	}
 }
+
+func TestParseNotify(t *testing.T) {
+	for v, want := range map[string]bool{
+		"": false, "1": true, "on": true, "ON": true, " Yes ": true, "tr ue": true, "TRUE\r": true,
+		"0": false, "off": false, "2": false, "enabled": false, "true1": false,
+	} {
+		if got := ParseNotify(v); got != want {
+			t.Errorf("ParseNotify(%q) = %v, want %v", v, got, want)
+		}
+	}
+	c := &Config{AutoswitchNotify: true}
+	if c.NotifyEnabled("0") || !c.NotifyEnabled("") || !(&Config{}).NotifyEnabled("on") {
+		t.Error("NotifyEnabled precedence wrong")
+	}
+}
+
+func TestParseHookFields(t *testing.T) {
+	cfg := Parse([]byte("active=b\nactive=a=x\r\nactive_source=Manual\r\nmanual_pwd=L3cvYQ==\r\n"))
+	if cfg.Active != "b\na" {
+		t.Errorf("Active = %q", cfg.Active)
+	}
+	if cfg.ActiveLast != "a=x\r" {
+		t.Errorf("ActiveLast = %q, want the whole last value", cfg.ActiveLast)
+	}
+	if got := DecodeManualPWD(stripCR(cfg.Last["manual_pwd"])); got != "/w/a" {
+		t.Errorf("DecodeManualPWD = %q", got)
+	}
+	if got := DecodeManualPWD("not base64!"); got != "not base64!" {
+		t.Errorf("raw fallback = %q", got)
+	}
+}

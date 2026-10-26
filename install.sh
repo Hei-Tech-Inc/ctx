@@ -8,7 +8,7 @@
 set -uo pipefail
 
 CTX_VERSION="3.2.0"
-CTX_REPO="https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main"
+CTX_REPO="${CTX_REPO:-https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main}"
 # Release assets (ctx-core_<os>_<arch>, checksums.txt) live under <base>/v<version>/.
 CTX_RELEASE_BASE="${CTX_RELEASE_BASE:-https://github.com/Hei-Tech-Inc/ctx/releases/download}"
 
@@ -501,78 +501,23 @@ install_ctx() {
   mv "$stage_bin" "$install_bin/ctx"
   rm -rf "$stage_dir"
 
-  CTX_INSTALLED_LIB="$install_lib"
+  CTX_INSTALLED_BIN="$install_bin/ctx"
 
   success "ctx: installed at $install_bin/ctx"
 }
 
 # ─── Install ctx auto-switch hook ────────────────────────────────────────────
+# The installed ctx edits the rc itself (`ctx install-hook`: old hook blocks
+# stripped safely, one atomic write that keeps symlinks and the file mode).
+# When it cannot run or refuses, say how to do it by hand and go on.
 install_ctx_hook() {
-  local script_dir hook_lib
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
-  hook_lib="${CTX_INSTALLED_LIB:-}"
-  if [[ -z "$hook_lib" || ! -f "$hook_lib/ctx_autoswitch.bash" ]]; then
-    if [[ -f "$script_dir/lib/ctx_autoswitch.bash" ]]; then
-      hook_lib="$script_dir/lib"
-    elif [[ -f "$HOME/.local/lib/ctx/ctx_autoswitch.bash" ]]; then
-      hook_lib="$HOME/.local/lib/ctx"
-    else
-      hook_lib="/usr/local/lib/ctx"
-    fi
+  local ctx_bin="${CTX_INSTALLED_BIN:-}"
+  # stdin from /dev/null: under `curl … | bash` stdin is the rest of this script.
+  if [[ -n "$ctx_bin" && -x "$ctx_bin" ]] && "$ctx_bin" install-hook "$SHELL_RC" </dev/null; then
+    return 0
   fi
-
-  _ctx_rc_strip_autoswitch() {
-    local rc="$1" t
-    [[ -f "$rc" ]] || return 0
-    t="$(mktemp)" || return 1
-    awk '
-      /^# BEGIN ctx profile autoswitch/ { skip=1; next }
-      /^# END ctx profile autoswitch/ { skip=0; next }
-      skip { next }
-      /^# ctx profile autoswitch/ { skip=1; next }
-      /^# ── ctx auto-switch/ { skip=1; next }
-      skip && /^# ─{25,}$/ { skip=0; next }
-      skip { next }
-      { print }
-    ' "$rc" > "$t" && mv "$t" "$rc"
-  }
-
-  _ctx_rc_strip_autoswitch "$SHELL_RC"
-
-  {
-    echo ""
-    echo "# BEGIN ctx profile autoswitch"
-    echo "# Sourced from ctx lib so upgrades apply without editing this file."
-    if [[ "$SHELL_RC" == *"/config.fish" ]]; then
-      [[ -f "$hook_lib/ctx_autoswitch.fish" ]] || die "Missing ctx_autoswitch.fish (re-run install from a full ctx checkout or release bundle)."
-      echo "set -l _ctx_as_lib ''"
-      echo "for _ctx_as_cand in '$hook_lib' \$HOME/.local/lib/ctx /usr/local/lib/ctx /opt/homebrew/lib/ctx"
-      echo "  if test -f \"\$_ctx_as_cand/ctx_autoswitch.fish\""
-      echo "    set _ctx_as_lib \$_ctx_as_cand"
-      echo "    break"
-      echo "  end"
-      echo "end"
-      echo "if test -n \"\$_ctx_as_lib\""
-      echo "  source \"\$_ctx_as_lib/ctx_autoswitch.fish\""
-      echo "end"
-    else
-      [[ -f "$hook_lib/ctx_autoswitch.bash" ]] || die "Missing ctx_autoswitch.bash (re-run install from a full ctx checkout or release bundle)."
-      cat <<EOF
-_ctx_as_lib=""
-for _ctx_as_cand in "$hook_lib" "\${HOME}/.local/lib/ctx" "/usr/local/lib/ctx" "/opt/homebrew/lib/ctx"; do
-  [[ -f "\${_ctx_as_cand}/ctx_autoswitch.bash" ]] && { _ctx_as_lib="\${_ctx_as_cand}"; break; }
-done
-if [[ -n "\${_ctx_as_lib}" ]]; then
-  # shellcheck disable=SC1090
-  source "\${_ctx_as_lib}/ctx_autoswitch.bash"
-fi
-unset _ctx_as_lib _ctx_as_cand 2>/dev/null || true
-EOF
-    fi
-    echo "# END ctx profile autoswitch"
-  } >> "$SHELL_RC"
-
-  success "ctx profile autoswitch hook: refreshed in $SHELL_RC (sources lib)"
+  warn "ctx profile autoswitch hook: not installed in $SHELL_RC"
+  info "Run: ctx install-hook $SHELL_RC"
 }
 
 # ─── Verify everything installed correctly ────────────────────────────────────
@@ -674,4 +619,5 @@ main() {
   print_next_steps
 }
 
-main "$@"
+# CTX_INSTALL_SOURCE_ONLY=1: define the functions only (tests source this file).
+[[ "${CTX_INSTALL_SOURCE_ONLY:-0}" == 1 ]] || main "$@"

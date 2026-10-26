@@ -135,6 +135,7 @@ func TestEnvFish(t *testing.T) {
 		t.Errorf("fish escaping: %s", got)
 	}
 	if _, err := exec.LookPath("fish"); err != nil {
+		testutil.ShellMissing(t, "fish")
 		t.Log("fish not installed; text check only")
 		return
 	}

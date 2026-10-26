@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Hei-Tech-Inc/ctx/internal/testutil"
@@ -42,6 +43,8 @@ func TestDeactivateMatchesBash(t *testing.T) {
 		{name: "agent key added", config: "active=acme\nssh_agent_added=/k/id one\nother=2\n", args: []string{"--eval", "bash"}},
 		{name: "agent key added nothing active", config: "ssh_agent_added=/k/id\n"},
 		{name: "missing profile", config: "active=ghost\n", noProf: true},
+		{name: "missing profile eval fish", config: "active=ghost\nactive_source=manual\nmanual_pwd=L3g=\nkeep=1\n", args: []string{"--eval", "fish"}, noProf: true},
+		{name: "missing profile eval bash quiet", config: "active=ghost\n", args: []string{"--eval", "bash"}, noProf: true, quiet: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -106,6 +109,13 @@ func TestDeactivateMatchesBash(t *testing.T) {
 
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("Go and Bash differ\n go:   %+v\n bash: %+v", got, want)
+			}
+			if c.noProf {
+				// R13: the context is left (exit 0, activation cleared, fixed unsets) with a warning.
+				if want.code != 0 || !strings.Contains(want.stderr, "Profile 'ghost' no longer exists; cleared the active context") ||
+					strings.Contains(want.config, "active") || !strings.Contains(want.stdout, "CTX_ACTIVE_PROFILE") {
+					t.Errorf("deleted profile not cleared: %+v", want)
+				}
 			}
 			if c.name == "agent key added" {
 				if len(want.sshAdd) != 1 || want.sshAdd[0][0] != "-d" {
