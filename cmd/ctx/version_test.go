@@ -3,19 +3,35 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestCtxVersion(t *testing.T) {
-	t.Setenv("CTX_VERSION", "")
-	if got := ctxVersion(); got != version {
-		t.Fatalf("unset: %q, want build version %q", got, version)
+// TestCtxVersionIgnoresEnv builds ctx-core stamped with a version and checks
+// that ctx-version prints it even when CTX_VERSION says otherwise.
+func TestCtxVersionIgnoresEnv(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "ctx-core")
+	build := exec.Command("go", "build", "-ldflags", "-X main.version=9.8.7", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
 	}
+	cmd := exec.Command(bin, "ctx-version")
+	cmd.Env = append(os.Environ(), "CTX_VERSION=1.0.0")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(out), "ctx version 9.8.7\n"; got != want {
+		t.Fatalf("stdout %q, want %q", got, want)
+	}
+}
+
+func TestCtxVersionIsBuildVersion(t *testing.T) {
 	t.Setenv("CTX_VERSION", "9.9.9")
-	if got := ctxVersion(); got != "9.9.9" {
-		t.Fatalf("set: %q", got)
+	if got := ctxVersion(); got != version {
+		t.Fatalf("ctxVersion() = %q, want build version %q", got, version)
 	}
 }
 

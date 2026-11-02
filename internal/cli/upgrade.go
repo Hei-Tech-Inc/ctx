@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -13,13 +14,13 @@ import (
 	"github.com/Hei-Tech-Inc/ctx/internal/tui"
 )
 
-// defaultUpgradeRepo is where upgrade fetches install.sh and lib/core.sh when
+// defaultUpgradeRepo is where upgrade fetches install.sh and VERSION when
 // CTX_UPGRADE_REPO (the test seam) is not set.
 const defaultUpgradeRepo = "https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main"
 
 // Upgrade runs `ctx upgrade [--check]`, mirroring cmd_upgrade in
 // lib/cmd_ops.sh (R11: download install.sh and run it with bash; --check
-// reads CTX_VERSION from the remote lib/core.sh).
+// reads the remote VERSION file).
 //
 // The target is the ctx on PATH (`command -v ctx`), aimed at by
 // CTX_INSTALL_BIN/CTX_INSTALL_LIB only when its first CTX_LIB= line is the
@@ -70,11 +71,11 @@ func Upgrade(t tui.Term, args []string) int {
 		_ = f.Close()
 		defer func() { _ = os.Remove(tmp) }()
 		if tool := fetchTool(); tool != "" {
-			_ = fetch(t, tool, repo+"/lib/core.sh", tmp, true)
+			_ = fetch(t, tool, repo+"/VERSION", tmp, true)
 		}
 		remote := ""
 		if b, err := os.ReadFile(tmp); err == nil && len(b) > 0 {
-			remote = parseCtxVersion(b)
+			remote = parseVersionFile(b)
 		}
 		_ = os.Remove(tmp)
 		sigs.stop()
@@ -234,16 +235,17 @@ func normalizeNewlines(file string) {
 	_ = os.WriteFile(file, b, 0o600)
 }
 
-// parseCtxVersion mirrors parse_ctx_version_from_core_sh_file: \r dropped,
-// the first line starting with CTX_VERSION=, without that prefix and without
-// any double quote.
-func parseCtxVersion(b []byte) string {
-	for _, line := range strings.Split(strings.ReplaceAll(string(b), "\r", ""), "\n") {
-		if strings.HasPrefix(line, "CTX_VERSION=") {
-			return strings.ReplaceAll(strings.TrimPrefix(line, "CTX_VERSION="), `"`, "")
-		}
+// versionRE is a release version: MAJOR.MINOR.PATCH with an optional suffix.
+var versionRE = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
+
+// parseVersionFile reads a VERSION file: \r and surrounding whitespace are
+// trimmed; anything that is not a version (an HTML error page, say) gives "".
+func parseVersionFile(b []byte) string {
+	v := strings.TrimSpace(strings.ReplaceAll(string(b), "\r", ""))
+	if !versionRE.MatchString(v) {
+		return ""
 	}
-	return ""
+	return v
 }
 
 // stopSignals holds SIGINT and SIGTERM while a child runs: the child (in the

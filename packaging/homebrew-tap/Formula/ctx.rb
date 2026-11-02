@@ -15,7 +15,7 @@ class Ctx < Formula
     lib.install Dir["lib/*.sh"]
     lib.install Dir["lib/*.bash"]
     lib.install Dir["lib/*.fish"]
-    system "go", "build", *std_go_args(output: lib/"ctx-core", ldflags: "-X main.version=#{version}"), "./cmd/ctx-core"
+    system "go", "build", *std_go_args(output: lib/"ctx-core", ldflags: "-X main.version=#{version}"), "./cmd/ctx"
   end
 
   def caveats

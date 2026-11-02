@@ -14,8 +14,8 @@
 # Prints the numbers. With --assert, or in CI (CI set; FACTOR 5 there), it fails unless
 # activate stays within the budget times FACTOR: unchanged <= 4 ms, enter/leave <= 25 ms,
 # switch <= 30 ms (bash and zsh; fish timings are reported only, but its canary must
-# pass). A session that exits non-zero prints its stderr. Needs bin/ctx-core (go build -o
-# bin/ctx-core ./cmd/ctx-core) and a bash with EPOCHREALTIME (5.0+) for the bash rows.
+# pass). A session that exits non-zero prints its stderr. Needs bin/ctx-core (go build -ldflags
+# "-X main.version=$(cat VERSION)" -o bin/ctx-core ./cmd/ctx) and a bash with EPOCHREALTIME (5.0+) for the bash rows.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,7 +32,7 @@ if [[ -n "$factor" && ! "$factor" =~ ^[1-9][0-9]*$ ]]; then
   echo "bench-hook: --assert FACTOR must be a positive integer, got '$factor'" >&2
   exit 2
 fi
-[[ -x "$ROOT/bin/ctx-core" ]] || { echo "bench-hook: build bin/ctx-core first (go build -o bin/ctx-core ./cmd/ctx-core)" >&2; exit 1; }
+[[ -x "$ROOT/bin/ctx-core" ]] || { echo "bench-hook: build bin/ctx-core first (go build -ldflags \"-X main.version=\$(cat VERSION)\" -o bin/ctx-core ./cmd/ctx)" >&2; exit 1; }
 
 T="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$T"' EXIT

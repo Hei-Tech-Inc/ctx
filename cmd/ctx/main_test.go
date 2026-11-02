@@ -19,7 +19,7 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-func TestUnknownCommand(t *testing.T) {
+func TestCoreUnknownCommand(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"bogus"}, &out, &errOut)
 	if code != 2 {

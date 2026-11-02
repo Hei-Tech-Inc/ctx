@@ -476,7 +476,7 @@ _ctx_core_bin() {
 _ctx_core_exec() {
   local bin
   bin="$(_ctx_core_bin)" || {
-    echo "ctx-core not found — reinstall ctx (install.sh) or run: go build -o bin/ctx-core ./cmd/ctx-core" >&2
+    echo "ctx-core not found — reinstall ctx (install.sh) or run: go build -ldflags \"-X main.version=\$(cat VERSION)\" -o bin/ctx-core ./cmd/ctx" >&2
     exit 1
   }
   exec "$bin" "$@"

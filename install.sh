@@ -306,9 +306,18 @@ activate_mise_in_shell() {
 }
 
 # ─── ctx-core (Go binary for `ctx mcp`) ───────────────────────────────────────
-# Version of the staged lib/core.sh (the version being installed).
+# Version being installed. Arg: the staged lib dir. Reads its VERSION file;
+# falls back to parsing the staged core.sh (a remote repo without VERSION).
 _staged_ctx_version() {
-  tr -d '\r' < "$1" | grep -m1 '^CTX_VERSION=' | sed 's/^CTX_VERSION=//; s/"//g'
+  local v=""
+  if [[ -f "$1/VERSION" ]]; then
+    v="$(tr -d '\r' < "$1/VERSION" | head -n1 | tr -d '[:space:]')"
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || v=""
+  fi
+  if [[ -z "$v" && -f "$1/core.sh" ]]; then
+    v="$(tr -d '\r' < "$1/core.sh" | grep -m1 '^CTX_VERSION=' | sed 's/^CTX_VERSION=//; s/"//g')"
+  fi
+  printf '%s' "$v"
 }
 
 _sha256_of() {
@@ -322,8 +331,8 @@ _sha256_of() {
 # Build ctx-core from a checkout. Args: source dir, dest file, version.
 _build_ctx_core() {
   local src="$1" dest="$2" ver="$3"
-  command -v go &>/dev/null && [[ -d "$src/cmd/ctx-core" ]] || return 1
-  ( cd "$src" && go build -ldflags "-X main.version=${ver}" -o "$dest" ./cmd/ctx-core ) &>/dev/null
+  command -v go &>/dev/null && [[ -d "$src/cmd/ctx" ]] || return 1
+  ( cd "$src" && go build -ldflags "-X main.version=${ver}" -o "$dest" ./cmd/ctx ) &>/dev/null
 }
 
 # Download the release build of ctx-core. Args: dest file, version.
@@ -374,7 +383,7 @@ _download_ctx_core() {
 stage_ctx_core() {
   local stage_lib="$1" src_dir="$2" ver dest
   dest="$stage_lib/ctx-core"
-  ver="$(_staged_ctx_version "$stage_lib/core.sh")"
+  ver="$(_staged_ctx_version "$stage_lib")"
   [[ -n "$ver" ]] || { warn "ctx mcp unavailable: could not read ctx version"; return 0; }
   if [[ -n "$src_dir" ]] && _build_ctx_core "$src_dir" "$dest" "$ver"; then
     :
@@ -437,6 +446,7 @@ install_ctx() {
   if [[ -f "$script_dir/bin/ctx" && -d "$script_dir/lib" ]]; then
     info "Installing ctx from local source..."
     cp "$script_dir/bin/ctx"            "$stage_bin"
+    [[ ! -f "$script_dir/VERSION" ]] || cp "$script_dir/VERSION" "$stage_lib/VERSION"
     cp "$script_dir/lib/core.sh"        "$stage_lib/core.sh"
     cp "$script_dir/lib/cmd_import.sh"  "$stage_lib/cmd_import.sh"
     cp "$script_dir/lib/cmd_ops.sh"     "$stage_lib/cmd_ops.sh"
@@ -458,6 +468,9 @@ install_ctx() {
       strip_cr_inplace "$2"
     }
     _dl_text "$CTX_REPO/bin/ctx"            "$stage_bin"
+    # VERSION is optional (older refs have none): a miss falls back to core.sh.
+    { curl -fsSL "$CTX_REPO/VERSION" -o "$stage_lib/VERSION" 2>/dev/null \
+        || wget -qO "$stage_lib/VERSION" "$CTX_REPO/VERSION" 2>/dev/null; } || rm -f "$stage_lib/VERSION"
     _dl_text "$CTX_REPO/lib/core.sh"        "$stage_lib/core.sh"
     _dl_text "$CTX_REPO/lib/cmd_import.sh"  "$stage_lib/cmd_import.sh"
     _dl_text "$CTX_REPO/lib/cmd_ops.sh"     "$stage_lib/cmd_ops.sh"
