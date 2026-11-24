@@ -328,7 +328,7 @@ ctx agent-rules --write</code></pre></div>
           <h2>Organize existing projects</h2>
           <p>Development build. Check ctx help for the organize command.</p>
           <section><h3>Find client repositories</h3>
-            <p>Scan the folders you choose. Review the GitHub owner or SSH alias alongside each suggestion. A personal fork may belong to a client project.</p>
+            <p>Scan the folders you choose. Review the GitHub owner or SSH alias alongside each suggestion. A personal fork may belong to a client project. The scan also lists candidate environment files and mise task directories in the checkout and its parents. Review flagged names such as AWS_PROFILE before adoption. Dynamic scripts stay unevaluated; confirm the active target with ctx explain --cloud.</p>
             <div class="snippet"><pre><code>ctx organize ~/work ~/Desktop/projects</code></pre></div>
           </section>
           <section><h3>Adopt a checkout in place</h3>

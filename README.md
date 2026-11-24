@@ -29,7 +29,7 @@ Run `ctx dashboard` to see each profile’s active state, workspace, Git identit
 
 ### Adopt repositories already on your laptop
 
-Scan only the directories you choose. The inventory shows origin-owner or SSH-alias evidence for your review. A fork can belong to a personal account even when its upstream belongs to a client.
+Choose the directories to search for checkouts. For each checkout, the scan and adoption preview also walk its ancestors to the filesystem root and list common direnv, dotenv, and mise files and task directories. Identity selector names such as `AWS_PROFILE` are flagged for review. These are static mentions; actual loading depends on shell hooks, trust and configuration. Symlinked files are listed without reading their targets. The inventory shows origin-owner or SSH-alias evidence for your review. A fork can belong to a personal account even when its upstream belongs to a client.
 
 ```bash
 ctx organize ~/work ~/Desktop/projects

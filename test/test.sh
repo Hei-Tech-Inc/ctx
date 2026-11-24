@@ -3312,4 +3312,5 @@ test_installer_requires_release_checksum
 test_installer_honors_ctx_repo
 test_temp_guard_restores_traps
 test_upgrade_dry_run_and_temp_cleanup
+bash "$ROOT_DIR/test/organize-sources.sh"
 echo "All tests passed."

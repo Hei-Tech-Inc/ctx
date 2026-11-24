@@ -2729,6 +2729,47 @@ ctx_check_cloud() {
   return "$rc"
 }
 
+# Report candidate inputs, not an evaluated environment. Only emit known
+# identity selectors, even for multiline values, comments or dynamic scripts.
+_ctx_organize_sources() {
+  local dir="$1" scope=checkout file rel notes
+  while [[ -n "$dir" ]]; do
+    for rel in .envrc .env mise.toml .mise.toml mise.local.toml .mise.local.toml .config/mise/config.toml mise.lock .tool-versions; do
+      file="${dir%/}/$rel"
+      [[ -f "$file" || -L "$file" ]] || continue
+      printf '  %s candidate: %q' "$scope" "$file"
+      case "$rel" in
+        .envrc|.env|*.toml)
+          if [[ -L "$file" || ! -r "$file" ]]; then
+            printf ' (contents uninspected)'
+          else
+            notes=$(LC_ALL=C awk -v filename="$rel" '
+              filename ~ /[.]toml$/ && /^[[:space:]]*\[(tools|tasks)([.]|\])/ {
+                if ($0 ~ /^[[:space:]]*\[tools/) tools=1; else tasks=1
+              }
+              BEGIN { n=split("AWS_PROFILE AWS_DEFAULT_PROFILE AZURE_SUBSCRIPTION_ID CLOUDSDK_CORE_PROJECT CLOUDSDK_CORE_ACCOUNT GOOGLE_CLOUD_PROJECT KUBECONFIG GIT_AUTHOR_EMAIL GIT_COMMITTER_EMAIL GIT_SSH_COMMAND GH_TOKEN CTX_ACTIVE_PROFILE", names) }
+              !/^[[:space:]]*#/ {
+                for (i=1; i<=n; i++) if ($0 ~ ("(^|[^[:alnum:]_])" names[i] "([^[:alnum:]_]|$)")) seen[i]=1
+              }
+              END {
+                if (tools) { printf "tools section"; sep=", " }
+                if (tasks) { printf "%stasks section", sep; sep=", " }
+                for (i=1; i<=n; i++) if (seen[i]) { printf "%s%s", sep, names[i]; sep=", " }
+              }
+            ' "$file")
+            [[ -z "$notes" ]] || printf ' (review: %s)' "$notes"
+          fi ;;
+      esac
+      printf '\n'
+    done
+    for rel in mise-tasks .mise/tasks .config/mise/tasks; do
+      [[ -d "${dir%/}/$rel" ]] && printf '  %s task directory: %q\n' "$scope" "${dir%/}/$rel"
+    done
+    [[ "$dir" != / ]] || break
+    dir=${dir%/*}; dir=${dir:-/}; scope=ancestor
+  done
+}
+
 # Inventory reads local Git configuration only. Never print raw remote URLs:
 # an HTTPS userinfo field or query string can contain access credentials.
 _ctx_organize_repo() {
@@ -2750,6 +2791,7 @@ _ctx_organize_repo() {
     owner=$slug
   fi
   printf '%s\t%s\t%s\n' "$root" "${owner:-Needs review}" "$evidence"
+  _ctx_organize_sources "$root"
 }
 
 _ctx_organize_scan() (
@@ -2789,6 +2831,7 @@ _ctx_organize_change() (
   key="includeIf.gitdir:$root/.git.path"
   printf '%s %s: %s\n' "$action" "$name" "$root"
   if [[ "$action" == adopt ]]; then
+    _ctx_organize_sources "$root"
     [[ -f "$identity" ]] || die "Missing generated Git identity. Run ctx setup --extend for this profile."
   fi
   if [[ "${CTX_DRY_RUN:-0}" != 1 ]]; then
