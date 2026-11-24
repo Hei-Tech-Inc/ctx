@@ -77,6 +77,46 @@
           />
         </figure>
       </section>
+      <section id="demo" class="demo" aria-labelledby="demo-title">
+        <div class="demo-intro">
+          <p class="section-label">Interactive example</p>
+          <h2 id="demo-title">Two clients.<br />One interruption.</h2>
+          <p>
+            You’re working on Acme when Orbit asks for a fix. Switch folders, then try a commit with the other client’s email. This example uses an installed Git guard.
+          </p>
+          <a class="text-link" href="guide.html#explain"
+            >Check your own identity</a
+          >
+        </div>
+        <div class="console">
+          <div class="console-head">
+            <span>Client workspace</span>
+            <div role="group" aria-label="Example workspace">
+              <button data-profile="acme" aria-pressed="true">acme</button
+              ><button data-profile="orbit" aria-pressed="false">orbit</button>
+            </div>
+          </div>
+          <div class="console-body" aria-live="polite">
+            <code
+              ><span class="prompt">$</span> cd ~/clients/<span id="folder"
+                >acme</span
+              ></code
+            >
+            <dl>
+              <dt>Profile email</dt>
+              <dd id="email">dev@acme.example</dd>
+              <dt>SSH alias</dt>
+              <dd id="ssh">github-acme</dd>
+              <dt>AWS profile</dt>
+              <dd id="aws">acme-dev</dd>
+            </dl>
+          </div>
+          <div class="guard-demo">
+            <p id="guard-result" role="status">The sample repository is ready for a commit.</p>
+            <button type="button" id="guard-action">Try the wrong email</button>
+          </div>
+        </div>
+      </section>
       <section id="workflows" class="workflows" aria-labelledby="workflow-title">
         <p class="section-label">Workspace workflows</p>
         <h2 id="workflow-title">What do you need to do?</h2>
@@ -105,43 +145,14 @@
               <h3>Move to a new machine <span aria-hidden="true">↗</span></h3>
               <p>Export profile metadata, Git identities and SSH host configuration, then verify the imported setup.</p><code>ctx config export ~/ctx-migration</code>
             </a>
-        </div>
-      </section>
-      <section id="demo" class="demo" aria-labelledby="demo-title">
-        <div class="demo-intro">
-          <p class="section-label">Interactive example</p>
-          <h2 id="demo-title">Inside a <br />workspace switch.</h2>
-          <p>
-            Select a client folder to see the identity and credentials its
-            profile selects.
-          </p>
-          <a class="text-link" href="guide.html#switch"
-            >Read the switching guide</a
-          >
-        </div>
-        <div class="console">
-          <div class="console-head">
-            <span>Client workspace</span>
-            <div role="group" aria-label="Example workspace">
-              <button data-profile="acme" aria-pressed="true">acme</button
-              ><button data-profile="orbit" aria-pressed="false">orbit</button>
-            </div>
-          </div>
-          <div class="console-body" aria-live="polite">
-            <code
-              ><span class="prompt">$</span> cd ~/clients/<span id="folder"
-                >acme</span
-              ></code
-            >
-            <dl>
-              <dt>Git identity</dt>
-              <dd id="email">dev@acme.example</dd>
-              <dt>SSH alias</dt>
-              <dd id="ssh">github-acme</dd>
-              <dt>AWS profile</dt>
-              <dd id="aws">acme-dev</dd>
-            </dl>
-          </div>
+            <a href="guide.html#explain">
+              <h3>Explain this identity <span aria-hidden="true">↗</span></h3>
+              <p>Compare the folder’s client with this terminal’s identity before you commit.</p><code>ctx explain</code>
+            </a>
+            <a href="guide.html#offboard">
+              <h3>Wrap up a contract <span aria-hidden="true">↗</span></h3>
+              <p>Review local cleanup, shared keys and access for the client administrator to revoke.</p><code>ctx offboard acme</code>
+            </a>
         </div>
       </section>
       <section class="ops-feature" aria-labelledby="ops-title">

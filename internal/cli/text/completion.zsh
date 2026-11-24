@@ -25,6 +25,8 @@ _ctx() {
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
+    'explain:Explain shell and workspace identities'
+    'offboard:Preview the client handoff checklist'
     'dashboard:Overview of profile identities and integrations'
     'doctor:Health check'
     'guard:Git identity guard (status, install, uninstall, check)'
@@ -64,7 +66,7 @@ _ctx() {
     3)
       case ${words[2]} in
         --dry-run|--quiet|-q|--no-gum|--json) _describe 'ctx commands' cmds ;;
-        use|edit|remove|rm|del|verify) _describe 'profiles' profiles ;;
+        use|edit|offboard|remove|rm|del|verify) _describe 'profiles' profiles ;;
         env) local fl=('-p:Profile' '--profile:Profile' '--secrets:Include secrets' '--fish:Fish syntax'); _describe 'env flags' fl ;;
         run) local fl=('-p:Profile' '--profile:Profile'); _describe 'run flags' fl ;;
         mcp) local sub=('install:Register with Claude Code or Cursor' '--profile:Serve one profile'); _describe 'mcp options' sub ;;

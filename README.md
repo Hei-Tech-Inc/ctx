@@ -27,6 +27,11 @@ Profiles auto-activate when you `cd` into a client directory.
 
 Run `ctx dashboard` to see each profile’s active state, workspace, Git identity, SSH key path, and cloud integrations together. The dashboard reads profile metadata only.
 
+Before a commit, run `ctx explain` in that terminal. Compare the folder match, saved activation and shell profile with Git’s live author and committer. Cloud and SSH entries show configured values. Use `ctx verify <profile>` for live account checks.
+
+At the end of an engagement, run `ctx offboard <profile>` for a read-only handoff checklist. It flags SSH keys shared across local profiles and lists configured accounts for the client administrator to review. Remote revocation and local removal are separate, deliberate steps.
+
+
 Run `ctx --json doctor` for machine checks or `ctx --json verify acme` for a profile. Both return a diagnostic envelope with integer `version: 1`, a `command` name, and a `checks` array. Each check has a `level` (`pass`, `warning`, or `error`) and a human-readable `message`. Verify exits 1 if a check fails. Doctor reports warnings with exit status 0.
 
 ## How it works

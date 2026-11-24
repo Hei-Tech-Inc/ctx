@@ -290,6 +290,28 @@ h2 {
 .console-body {
   padding: 22px;
 }
+.guard-demo {
+  border-top: 1px solid #3d5043;
+  padding: 16px clamp(14px, 3vw, 22px) 20px;
+}
+.guard-demo p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.guard-demo [data-state="blocked"] { color: #ffd2a5; }
+.guard-demo [data-state="passed"] { color: var(--lime); }
+.guard-demo button {
+  border: 1px solid #94aa98;
+  border-radius: 4px;
+  padding: 7px 12px;
+  color: #eaf4e9;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+}
+.guard-demo button:hover { background: #2b4031; }
 .console code {
   font: inherit;
 }

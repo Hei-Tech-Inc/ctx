@@ -2623,3 +2623,67 @@ cmd_guard() {
     *) die "Usage: ctx guard [status|install|uninstall]" ;;
   esac
 }
+
+# Read-only diagnostics. Shell, saved activation and folder can disagree when
+# another terminal has switched the saved profile.
+cmd_explain() {
+  [[ $# == 0 ]] || die "Usage: ctx explain"
+  local saved folder result shell_profile name email who ident mode
+  saved=$(active_profile)
+  result=$(ctx_resolve_path_with_root "$PWD" "$CTX_PROFILES_DIR" || true)
+  folder=${result%%$'\t'*}
+  shell_profile=${CTX_ACTIVE_PROFILE:-}
+  mode=$(ctx_activation_get_source)
+  printf 'Folder: %s -> %s\nSaved activation: %s (%s)\nShell profile: %s\n' "$PWD" "${folder:-none}" "${saved:-none}" "$mode" "${shell_profile:-unset}"
+  if [[ "$mode" == manual ]]; then
+    printf 'Manual selection directory: %s\n' "$(ctx_activation_get_manual_pwd || true)"
+  fi
+  name=${shell_profile:-${saved:-$folder}}
+  [[ -n "$name" ]] || { echo "No profile selected. Enter a client workspace or run ctx use <profile>."; return 0; }
+  [[ "$name" != */* ]] || die "Invalid profile name"
+  load_profile "$name"
+  printf 'Comparing with profile: %s\nConfigured Git email: %s\n' "$name" "${GIT_EMAIL:-unset}"
+  for who in AUTHOR COMMITTER; do
+    ident=$(git var "GIT_${who}_IDENT" 2>/dev/null) || ident=""
+    email=${ident#*<}; email=${email%%>*}
+    printf 'Live Git %s: %s\n' "$who" "${email:-unavailable}"
+    if [[ -n "${GIT_EMAIL:-}" && "$(printf %s "$email" | tr '[:upper:]' '[:lower:]')" != "$(printf %s "$GIT_EMAIL" | tr '[:upper:]' '[:lower:]')" ]]; then
+      echo "Check Git environment overrides and git config --show-origin --get user.email."
+    fi
+  done
+  printf 'Configured GitHub: %s | SSH key: %s\nConfigured AWS: %s | Azure: %s | GCP: %s | Kubernetes: %s\n' "${GITHUB_USER:-—}" "${SSH_KEY_PATH:-—}" "${AWS_PROFILE_NAME:-—}" "${AZURE_SUBSCRIPTION:-—}" "${GCP_PROJECT:-—}" "${KUBE_CONTEXT:-—}"
+  printf 'Shell AWS_PROFILE: %s\n' "${AWS_PROFILE:-unset}"
+  if [[ -n "${AWS_PROFILE_NAME:-}" && "${AWS_PROFILE:-}" != "$AWS_PROFILE_NAME" ]]; then
+    printf 'AWS profile differs. Review shell overrides and reactivate %s before running AWS commands.\n' "$name"
+  fi
+  printf 'For live SSH and GitHub checks: ctx verify %s\n' "$name"
+  if [[ "$shell_profile" != "$saved" || ( -n "$folder" && "$folder" != "$name" ) ]]; then
+    echo "Selection differs across contexts. Run ctx use <intended-profile> in this terminal."
+  fi
+}
+
+cmd_offboard() (
+  [[ $# == 1 && -n "$1" && "$1" != */* ]] || die "Usage: ctx offboard <profile>"
+  local name="$1" key other candidate
+  load_profile "$name"
+  key=${SSH_KEY_PATH:-}; key=${key/#\~\//$HOME/}
+  printf 'Offboarding checklist for %s (read-only)\n' "$name"
+  printf '[ ] Hand over workspace %s and review local client knowledge.\n' "${WORK_DIR:-unconfigured}"
+  printf '[ ] Review SSH key %s before rotation.\n' "${key:-unconfigured}"
+  if [[ -n "$key" ]]; then
+    for candidate in "$CTX_PROFILES_DIR"/*.conf; do
+      other=${candidate##*/}; other=${other%.conf}
+      [[ "$other" != "$name" ]] || continue
+      (
+        load_profile "$other"
+        local path=${SSH_KEY_PATH:-}
+        path=${path/#\~\//$HOME/}
+        if [[ "$key" == "$path" || "$key" -ef "$path" ]]; then printf '    Shared SSH key with %s\n' "$other"; fi
+      )
+    done
+  fi
+  printf '[ ] Ask the client administrator to review and revoke remote access.\n'
+  printf '    GitHub: %s | AWS: %s | Azure: %s | GCP: %s | Kubernetes: %s\n' "${GITHUB_USER:-—}" "${AWS_PROFILE_NAME:-—}" "${AZURE_SUBSCRIPTION:-—}" "${GCP_PROJECT:-—}" "${KUBE_CONTEXT:-—}"
+  printf '[ ] After handoff, run ctx remove %s for local profile, Git, SSH alias and stored secret cleanup.\n' "$name"
+  echo '[ ] Review retained repositories, key files, workspace configuration and open shells.'
+)

@@ -48,6 +48,8 @@
           ><a href="#troubleshoot">Troubleshoot activation</a>
           <a href="#cloud">Cloud accounts and clusters</a>
           <a href="#agent-workflow">Scripts and repository agent rules</a>
+          <a href="#explain">Explain this terminal’s identity</a>
+          <a href="#offboard">Offboard a client</a>
           <a href="#inventory">Dashboard and live checks</a>
           <a href="#migration">Repeatable setup and migration</a>
           <a href="#mcp">Kubernetes with MCP</a
@@ -319,6 +321,41 @@ ctx run -p acme -- kubectl --context acme-dev get namespaces</code></pre></div>
             <p>Preview the instructions, then use --write in the repository to add the managed section to AGENTS.md. It tells agents how to check identity, scope credentialed commands and respond to a blocked commit.</p>
             <div class="snippet"><pre><code>ctx agent-rules
 ctx agent-rules --write</code></pre></div>
+          </section>
+        </article>
+        <article id="explain" tabindex="-1">
+          <h2>Explain this terminal’s identity</h2>
+          <p>Available in the development build. Run ctx help to check whether your installed version includes this command.</p>
+          <section>
+            <h3>Check the terminal you will use</h3>
+            <p>Run explain from the repository where you plan to work. Compare the folder’s profile with the active profile, the identity in this shell, and the Git email the profile expects. This is useful after switching clients in another terminal.</p>
+            <div class="snippet"><pre><code>ctx explain</code></pre></div>
+          </section>
+          <section>
+            <h3>Investigate an unexpected email</h3>
+            <p>Git can take an email from repository configuration or from the shell environment. Inspect the configured source and the identities Git would actually use. After correcting the source, run the guard again in the same repository.</p>
+            <div class="snippet"><pre><code>git config --show-origin --get user.email
+git var GIT_AUTHOR_IDENT
+git var GIT_COMMITTER_IDENT
+ctx guard check pre-commit</code></pre></div>
+          </section>
+        </article>
+        <article id="offboard" tabindex="-1">
+          <h2>Offboard a client</h2>
+          <p>Available in the development build. Run ctx help to check whether your installed version includes this command.</p>
+          <section>
+            <h3>Preview the handoff</h3>
+            <p>Use the profile name to print a read-only checklist at the end of a contract. Review the local cleanup and check for shared SSH keys. If another profile references the same key, coordinate its rotation before retiring it.</p>
+            <div class="snippet"><pre><code>ctx offboard acme</code></pre></div>
+          </section>
+          <section>
+            <h3>Coordinate access revocation</h3>
+            <p>Agree with the client administrator which repository memberships, cloud permissions and cluster access to revoke. The administrator carries out those changes in the relevant providers. Confirm ownership of working copies, unpushed work and client notes before cleaning up locally.</p>
+          </section>
+          <section>
+            <h3>Remove the local profile</h3>
+            <p>Once the handoff is complete, run remove separately and review its confirmation. It removes the profile and its ctx-managed identity configuration and stored secrets. Review the workspace, SSH key files and mise.toml separately.</p>
+            <div class="snippet"><pre><code>ctx remove acme</code></pre></div>
           </section>
         </article>
         <article id="inventory" tabindex="-1">
