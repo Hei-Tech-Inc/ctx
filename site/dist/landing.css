@@ -496,3 +496,36 @@ footer .brand {
     grid-template-columns: 1fr;
   }
 }
+
+.workflows {
+  padding: clamp(36px, 5vw, 72px) 0;
+  border-top: 1px solid var(--rule);
+}
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  margin-top: 28px;
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+.workflow-grid a {
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  text-decoration: none;
+  padding: clamp(18px, 2vw, 32px);
+}
+.workflow-grid a:hover, .workflow-grid a:focus-visible {
+  background: #edf4e5;
+}
+.workflow-grid h3 {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  font: 650 24px/1.15 var(--display);
+}
+.workflow-grid h3 span, .workflow-grid code { color: var(--accent); }
+.workflow-grid p { color: var(--sub); margin: 12px 0 20px; }
+.workflow-grid code { margin-top: auto; font: 13px/1.5 var(--mono); }

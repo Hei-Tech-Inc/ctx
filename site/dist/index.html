@@ -30,6 +30,7 @@
           ></a
         >
         <div class="navlinks">
+          <a href="#workflows">Workflows</a>
           <a href="guide.html">Documentation</a
           ><a href="https://github.com/Hei-Tech-Inc/ctx">GitHub</a>
         </div>
@@ -56,8 +57,7 @@
           <p class="product-type">Client context switcher</p>
           <h1 id="headline">One shell.<br />Every client<span>.</span></h1>
           <p class="lede">
-            Switch identities with your workspace. Manage client passwords, give
-            agents scoped Kubernetes tools, and review changes before they run.
+            Enter a client folder with the right Git identity, SSH key, and cloud accounts. Use that same profile for scripts, passwords, and Kubernetes tools in your editor.
           </p>
           <div class="actions">
             <a class="primary" href="guide.html#install">Get started</a
@@ -76,6 +76,36 @@
             height="445"
           />
         </figure>
+      </section>
+      <section id="workflows" class="workflows" aria-labelledby="workflow-title">
+        <p class="section-label">Workspace workflows</p>
+        <h2 id="workflow-title">What do you need to do?</h2>
+        <div class="workflow-grid">
+            <a href="guide.html#profile">
+              <h3>Set up a client <span aria-hidden="true">↗</span></h3>
+              <p>Start with a single GitHub SSH alias. Extend the profile when the client adds a workspace or cloud account.</p><code>ctx setup --scope clone</code>
+            </a>
+            <a href="guide.html#clone">
+              <h3>Catch identity mistakes <span aria-hidden="true">↗</span></h3>
+              <p>Clone through the client’s SSH alias and check the Git identity before a commit or push.</p><code>ctx guard check pre-commit</code>
+            </a>
+            <a href="guide.html#cloud">
+              <h3>Select a cloud account <span aria-hidden="true">↗</span></h3>
+              <p>Carry the client’s AWS, Azure, Google Cloud and Kubernetes settings into the workspace.</p><code>ctx use acme</code>
+            </a>
+            <a href="guide.html#agent-workflow">
+              <h3>Scope an agent or script <span aria-hidden="true">↗</span></h3>
+              <p>Give one process the client identity. Write the same instructions into the repository for the next agent.</p><code>ctx run -p acme -- gh auth status</code>
+            </a>
+            <a href="guide.html#inventory">
+              <h3>Inspect your workspaces <span aria-hidden="true">↗</span></h3>
+              <p>See identities across clients, then test one profile’s SSH connection and GitHub account.</p><code>ctx dashboard</code>
+            </a>
+            <a href="guide.html#migration">
+              <h3>Move to a new machine <span aria-hidden="true">↗</span></h3>
+              <p>Export profile metadata, Git identities and SSH host configuration, then verify the imported setup.</p><code>ctx config export ~/ctx-migration</code>
+            </a>
+        </div>
       </section>
       <section id="demo" class="demo" aria-labelledby="demo-title">
         <div class="demo-intro">
