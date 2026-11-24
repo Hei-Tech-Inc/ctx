@@ -1,0 +1,154 @@
+.docs {
+  display: grid;
+  grid-template-columns: minmax(185px, 245px) minmax(0, 710px);
+  gap: clamp(30px, 6vw, 85px);
+  padding: 45px 0 80px;
+}
+.docs aside {
+  align-self: start;
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  padding: 4px;
+}
+.docs aside label {
+  display: block;
+  font-weight: 650;
+  margin: 0 0 7px;
+}
+.docs input,
+.home-search input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 11px;
+  width: 100%;
+}
+.docs .chapters {
+  width: auto;
+  display: grid;
+  gap: 3px;
+  margin: 15px 0;
+}
+.chapters a {
+  padding: 6px 10px;
+  border-left: 2px solid transparent;
+}
+.chapters a[aria-current] {
+  color: var(--lime);
+  border-color: var(--lime);
+  background: var(--panel);
+}
+.category {
+  font:
+    14px "IBM Plex Mono",
+    monospace;
+  color: var(--cyan);
+  margin: 3px 0 18px;
+}
+.docs article h2 {
+  font-size: clamp(40px, 5vw, 66px);
+}
+.intro {
+  font-size: 21px;
+}
+.docs article section {
+  padding: 18px 0;
+  border: 0;
+}
+.docs article section + section {
+  padding-top: 24px;
+}
+.snippet {
+  background: #171813;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: flex;
+  align-items: flex-start;
+}
+.snippet pre {
+  color: #c8f878;
+  flex: 1;
+  min-width: 0;
+}
+.snippet button,
+.home-search button {
+  font: inherit;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.snippet button {
+  margin: 12px 10px 0 0;
+  font-size: 14px;
+}
+.next,
+.asset {
+  display: inline-block;
+  margin: 18px 0;
+}
+.sr,
+.skip:not(:focus) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.skip:focus {
+  display: inline-block;
+  padding: 8px;
+}
+#results {
+  list-style: none;
+  padding: 0;
+}
+#results a {
+  display: block;
+  padding: 9px 4px;
+}
+#results small {
+  display: block;
+  color: var(--muted);
+}
+#count {
+  margin: 12px 0 4px;
+}
+#reading {
+  min-width: 0;
+}
+[hidden] {
+  display: none !important;
+}
+@media (max-width: 720px) {
+  .docs {
+    grid-template-columns: 1fr;
+    padding-top: 18px;
+    gap: 16px;
+  }
+  .docs aside {
+    position: static;
+    max-height: none;
+  }
+  .docs .chapters {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 0;
+    gap: 4px;
+  }
+  .chapters a {
+    font-size: 14px;
+  }
+  .asset {
+    margin: 4px 0;
+  }
+  .snippet pre {
+    padding: 14px;
+  }
+}

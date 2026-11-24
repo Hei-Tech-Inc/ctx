@@ -14,3 +14,6 @@
 
 # Generated Graphify index
 /graphify-out/
+
+# Wrangler account and deployment cache
+/.wrangler/
