@@ -359,22 +359,21 @@ _download_ctx_core() {
     warn "ctx mcp unavailable: no ctx-core build for ${os}/${arch}"
     return 1
   fi
-  sums="$(mktemp)" || return 0
-  if [[ -n "$(_sha256_of "$dest")" ]]; then
-    if curl -fsSL "$base/checksums.txt" -o "$sums" 2>/dev/null || wget -qO "$sums" "$base/checksums.txt" 2>/dev/null; then
-      want="$(awk -v a="$asset" '$2 == a || $2 == "*" a {print $1; exit}' "$sums")"
-      got="$(_sha256_of "$dest")"
-      if [[ -n "$want" && "$want" != "$got" ]]; then
-        rm -f "$sums" "$dest"
-        warn "ctx mcp unavailable: checksum mismatch for $asset"
-        return 1
-      fi
-      [[ -n "$want" ]] || warn "ctx-core checksum not verified: $asset not listed in checksums.txt"
-    else
-      warn "ctx-core checksum not verified: checksums.txt not available"
-    fi
+  if ! sums="$(mktemp)"; then
+    rm -f "$dest"
+    warn "ctx mcp unavailable: could not stage the checksum manifest"
+    return 1
   fi
-  rm -f "$sums"
+  if { curl -fsSL "$base/checksums.txt" -o "$sums" 2>/dev/null || wget -qO "$sums" "$base/checksums.txt" 2>/dev/null; } \
+    && want="$(awk -v a="$asset" '$2 == a || $2 == "*" a {print $1; exit}' "$sums")" \
+    && [[ "$want" =~ ^[0-9a-f]{64}$ ]] \
+    && got="$(_sha256_of "$dest")" && [[ "$want" == "$got" ]]; then
+    rm -f "$sums"
+  else
+    rm -f "$sums" "$dest"
+    warn "ctx mcp unavailable: could not verify SHA-256 for $asset"
+    return 1
+  fi
   return 0
 }
 
