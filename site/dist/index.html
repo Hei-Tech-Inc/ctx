@@ -1,24 +1,108 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ctx · Client context switcher</title>
-<meta name="description" content="Keep Git identities, SSH keys, and cloud environments aligned with each client workspace.">
-<link rel="icon" href="ctx.png"><link rel="stylesheet" href="style.css">
-</head>
-<body>
-<header><nav><a class="brand" href="#top"><img src="ctx.png" alt="">ctx</a><a href="#install">Install</a><a href="#guide">Guide</a><a href="https://github.com/Hei-Tech-Inc/ctx">GitHub</a></nav></header>
-<main id="top">
-<section class="hero"><div><h1>Your workspace.<br>Your <em>context.</em></h1><p>Move between client folders with the right Git identity, SSH key, and cloud profile already in place.</p><a class="button" href="#install">Install ctx</a></div>
-<div class="terminal" aria-label="Example terminal session"><div class="titlebar">Terminal <span>bash</span></div><pre><b>~ $</b> cd clients/acme
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ctx · Client context switcher</title>
+    <meta
+      name="description"
+      content="Keep Git identities, SSH keys, and cloud environments aligned with each client workspace."
+    />
+    <link rel="icon" href="ctx-switchmark.png" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <nav>
+        <a class="brand" href="#top"
+          ><img src="ctx-switchmark.png" alt="" />ctx</a
+        ><a href="#install">Install</a><a href="guide.html">Guide</a
+        ><a href="https://github.com/Hei-Tech-Inc/ctx">GitHub</a>
+      </nav>
+    </header>
+    <main id="top">
+      <section class="hero">
+        <div>
+          <h1>Your workspace.<br />Your <em>context.</em></h1>
+          <p>
+            Move between client folders with the right Git identity, SSH key,
+            and cloud profile already in place.
+          </p>
+          <a class="button" href="guide.html#install">Get started</a>
+          <form class="home-search" action="guide.html" role="search">
+            <label for="home-q">Search documentation</label
+            ><input
+              name="q"
+              id="home-q"
+              type="search"
+              placeholder="Try SSH, profile, or ctx run"
+            /><button>Search</button>
+          </form>
+        </div>
+        <div class="terminal" aria-label="Example terminal session">
+          <div class="titlebar">Terminal <span>bash</span></div>
+          <pre><b>~ $</b> cd clients/acme
 <span>[ctx] → acme</span>
 
 <b>acme $</b> git config user.email
 dev@acme.example
 
 <b>acme $</b> echo "$AWS_PROFILE"
-acme-dev</pre></div></section>
-<section id="install"><h2>Install</h2><p>On macOS, Linux, or inside WSL2, run the installer, reload your shell, then create your first profile.</p><pre><code>curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash</code></pre><a href="https://github.com/Hei-Tech-Inc/ctx#installation">Homebrew and pinned releases</a></section>
-<section id="guide"><h2>Working with profiles</h2><div class="guides"><article><h3>Set up a client</h3><code>ctx setup</code><p>Choose a workspace folder, Git identity, SSH key, and the cloud accounts this client uses.</p></article><article><h3>Inspect your profiles</h3><code>ctx dashboard</code><p>See the active profile alongside the Git and cloud settings for each workspace.</p></article><article><h3>Check a connection</h3><code>ctx verify acme</code><p>Check paths, email, and GitHub SSH authentication. Use <code>ctx doctor</code> to inspect your machine.</p></article></div><a href="https://github.com/Hei-Tech-Inc/ctx#commands">Command reference</a></section>
-</main><footer><span>ctx</span><a href="https://github.com/Hei-Tech-Inc/ctx/blob/main/docs/runbooks/common-issues.md">Troubleshooting</a><a href="https://github.com/Hei-Tech-Inc/ctx/blob/main/LICENSE">MIT license</a></footer>
-</body></html>
+acme-dev</pre>
+        </div>
+      </section>
+      <section id="install">
+        <h2>Install</h2>
+        <p>
+          On macOS, Linux, or inside WSL2, run the installer, reload your shell,
+          then create your first profile.
+        </p>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash</code></pre>
+        <a href="https://github.com/Hei-Tech-Inc/ctx#installation"
+          >Homebrew and pinned releases</a
+        >
+      </section>
+      <section id="guide">
+        <h2>Working with profiles</h2>
+        <div class="guides">
+          <article>
+            <h3><a href="guide.html#profile">Set up a client</a></h3>
+            <code>ctx setup</code>
+            <p>
+              Choose a workspace folder, Git identity, SSH key, and the cloud
+              accounts this client uses.
+            </p>
+          </article>
+          <article>
+            <h3><a href="guide.html#switch">Inspect your profiles</a></h3>
+            <code>ctx dashboard</code>
+            <p>
+              See the active profile alongside the Git and cloud settings for
+              each workspace.
+            </p>
+          </article>
+          <article>
+            <h3><a href="guide.html#troubleshoot">Check a connection</a></h3>
+            <code>ctx verify acme</code>
+            <p>
+              Check paths, email, and GitHub SSH authentication. Use
+              <code>ctx doctor</code> to inspect your machine.
+            </p>
+          </article>
+        </div>
+        <a href="https://github.com/Hei-Tech-Inc/ctx#commands"
+          >Command reference</a
+        >
+      </section>
+    </main>
+    <footer>
+      <span>ctx</span
+      ><a
+        href="https://github.com/Hei-Tech-Inc/ctx/blob/main/docs/runbooks/common-issues.md"
+        >Troubleshooting</a
+      ><a href="https://github.com/Hei-Tech-Inc/ctx/blob/main/LICENSE"
+        >MIT license</a
+      >
+    </footer>
+  </body>
+</html>

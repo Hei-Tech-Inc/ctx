@@ -1,4 +1,4 @@
-<img src="site/dist/ctx.png" alt="ctx logo" width="80">
+<img src="site/dist/ctx-switchmark.png" alt="ctx logo" width="80">
 
 # ctx — client context switcher
 

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>User guide · ctx</title>
+    <meta
+      name="description"
+      content="Install ctx, set up client profiles, switch workspaces, use GitHub and diagnose configuration problems."
+    />
+    <link rel="icon" href="ctx-switchmark.png" />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="guide.css" />
+    <script src="guide.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#reading">Skip to guide</a>
+    <header>
+      <nav>
+        <a class="brand" href="./"><img src="ctx-switchmark.png" alt="" />ctx</a
+        ><a href="guide.html" aria-current="page">Documentation</a
+        ><a href="https://github.com/Hei-Tech-Inc/ctx">GitHub</a>
+      </nav>
+    </header>
+    <main class="docs">
+      <aside>
+        <form id="search" role="search">
+          <label for="q">Search the guide</label
+          ><input
+            id="q"
+            name="q"
+            type="search"
+            autocomplete="off"
+            placeholder="Command or topic…"
+            aria-keyshortcuts="/"
+          />
+        </form>
+        <div id="matches" hidden>
+          <p role="status" id="count"></p>
+          <ul id="results"></ul>
+        </div>
+        <nav class="chapters" aria-label="Guide chapters">
+          <a href="#install">Install ctx</a
+          ><a href="#profile">Create a profile</a
+          ><a href="#switch">Switch workspaces</a
+          ><a href="#clone">Clone with GitHub</a
+          ><a href="#automation">Run commands and scripts</a
+          ><a href="#troubleshoot">Troubleshoot activation</a>
+        </nav>
+        <a class="asset" href="ctx-switchmark.png" download="ctx-logo.png"
+          >Download ctx logo</a
+        >
+      </aside>
+      <div id="reading" tabindex="-1">
+        <h1 class="sr">ctx user guide</h1>
+        <article id="install" tabindex="-1">
+          <p class="category">Getting started</p>
+          <h2>Install ctx</h2>
+          <p class="intro">
+            Prepare your shell for a client workspace, then check that ctx can
+            find the tools it needs.
+          </p>
+          <section>
+            <h3>Install on your machine</h3>
+            <p>
+              Run the full installer in a macOS or Linux terminal. On Windows,
+              open a WSL2 Linux shell first. The installer sets up the CLI and
+              shell integration. For a reproducible installation, use a release
+              tag you have reviewed in place of main.
+            </p>
+            <div class="snippet">
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Check your installation</h3>
+            <p>
+              Open a fresh terminal so the shell loads the installed hook. The
+              version command confirms which release is on your path. Doctor
+              checks the shell hook, SSH include and integration tools. A
+              machine with no client profiles can still run these checks.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx version
+ctx doctor</code></pre>
+            </div>
+          </section>
+          <a class="next" href="#profile">Next guide · Create a profile</a>
+        </article>
+        <article id="profile" tabindex="-1">
+          <p class="category">Getting started</p>
+          <h2>Create a profile</h2>
+          <p class="intro">
+            Use one profile per client so Git, GitHub and your cloud tools use
+            the intended identity.
+          </p>
+          <section>
+            <h3>Choose an identity and folder</h3>
+            <p>
+              Start the wizard and choose full setup. For this guide, use acme
+              as the profile name. Supply your client Git name and email, and
+              choose a dedicated work directory such as ~/clients/acme. Select
+              the SSH key and cloud accounts that belong to the client. Review
+              the paths and identities before confirming.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx setup</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Check the saved profile</h3>
+            <p>
+              The dashboard shows the workspace, Git email, SSH key path and
+              configured integrations together. Verify checks the profile’s
+              paths and GitHub SSH authentication. A warning about a missing key
+              can be expected if you skipped SSH setup.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx dashboard
+ctx verify acme</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Start with Git only</h3>
+            <p>
+              Choose clone-only setup if you just need a GitHub SSH alias today.
+              Extend the same profile later when you know the workspace and
+              cloud settings.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx setup --scope clone
+ctx setup --extend acme</code></pre>
+            </div>
+          </section>
+          <a class="next" href="#switch">Next guide · Switch workspaces</a>
+        </article>
+        <article id="switch" tabindex="-1">
+          <p class="category">Daily use</p>
+          <h2>Switch workspaces</h2>
+          <p class="intro">
+            Use the current directory to select a profile, or activate one
+            explicitly for a terminal session.
+          </p>
+          <section>
+            <h3>Enter the client folder</h3>
+            <p>
+              Change into the directory you selected during setup. At the next
+              prompt, inspect the active profile. In a client repository, git
+              config user.email should match the email in your dashboard.
+            </p>
+            <div class="snippet">
+              <pre><code>cd ~/clients/acme
+ctx status
+echo &quot;$CTX_ACTIVE_PROFILE&quot;</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Switch manually</h3>
+            <p>
+              Use the shell function installed by ctx to apply the profile
+              variables to your current terminal. To see when automatic
+              switching happens, enable transition messages. Clear a manual
+              activation with deactivate.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx use acme
+ctx config autoswitch-notify on
+ctx deactivate</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Resolve a nested workspace</h3>
+            <p>
+              When several clients share a repository, place a .ctx file
+              containing profile=acme in the directory that belongs to that
+              client. The nearest override takes precedence. Check the result
+              from inside that directory.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx status --json</code></pre>
+            </div>
+          </section>
+          <a class="next" href="#clone">Next guide · Clone with GitHub</a>
+        </article>
+        <article id="clone" tabindex="-1">
+          <p class="category">Daily use</p>
+          <h2>Clone with GitHub</h2>
+          <p class="intro">
+            Route a clone through the client’s SSH alias and confirm the
+            repository uses its Git identity.
+          </p>
+          <section>
+            <h3>Clone into the workspace</h3>
+            <p>
+              Replace ORG and REPO with a repository you can access. Start in
+              the client folder. The profile option selects the GitHub SSH alias
+              even if a different profile is active.
+            </p>
+            <div class="snippet">
+              <pre><code>cd ~/clients/acme
+ctx clone -p acme git@github.com:ORG/REPO.git</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Inspect the checkout</h3>
+            <p>
+              Enter the new repository. Its origin should use github-acme for
+              the SSH host. Compare the email with the profile before
+              committing. Verify tests the client SSH connection.
+            </p>
+            <div class="snippet">
+              <pre><code>cd REPO
+git remote get-url origin
+git config user.email
+ctx verify acme</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Guard commits and pushes</h3>
+            <p>
+              Install the Git guard if you want ctx to check the email on commit
+              and the SSH alias on push. Check its status inside the repository
+              because a repository-specific hooks path can take precedence.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx guard install
+ctx guard status</code></pre>
+            </div>
+          </section>
+          <a class="next" href="#automation"
+            >Next guide · Run commands and scripts</a
+          >
+        </article>
+        <article id="automation" tabindex="-1">
+          <p class="category">Automation</p>
+          <h2>Run commands and scripts</h2>
+          <p class="intro">
+            Give one process the client identity without switching every other
+            terminal.
+          </p>
+          <section>
+            <h3>Run with a named profile</h3>
+            <p>
+              Put the program and its arguments after the double dash. The child
+              inherits the profile’s Git identity, GitHub credentials and
+              configured cloud variables. For kubectl, pass the intended context
+              explicitly.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx run -p acme -- git var GIT_AUTHOR_IDENT
+ctx run -p acme -- gh auth status</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Read structured checks</h3>
+            <p>
+              Use list to enumerate profiles and status to inspect activation.
+              Doctor emits machine-wide checks. Verify emits profile checks and
+              returns status 1 on failure. For diagnostic results, inspect each
+              check’s level and message.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx --json list
+ctx --json status
+ctx --json doctor
+ctx --json verify acme</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Store a secret</h3>
+            <p>
+              Set the value at the interactive prompt to avoid putting it in
+              your command history. List shows key names. Processes launched
+              with ctx run can receive the profile’s stored secrets, so select
+              the child process deliberately.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx secret set acme API_TOKEN
+ctx secret list acme</code></pre>
+            </div>
+          </section>
+          <a class="next" href="#troubleshoot"
+            >Next guide · Troubleshoot activation</a
+          >
+        </article>
+        <article id="troubleshoot" tabindex="-1">
+          <p class="category">Support</p>
+          <h2>Troubleshoot activation</h2>
+          <p class="intro">
+            Work from the observed identity to the profile, shell hook or SSH
+            setting that selected it.
+          </p>
+          <section>
+            <h3>The shell shows the wrong client</h3>
+            <p>
+              Compare the active profile, work directory and Git email. Check
+              for a nearer .ctx override and for a manual activation. From the
+              client repository, inspect which Git config file supplied the
+              email.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx status
+ctx dashboard
+git config --show-origin --get user.email</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Changing directories does nothing</h3>
+            <p>
+              Transition messages are off by default. Check the actual profile
+              first. If the shell hook is missing, install it, open a new
+              terminal and re-enter the client folder.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx doctor
+ctx install-hook</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>GitHub uses the wrong key</h3>
+            <p>
+              Check the origin URL inside the checkout. A client clone uses the
+              profile alias, such as github-acme. Doctor checks the SSH include
+              and verify checks the profile key, alias and live authentication.
+            </p>
+            <div class="snippet">
+              <pre><code>git remote -v
+ctx doctor
+ctx verify acme</code></pre>
+            </div>
+          </section>
+        </article>
+      </div>
+    </main>
+  </body>
+</html>
