@@ -581,14 +581,23 @@ ctx_activation_get_source() {
   [[ "$v" == "manual" ]] && echo manual || echo auto
 }
 
-# First base64 flag spelling that produces output wins (GNU -d, BSD -D, --decode).
-# GNU base64 prints the decoded text and then exits 1 on stray padding, so an
-# `a || b` chain would print it twice; never concatenate attempts.
+# Try the GNU and BSD decoder flags; discard output from failed attempts.
 ctx_base64_decode() {
-  local f out
+  local f out encoded="$1"
+  # Match DecodeManualPWD: ignore trailing padding, then restore the exact
+  # padding length required by strict base64 implementations.
+  while [[ "$encoded" == *= ]]; do encoded="${encoded%=}"; done
+  [[ -n "$encoded" && "$encoded" != *[!A-Za-z0-9+/]* ]] || return 1
+  case $(( ${#encoded} % 4 )) in
+    1) return 1 ;;
+    2) encoded+='==' ;;
+    3) encoded+='=' ;;
+  esac
   for f in -d -D --decode; do
-    out="$(printf '%s' "$1" | base64 "$f" 2>/dev/null)"
-    [[ -n "$out" ]] && { printf '%s' "$out"; return 0; }
+    if out="$(printf '%s' "$encoded" | base64 "$f" 2>/dev/null)" && [[ -n "$out" ]]; then
+      printf '%s' "$out"
+      return 0
+    fi
   done
   return 1
 }

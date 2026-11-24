@@ -305,17 +305,24 @@ test_base64_decode_gnu_style() {
     set -euo pipefail
     local td
     td="$(mktemp -d)"
-    # GNU-style: -d prints the text, then exits 1 on stray padding; -D is unknown.
+    # A strict decoder rejects stray padding and may print partial output on failure.
     mkdir -p "$td/bin"
     cat >"$td/bin/base64" <<'STUB'
 #!/bin/sh
 case "$1" in
-  -d|--decode) printf '/tmp/x'; exit 1 ;;
+  -d|--decode)
+    case "$(cat)" in
+      L3RtcC94) printf '/tmp/x' ;;
+      L2E=) printf '/a' ;;
+      *) printf partial; exit 1 ;;
+    esac ;;
   *) exit 1 ;;
 esac
 STUB
     chmod +x "$td/bin/base64"
     [[ "$(PATH="$td/bin:$PATH" ctx_base64_decode 'L3RtcC94==')" == /tmp/x ]] || { echo "decoded twice or not at all"; exit 1; }
+    [[ "$(PATH="$td/bin:$PATH" ctx_base64_decode L2E)" == /a ]] || exit 1
+    [[ -z "$(PATH="$td/bin:$PATH" ctx_base64_decode invalid)" ]] || exit 1
     export CTX_DIR="$td/ctx" CTX_CONFIG="$td/ctx/config"
     mkdir -p "$CTX_DIR"
     printf 'manual_pwd=L3RtcC94\r\n' >"$CTX_CONFIG"
