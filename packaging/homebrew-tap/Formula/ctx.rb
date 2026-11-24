@@ -11,11 +11,12 @@ class Ctx < Formula
   depends_on "go" => :build
 
   def install
-    bin.install "bin/ctx"
-    lib.install Dir["lib/*.sh"]
-    lib.install Dir["lib/*.bash"]
-    lib.install Dir["lib/*.fish"]
-    system "go", "build", *std_go_args(output: lib/"ctx-core", ldflags: "-X main.version=#{version}"), "./cmd/ctx"
+    (libexec/"bin").install "bin/ctx"
+    bin.write_exec_script libexec/"bin/ctx"
+    (libexec/"lib").install Dir["lib/*.sh"]
+    (libexec/"lib").install Dir["lib/*.bash"]
+    (libexec/"lib").install Dir["lib/*.fish"]
+    system "go", "build", *std_go_args(output: libexec/"lib"/"ctx-core", ldflags: "-X main.version=#{version}"), "./cmd/ctx"
   end
 
   def caveats
@@ -28,6 +29,6 @@ class Ctx < Formula
 
   test do
     assert_match version.to_s, shell_output("#{bin}/ctx version")
-    assert_match version.to_s, shell_output("#{lib}/ctx-core version")
+    assert_match version.to_s, shell_output("#{libexec}/lib/ctx-core version")
   end
 end

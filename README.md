@@ -29,6 +29,8 @@ Run `ctx dashboard` to see each profile’s active state, workspace, Git identit
 
 Before a commit, run `ctx explain` in that terminal. Compare the folder match, saved activation and shell profile with Git’s live author and committer. Cloud and SSH entries show configured values. Use `ctx verify <profile>` for live account checks.
 
+Use `ctx explain --cloud` before a deployment to compare the named AWS profile’s account and Azure subscription with the active accounts, and the configured GCP project and Kubernetes context with local CLI selections. Each configured target reports matched, mismatch, or unverified. A nonzero exit means at least one target could not be confirmed. No provider is contacted by plain `ctx explain`.
+
 At the end of an engagement, run `ctx offboard <profile>` for a read-only handoff checklist. It flags SSH keys shared across local profiles and lists configured accounts for the client administrator to review. Remote revocation and local removal are separate, deliberate steps.
 
 
@@ -102,14 +104,14 @@ curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | 
 `main` moves; for reproducible installs use a [release tag](https://github.com/Hei-Tech-Inc/ctx/tags):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.3.0/install.sh | bash
 ```
 
-Replace `v3.2.0` with the tag you trust (see [`lib/core.sh`](lib/core.sh) for `CTX_VERSION` on that ref). See [`packaging/README.md`](packaging/README.md) for Homebrew/Linux packaging notes.
+Starting with v3.3.0, the remote installer fetches the CLI and shell libraries from its embedded release tag. Replace `v3.3.0` with the tag you trust (see [`lib/core.sh`](lib/core.sh) for `CTX_VERSION` on that ref). See [`packaging/README.md`](packaging/README.md) for Homebrew/Linux packaging notes.
 
 ### Homebrew (tap)
 
-After the tap repo is pushed (**[`isaackumi/homebrew-tap`](https://github.com/isaackumi/homebrew-tap)** — see [`packaging/homebrew-tap/README.md`](packaging/homebrew-tap/README.md)):
+Install from the [published Homebrew tap](https://github.com/isaackumi/homebrew-tap):
 
 ```bash
 brew tap isaackumi/tap

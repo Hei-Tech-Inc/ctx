@@ -2,7 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [3.3.0] - 2026-11-24
+
+- Added client identity explanations, optional deployment target checks and read-only offboarding.
+- Pinned remote install inputs to the release version and required SHA-256 verification of downloaded ctx-core binaries.
 
 ### Changed
 - **Go port, phase 5:** the shell autoswitch hook runs in `ctx-core` (Go) when it is installed. `ctx activate bash|zsh|fish` prints a small hook whose per-prompt check uses shell builtins only; it calls `ctx hook-env` only when `$PWD` changed, `~/.ctx/config` changed (for example a `ctx use` in another terminal), or a profile in `~/.ctx/profiles` was added, removed or replaced, and `hook-env` does the deactivate and use in one process. `lib/ctx_autoswitch.bash` and `.fish` now run `ctx activate` when `ctx-core` is found, so the rc block `install-hook` writes is unchanged and needs no re-run; without `ctx-core`, or with `CTX_CORE=off` when the rc runs, the original shell hook runs. Re-sourcing the rc, or switching between the two, keeps one hook. You can also put `eval "$(ctx activate zsh)"` (fish: `ctx activate fish | source`) in the rc yourself; `ctx doctor` names the form your rc uses. Exports, notify lines, prompt variables, the per-terminal `GH_TOKEN` and the manual lock are unchanged. New Go package `internal/hookenv`. Mean per prompt, 10 profiles, on macOS (`scripts/bench-hook.sh`), legacy hook to `ctx activate`: a prompt with no change 2.6 ms to 0.04 ms (bash) and 1.8 ms to 0.02 ms (zsh), with no process started; entering or leaving a profile's folder 35 ms to 8 ms; switching between two profiles 68 ms to 9 ms (bash) and 70 ms to 7.5 ms (zsh). Still to come: dropping Bash (phase 6).

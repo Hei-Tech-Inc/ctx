@@ -79,7 +79,7 @@
               tag you have reviewed in place of main.
             </p>
             <div class="snippet">
-              <pre><code>curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main/install.sh | bash</code></pre>
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.3.0/install.sh | bash</code></pre>
             </div>
           </section>
           <section>
@@ -325,7 +325,12 @@ ctx agent-rules --write</code></pre></div>
         </article>
         <article id="explain" tabindex="-1">
           <h2>Explain this terminal’s identity</h2>
-          <p>Available in the development build. Run ctx help to check whether your installed version includes this command.</p>
+          <p>Requires ctx v3.3.0 or later. Check your installed version with ctx version.</p>
+          <section>
+            <h3>Check deployment targets</h3>
+            <p>Compare your current AWS account, Azure subscription, GCP project and Kubernetes context with the configured profile. The opt-in check reads the installed cloud CLIs. A mismatch or unverified target returns a nonzero exit. Project and context checks report local CLI selections.</p>
+            <div class="snippet"><pre><code>ctx explain --cloud</code></pre></div>
+          </section>
           <section>
             <h3>Check the terminal you will use</h3>
             <p>Run explain from the repository where you plan to work. Compare the folder’s profile with the active profile, the identity in this shell, and the Git email the profile expects. This is useful after switching clients in another terminal.</p>
@@ -342,7 +347,7 @@ ctx guard check pre-commit</code></pre></div>
         </article>
         <article id="offboard" tabindex="-1">
           <h2>Offboard a client</h2>
-          <p>Available in the development build. Run ctx help to check whether your installed version includes this command.</p>
+          <p>Requires ctx v3.3.0 or later. Check your installed version with ctx version.</p>
           <section>
             <h3>Preview the handoff</h3>
             <p>Use the profile name to print a read-only checklist at the end of a contract. Review the local cleanup and check for shared SSH keys. If another profile references the same key, coordinate its rotation before retiring it.</p>
