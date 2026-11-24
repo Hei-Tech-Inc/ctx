@@ -99,6 +99,7 @@ func helpCard(ver string) string {
 		"  upgrade [--check] Re-run installer, or check for newer version",
 		"  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe",
 		"  explain [--cloud] Explain identity and optionally check deployment targets",
+		"  organize         Inventory or adopt existing repositories",
 		"  offboard <name>  Preview the client handoff checklist",
 		"  dashboard        View identities and integrations across profiles",
 		"  doctor           Machine-wide: tools, hooks, SSH layout, profiles",

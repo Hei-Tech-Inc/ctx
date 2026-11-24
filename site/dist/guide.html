@@ -48,6 +48,7 @@
           ><a href="#troubleshoot">Troubleshoot activation</a>
           <a href="#cloud">Cloud accounts and clusters</a>
           <a href="#agent-workflow">Scripts and repository agent rules</a>
+          <a href="#organize">Organize existing projects</a>
           <a href="#explain">Explain this terminal’s identity</a>
           <a href="#offboard">Offboard a client</a>
           <a href="#inventory">Dashboard and live checks</a>
@@ -321,6 +322,30 @@ ctx run -p acme -- kubectl --context acme-dev get namespaces</code></pre></div>
             <p>Preview the instructions, then use --write in the repository to add the managed section to AGENTS.md. It tells agents how to check identity, scope credentialed commands and respond to a blocked commit.</p>
             <div class="snippet"><pre><code>ctx agent-rules
 ctx agent-rules --write</code></pre></div>
+          </section>
+        </article>
+        <article id="organize" tabindex="-1">
+          <h2>Organize existing projects</h2>
+          <p>Development build. Check ctx help for the organize command.</p>
+          <section><h3>Find client repositories</h3>
+            <p>Scan the folders you choose. Review the GitHub owner or SSH alias alongside each suggestion. A personal fork may belong to a client project.</p>
+            <div class="snippet"><pre><code>ctx organize ~/work ~/Desktop/projects</code></pre></div>
+          </section>
+          <section><h3>Adopt a checkout in place</h3>
+            <p>Choose an existing client profile, preview the assignment, then register the checkout. Repeat for each project. A local Git identity override takes precedence, so check the result in that repository.</p>
+            <div class="snippet"><pre><code>ctx --dry-run organize adopt acme ~/work/api
+ctx organize adopt acme ~/work/api
+cd ~/work/api
+ctx explain</code></pre></div>
+          </section>
+          <section><h3>Review keys and credential names</h3>
+            <p>List public SSH key fingerprints, profile references and SSH config declarations. Select an environment file explicitly to inventory its variable names. Values stay in that file.</p>
+            <div class="snippet"><pre><code>ctx organize ssh
+ctx organize env-keys ~/work/api/.env</code></pre></div>
+          </section>
+          <section><h3>Forget an assignment</h3>
+            <p>Remove a project's association before moving or reassigning it. After a move, supply its previous absolute path. Linked worktrees and submodules currently support inventory only.</p>
+            <div class="snippet"><pre><code>ctx organize forget acme ~/work/api</code></pre></div>
           </section>
         </article>
         <article id="explain" tabindex="-1">

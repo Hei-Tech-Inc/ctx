@@ -432,6 +432,7 @@ ctx_resolve_path_with_root() {
   local pwd="${1:?pwd required}" pdir="${2:?profiles dir required}"
   pwd="${pwd/#\~/$HOME}"
   [[ -d "$pdir" ]] || return 1
+  if ctx_adopted_path "$pwd" "$pdir"; then return 0; fi
   local best_pname="" best_len=0 best_wd="" conf work_dir len
   for conf in "$pdir"/*.conf; do
     [[ -e "$conf" ]] || continue
@@ -1486,4 +1487,24 @@ is_valid_env_key() {
 # Reject obvious mistakes like pasting a GitHub username into the email field.
 is_sensible_git_email() {
   [[ "$1" =~ @ ]] && [[ "$1" != *..* ]] && [[ "$1" =~ ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+ ]]
+}
+
+# Only user-managed include files may bind a checkout to a profile. The path
+# walked here is the worktree path, never a gitdir supplied by the repository.
+ctx_adopted_path() {
+  local pwd="$1" profiles="$2" bindings="${2%/*}/projects" file owner root value
+  [[ -d "$bindings" ]] || return 1
+  root=$(cd "$pwd" && pwd -P) || return 1
+  while [[ -n "$root" && "$root" != / && ! -e "$root/.git" ]]; do root=${root%/*}; done
+  [[ -n "$root" && -d "$root/.git" && ! -L "$root/.git" ]] || return 1
+  for file in "$bindings"/*.gitconfig; do
+    [[ -f "$file" ]] || continue
+    owner=${file##*/}; owner=${owner%.gitconfig}
+    [[ -f "$profiles/$owner.conf" ]] || continue
+    value=$(git config --no-includes --file "$file" --get "includeIf.gitdir:$root/.git.path") || continue
+    [[ "$value" == "$HOME/.config/git/ctx-$owner" ]] || continue
+    printf '%s\t%s' "$owner" "$root"
+    return 0
+  done
+  return 1
 }

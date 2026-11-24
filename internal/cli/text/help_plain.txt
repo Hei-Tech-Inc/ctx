@@ -42,6 +42,7 @@
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
   explain [--cloud]     Explain identity and optionally check deployment targets
+  organize [dirs...]    Inventory or adopt existing repositories in place
   offboard <profile>    Print a read-only client handoff checklist
   dashboard             Show profile identities, workspaces, and integrations
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles

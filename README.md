@@ -27,6 +27,30 @@ Profiles auto-activate when you `cd` into a client directory.
 
 Run `ctx dashboard` to see each profile’s active state, workspace, Git identity, SSH key path, and cloud integrations together. The dashboard reads profile metadata only.
 
+### Adopt repositories already on your laptop
+
+Scan only the directories you choose. The inventory shows origin-owner or SSH-alias evidence for your review. A fork can belong to a personal account even when its upstream belongs to a client.
+
+```bash
+ctx organize ~/work ~/Desktop/projects
+ctx organize ssh
+ctx organize env-keys ~/work/api/.env
+```
+
+The SSH inventory reads public key fingerprints and declarations in the main SSH and ctx config files. The environment inventory prints assignment names from the selected file. Neither command migrates credentials.
+
+Create the client with `ctx setup` if needed. Assign each ordinary checkout explicitly after reviewing it. Each client can have several repositories outside its primary workspace.
+
+```bash
+ctx --dry-run organize adopt acme ~/work/api
+ctx organize adopt acme ~/work/api
+cd ~/work/api
+ctx explain
+git var GIT_AUTHOR_IDENT
+```
+
+Adoption registers an exact Git directory condition in a private per-client include file and links it from your global Git configuration. The working tree, remotes, SSH keys and repository-local settings stay in place. A repository-local email override can still win; `ctx explain` shows that mismatch. Use `ctx organize forget acme ~/work/api` to remove the assignment. Linked worktrees and submodules can be inventoried; adoption currently supports ordinary clones. Before moving a checkout, forget its old assignment and adopt the new location. If it has already moved, pass the original absolute path to forget.
+
 Before a commit, run `ctx explain` in that terminal. Compare the folder match, saved activation and shell profile with Git’s live author and committer. Cloud and SSH entries show configured values. Use `ctx verify <profile>` for live account checks.
 
 Use `ctx explain --cloud` before a deployment to compare the named AWS profile’s account and Azure subscription with the active accounts, and the configured GCP project and Kubernetes context with local CLI selections. Each configured target reports matched, mismatch, or unverified. A nonzero exit means at least one target could not be confirmed. No provider is contacted by plain `ctx explain`.

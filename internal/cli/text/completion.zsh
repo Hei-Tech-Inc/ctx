@@ -25,6 +25,7 @@ _ctx() {
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
+    'organize:Inventory and adopt existing client repositories'
     'explain:Explain shell and workspace identities'
     'offboard:Preview the client handoff checklist'
     'dashboard:Overview of profile identities and integrations'

@@ -74,6 +74,9 @@ func Remove(t tui.Term, args []string) int {
 		u.dim("Active profile was removed — run: eval \"$(ctx deactivate)\" to clear shell env (or open a new terminal).")
 	}
 
+	if err := os.Remove(filepath.Join(filepath.Dir(profile.Dir()), "projects", name+".gitconfig")); err != nil && !os.IsNotExist(err) {
+		return u.die(err.Error())
+	}
 	_ = os.Remove(profile.Dir() + "/" + name + ".conf")
 	u.success("Profile '" + name + "' removed.")
 	u.say("")
