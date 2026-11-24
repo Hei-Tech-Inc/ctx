@@ -13,7 +13,8 @@ mkdir -p "$stage/release/v$version" "$stage/prefix/bin" "$stage/prefix/lib" "$st
 (cd "$stage/release/v$version" && shasum -a 256 "$asset" > checksums.txt)
 cp "$root/install.sh" "$stage/install.sh"
 export HOME="$stage/home" CTX_DIR="$stage/home/.ctx" SHELL=/bin/bash
-unset CTX_ACTIVE_PROFILE CTX_CORE CTX_CORE_BIN
+unset CTX_ACTIVE_PROFILE CTX_CORE CTX_CORE_BIN SSH_AUTH_SOCK SSH_AGENT_PID
+export GIT_CONFIG_GLOBAL="$HOME/.gitconfig" GIT_CONFIG_NOSYSTEM=1
 # Confirm the release default before substituting a local mirror for both origins.
 (
   unset CTX_REPO
