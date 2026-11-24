@@ -6,6 +6,63 @@ on:
     branches: [main]
 
 jobs:
+  clean-install:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: bash test/release-install.sh
+
+  homebrew:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install candidate formula in a clean runner
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/ctx.tar.gz"
+          git archive --prefix=ctx/ --format=tar.gz -o "$archive" HEAD
+          tap="local/ctx-release-test"
+          git config --global user.name "ctx CI"
+          git config --global user.email "ci@users.noreply.github.com"
+          brew tap-new "$tap"
+          formula="$(brew --repo "$tap")/Formula/ctx.rb"
+          mkdir -p "$(dirname "$formula")"
+          sed -E -e "s|^  url .*|  url \"file://$archive\"|" \
+            -e "s|^  sha256 .*|  sha256 \"$(shasum -a 256 "$archive" | cut -d' ' -f1)\"|" \
+            -e "s|^  version .*|  version \"$(cat VERSION)\"|" \
+            packaging/homebrew-tap/Formula/ctx.rb > "$formula"
+          brew install --build-from-source "$tap/ctx"
+          brew test "$tap/ctx"
+          ctx help | grep -F 'offboard'
+
+  docs-mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Exercise the local Pages Function
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.165.0 pages dev dist --port 8788 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
+          trap 'kill $! 2>/dev/null || true' EXIT
+          curl --retry 35 --retry-delay 1 --retry-connrefused -fsS http://localhost:8788/guide > /dev/null || { cat "$RUNNER_TEMP/wrangler.log"; exit 1; }
+          node test-mcp.js http://localhost:8788/mcp
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:

@@ -3165,6 +3165,20 @@ test_client_workflows() (
   out="$("$ROOT_DIR/bin/ctx" offboard orbit)" || fail "offboard failed"
   [[ "$out" == *'Shared SSH key with acme'* && "$out" == *'administrator'* && -e "$CTX_DIR/profiles/orbit.conf" ]] || fail "incomplete offboarding preview"
   if "$ROOT_DIR/bin/ctx" offboard ../invalid >/dev/null 2>&1; then fail "offboard accepted invalid name"; fi
+  mkdir "$td/tools"
+  export PATH="$td/tools:$PATH"
+  printf '#!/bin/sh\nprintf "111\\n"\n' > "$td/tools/aws"
+  printf '#!/bin/sh\nprintf "sub-id\\n"\n' > "$td/tools/az"
+  printf '#!/bin/sh\nprintf "demo\\n"\n' > "$td/tools/gcloud"
+  printf '#!/bin/sh\nprintf "staging\\n"\n' > "$td/tools/kubectl"
+  chmod +x "$td/tools/"*
+  printf 'AWS_PROFILE_NAME=acme\nAZURE_SUBSCRIPTION=demo\nGCP_PROJECT=demo\nKUBE_CONTEXT=staging\n' >> "$CTX_DIR/profiles/orbit.conf"
+  out="$("$ROOT_DIR/bin/ctx" explain --cloud)" || fail "matching deployment targets"
+  [[ "$out" == *'AWS account (acme): matched'* && "$out" == *'Azure subscription (demo): matched'* && "$out" == *'GCP project: matched'* && "$out" == *'Kubernetes context: matched'* ]] || fail "provider coverage"
+  printf '#!/bin/sh\necho production\n' > "$td/tools/kubectl"
+  printf '#!/bin/sh\nexit 1\n' > "$td/tools/aws"
+  if out="$("$ROOT_DIR/bin/ctx" explain --cloud 2>&1)"; then fail "cloud check accepted a mismatch"; fi
+  [[ "$out" == *'Kubernetes context: mismatch'* && "$out" == *'AWS account (acme): unverified'* ]] || fail "cloud mismatch diagnosis"
   pass "client identity explanation and read-only offboarding"
 )
 

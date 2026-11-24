@@ -7,8 +7,8 @@
 
 set -uo pipefail
 
-CTX_VERSION="3.2.0"
-CTX_REPO="${CTX_REPO:-https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/main}"
+CTX_VERSION="3.3.0"
+CTX_REPO="${CTX_REPO:-https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v${CTX_VERSION}}"
 # Release assets (ctx-core_<os>_<arch>, checksums.txt) live under <base>/v<version>/.
 CTX_RELEASE_BASE="${CTX_RELEASE_BASE:-https://github.com/Hei-Tech-Inc/ctx/releases/download}"
 

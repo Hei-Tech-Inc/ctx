@@ -2627,7 +2627,8 @@ cmd_guard() {
 # Read-only diagnostics. Shell, saved activation and folder can disagree when
 # another terminal has switched the saved profile.
 cmd_explain() {
-  [[ $# == 0 ]] || die "Usage: ctx explain"
+  local cloud=false
+  if [[ $# == 1 && "$1" == --cloud ]]; then cloud=true; elif [[ $# != 0 ]]; then die "Usage: ctx explain [--cloud]"; fi
   local saved folder result shell_profile name email who ident mode
   saved=$(active_profile)
   result=$(ctx_resolve_path_with_root "$PWD" "$CTX_PROFILES_DIR" || true)
@@ -2639,7 +2640,7 @@ cmd_explain() {
     printf 'Manual selection directory: %s\n' "$(ctx_activation_get_manual_pwd || true)"
   fi
   name=${shell_profile:-${saved:-$folder}}
-  [[ -n "$name" ]] || { echo "No profile selected. Enter a client workspace or run ctx use <profile>."; return 0; }
+  [[ -n "$name" ]] || { $cloud && die "unverified: no profile selected"; echo "No profile selected. Enter a client workspace or run ctx use <profile>."; return 0; }
   [[ "$name" != */* ]] || die "Invalid profile name"
   load_profile "$name"
   printf 'Comparing with profile: %s\nConfigured Git email: %s\n' "$name" "${GIT_EMAIL:-unset}"
@@ -2660,6 +2661,7 @@ cmd_explain() {
   if [[ "$shell_profile" != "$saved" || ( -n "$folder" && "$folder" != "$name" ) ]]; then
     echo "Selection differs across contexts. Run ctx use <intended-profile> in this terminal."
   fi
+  if $cloud; then ctx_check_cloud; fi
 }
 
 cmd_offboard() (
@@ -2687,3 +2689,41 @@ cmd_offboard() (
   printf '[ ] After handoff, run ctx remove %s for local profile, Git, SSH alias and stored secret cleanup.\n' "$name"
   echo '[ ] Review retained repositories, key files, workspace configuration and open shells.'
 )
+
+_ctx_cloud_value() {
+  run_with_timeout 8 "$@" </dev/null 2>/dev/null || return 1
+}
+
+_ctx_cloud_result() {
+  local label="$1" expected="$2" actual="$3" state=mismatch
+  if [[ -z "$expected" || -z "$actual" || "$actual" == '(unset)' ]]; then state=unverified
+  elif [[ "$expected" == "$actual" ]]; then state=matched; fi
+  printf '%s: %s (expected %s, observed %s)\n' "$label" "$state" "${expected:-unknown}" "${actual:-unavailable}"
+  [[ "$state" == matched ]]
+}
+
+ctx_check_cloud() {
+  local expected actual rc=0
+  if [[ -z "${AWS_PROFILE_NAME:-}${AZURE_SUBSCRIPTION:-}${GCP_PROJECT:-}${KUBE_CONTEXT:-}" ]]; then
+    echo "unverified: no deployment targets configured"; return 1
+  fi
+  if [[ -n "${AWS_PROFILE_NAME:-}" ]]; then
+    expected=$(_ctx_cloud_value aws --profile "$AWS_PROFILE_NAME" sts get-caller-identity --query Account --output text) || expected=""
+    actual=$(_ctx_cloud_value aws sts get-caller-identity --query Account --output text) || actual=""
+    _ctx_cloud_result "AWS account ($AWS_PROFILE_NAME)" "$expected" "$actual" || rc=1
+  fi
+  if [[ -n "${AZURE_SUBSCRIPTION:-}" ]]; then
+    expected=$(_ctx_cloud_value az account show --subscription "$AZURE_SUBSCRIPTION" --query id -o tsv) || expected=""
+    actual=$(_ctx_cloud_value az account show --query id -o tsv) || actual=""
+    _ctx_cloud_result "Azure subscription ($AZURE_SUBSCRIPTION)" "$expected" "$actual" || rc=1
+  fi
+  if [[ -n "${GCP_PROJECT:-}" ]]; then
+    actual=$(_ctx_cloud_value gcloud config get-value project --quiet) || actual=""
+    _ctx_cloud_result 'GCP project' "$GCP_PROJECT" "$actual" || rc=1
+  fi
+  if [[ -n "${KUBE_CONTEXT:-}" ]]; then
+    actual=$(_ctx_cloud_value kubectl config current-context) || actual=""
+    _ctx_cloud_result 'Kubernetes context' "$KUBE_CONTEXT" "$actual" || rc=1
+  fi
+  return "$rc"
+}

@@ -21,8 +21,9 @@ func ClientWorkflow(w io.Writer, args []string) error {
 		}
 		return offboard(w, args[1])
 	}
-	if len(args) != 1 {
-		return errors.New("Usage: ctx explain")
+	cloud := len(args) == 2 && args[1] == "--cloud"
+	if len(args) != 1 && !cloud {
+		return errors.New("Usage: ctx explain [--cloud]")
 	}
 	cfg, err := ctxconfig.Load()
 	if err != nil {
@@ -44,6 +45,9 @@ func ClientWorkflow(w io.Writer, args []string) error {
 	}
 	name := fallbackLabel(shell, fallbackLabel(cfg.Active, folder))
 	if name == "" {
+		if cloud {
+			return errors.New("unverified: no profile selected")
+		}
 		fmt.Fprintln(w, "No profile selected. Enter a client workspace or run ctx use <profile>.")
 		return nil
 	}
@@ -78,6 +82,9 @@ func ClientWorkflow(w io.Writer, args []string) error {
 	fmt.Fprintf(w, "For live SSH and GitHub checks: ctx verify %s\n", name)
 	if shell != cfg.Active || (folder != "" && folder != name) {
 		fmt.Fprintln(w, "Selection differs across contexts. Run ctx use <intended-profile> in this terminal.")
+	}
+	if cloud {
+		return checkCloud(w, p)
 	}
 	return nil
 }

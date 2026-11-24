@@ -5,16 +5,16 @@
 Instead of tracking `main`, pin `install.sh` to a [release tag](https://github.com/Hei-Tech-Inc/ctx/tags):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Hei-Tech-Inc/ctx/v3.3.0/install.sh | bash
 ```
 
-Replace `v3.2.0` with the tag you want. Check `CTX_VERSION` in `lib/core.sh` on that tag if you need to confirm the advertised CLI version.
+Replace `v3.3.0` with the tag you want. Check `CTX_VERSION` in `lib/core.sh` on that tag if you need to confirm the advertised CLI version.
 
 ## Homebrew tap
 
 Ready-made formula and publish steps live under **[`packaging/homebrew-tap/`](homebrew-tap/)**.
 
-Publish into **`https://github.com/isaackumi/homebrew-tap`** so users can run:
+The published tap is **`https://github.com/isaackumi/homebrew-tap`**. Install with:
 
 ```bash
 brew tap isaackumi/tap
