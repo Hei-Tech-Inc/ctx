@@ -56,8 +56,8 @@
           <p class="product-type">Client context switcher</p>
           <h1 id="headline">One shell.<br />Every client<span>.</span></h1>
           <p class="lede">
-            Switch Git identities, SSH keys, and cloud profiles when you change
-            directories. Keep each client’s credentials with their workspace.
+            Switch identities with your workspace. Manage client passwords, give
+            agents scoped Kubernetes tools, and review changes before they run.
           </p>
           <div class="actions">
             <a class="primary" href="guide.html#install">Get started</a
@@ -113,6 +113,67 @@
             </dl>
           </div>
         </div>
+      </section>
+      <section class="ops-feature" aria-labelledby="ops-title">
+        <div>
+          <p class="section-label">Kubernetes operations · local MCP</p>
+          <h2 id="ops-title">Give your agent a client workspace.</h2>
+          <p>
+            Teach ctx the cluster names, namespaces, service aliases, and
+            runbooks for one client. Ask your agent to trace a request, inspect
+            a deployment, or propose a restart.
+          </p>
+          <p>
+            Read tools can investigate immediately. Change tools ask you to
+            approve the profile, target, and command through your MCP client.
+          </p>
+          <a class="text-link" href="guide.html#mcp"
+            >Configure the operations server</a
+          >
+        </div>
+        <figure>
+          <img
+            src="mcp-confirmation.png"
+            width="760"
+            height="448"
+            alt="Illustrative MCP change request in the acme profile: restart deployment/payments in nonprod, namespace app-staging. Requires operator confirmation."
+          />
+          <figcaption>
+            Example request. The confirmation interface depends on your MCP
+            client.
+          </figcaption>
+        </figure>
+      </section>
+      <section class="capabilities" aria-label="Credentials and integrations">
+        <article>
+          <p class="section-label">Native secret stores</p>
+          <h3>Passwords per profile</h3>
+          <p>
+            Store named secrets in macOS Keychain, a private file store, or
+            GPG-backed pass. Reference named keys from a cluster login without
+            putting passwords in its YAML.
+          </p>
+          <a href="guide.html#secrets">Set up password storage</a>
+        </article>
+        <article>
+          <p class="section-label">External integrations</p>
+          <h3>Vault &amp; 1Password</h3>
+          <p>
+            Keep rotation and access policy in your team’s secret manager. Use
+            Vault Agent or the 1Password CLI alongside ctx for process-level
+            credential injection.
+          </p>
+          <a href="guide.html#enterprise">Compare the workflows</a>
+        </article>
+        <article>
+          <p class="section-label">Cloudflare · remote MCP</p>
+          <h3>Docs for your agent</h3>
+          <p>
+            Connect any compatible HTTP MCP client to search and read the public
+            ctx guides. No client workspace or cluster credentials are required.
+          </p>
+          <a href="guide.html#docs-mcp">Connect the documentation MCP</a>
+        </article>
       </section>
       <section class="manual" aria-labelledby="manual-title">
         <div>

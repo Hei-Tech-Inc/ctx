@@ -2,7 +2,7 @@
 
 # ctx — client context switcher
 
-[Project website and quick start](https://ctx-client-context-switcher.littlepixie16.chatgpt.site)
+[Project website and quick start](https://ctx-workspace-guide.pages.dev)
 
 [![CI](https://github.com/Hei-Tech-Inc/ctx/actions/workflows/ci.yml/badge.svg)](https://github.com/Hei-Tech-Inc/ctx/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Hei-Tech-Inc/ctx?label=release)](https://github.com/Hei-Tech-Inc/ctx/releases)
@@ -243,6 +243,8 @@ It needs `ctx-core`, the Go binary that `install.sh`, `ctx upgrade` and the Home
 #### ctx-core in everyday commands
 
 `ctx mcp` and `ctx knowledge` always run in `ctx-core` and error if it is missing. **Every other command also runs in `ctx-core` when it is installed**, for speed, and falls back to the Bash implementation silently when it is not; their output is unchanged except for the bug fixes listed in the CHANGELOG. That covers `list`, `status`, `use`, `deactivate`, `remove` (`rm`, `del`), `secret`, `config`, `guard`, `env`, `run`, `workdir-prompt`, `setup` (with `import`, `add`, `--config`, `--scope`, `--extend`, `--dry-run`, `--help`), `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `help`, `completion` and `version`. Set `CTX_CORE=off` to force Bash; the Bash fallback stays until phase E6 drops it. In a terminal (stdin and stdout both terminals, `CTX_NO_GUM` not `1`, no `--no-gum`) `ctx-core` draws the rich UI itself (lipgloss/huh), so **gum is optional** when `ctx-core` is installed; the Bash fallback still uses gum if present. Piped output is plain. The shell autoswitch hook also runs in `ctx-core` (`ctx activate` and `ctx hook-env`, see **Auto-switch**); with `CTX_CORE=off` or without `ctx-core` the Bash/fish hook runs.
+
+The public [documentation MCP](https://ctx-workspace-guide.pages.dev/guide.html#docs-mcp) supports `search_guides` and `read_guide` over Streamable HTTP. To connect, use `https://ctx-workspace-guide.pages.dev/mcp`. Use the local server below for client operations.
 
 #### 1. Describe the client
 

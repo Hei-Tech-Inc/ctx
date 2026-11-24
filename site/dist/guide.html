@@ -46,6 +46,10 @@
           ><a href="#clone">Clone with GitHub</a
           ><a href="#automation">Run commands and scripts</a
           ><a href="#troubleshoot">Troubleshoot activation</a>
+          <a href="#mcp">Kubernetes with MCP</a
+          ><a href="#secrets">Passwords and secret stores</a
+          ><a href="#enterprise">Vault and 1Password</a
+          ><a href="#docs-mcp">Connect the documentation MCP</a>
         </nav>
         <a class="asset" href="ctx-logo.png" download="ctx-logo.png"
           >Download ctx logo</a
@@ -282,6 +286,226 @@ ctx secret list acme</code></pre>
           <a class="next" href="#troubleshoot"
             >Next guide · Troubleshoot activation</a
           >
+        </article>
+        <article id="mcp" tabindex="-1">
+          <p class="category">Agent operations</p>
+          <h2>Kubernetes with MCP</h2>
+          <p class="intro">
+            The local ctx MCP server gives an agent tools for one client’s
+            clusters, namespaces, services, and runbooks. It uses ctx-core, the
+            client’s login procedure, and the kubectl installed on the
+            operator’s machine.
+          </p>
+          <section>
+            <h3>Initialize client knowledge</h3>
+            <p>
+              Inside your client workspace, create the knowledge directory. Edit
+              clusters.yaml to describe login, environments.yaml to map names to
+              a cluster and namespace, and services.yaml to map aliases to
+              workloads. Recipes live in recipes/ and operator scripts in
+              scripts/.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx knowledge init acme</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Register a local agent</h3>
+            <p>
+              Choose the command for your MCP client. Start a new agent session
+              in the client workspace. Folder scope determines the profile;
+              outside a matching folder only client_context is offered. Adding a
+              root that changes the client scope disables the session’s scoped
+              tools and stops its port-forwards.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx mcp install claude
+# Or, for Cursor:
+ctx mcp install cursor</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Use a cluster password</h3>
+            <p>
+              Store the value with the interactive secret prompt. List
+              CLUSTER_PASSWORD under the cluster’s login.secrets and reference
+              the variable in the operator-defined login command. For an
+              existing kubeconfig login, specify both its path and context.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx secret set acme CLUSTER_PASSWORD</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Investigate a service</h3>
+            <p>
+              Start with client_context. Use login, discover_services, logs,
+              trace, describe_service and kubectl_read to investigate the
+              selected environment. search_knowledge and get_recipe retrieve
+              client guidance. activity shows earlier operations. For example,
+              ask your agent to trace a request ID through two named services in
+              staging.
+            </p>
+          </section>
+          <section>
+            <h3>Approve a change</h3>
+            <p>
+              restart, network_test, port_forward, kubectl_change, save_recipe,
+              save_service and save_script ask for confirmation through the MCP
+              host. Review the profile, environment, cluster, namespace and
+              exact action. Protected environments require the canonical
+              environment name. If the host cannot prompt, ctx returns a manual
+              command and skips execution.
+            </p>
+          </section>
+          <section>
+            <h3>Review what was recorded</h3>
+            <p>
+              Inspect activity.jsonl and exports/ under the client knowledge
+              directory. Configured profile and cluster login secret values are
+              redacted in tool output and activity. Kubernetes Secret data and
+              stringData are masked. Treat exported application logs as client
+              data; applications can contain other sensitive content.
+            </p>
+          </section>
+        </article>
+        <article id="secrets" tabindex="-1">
+          <p class="category">Credentials</p>
+          <h2>Passwords and secret stores</h2>
+          <p class="intro">
+            A profile records secret key names. The selected provider stores
+            their values. Choose the provider before adding secrets so you know
+            where credentials will be read and written.
+          </p>
+          <section>
+            <h3>Choose a native provider</h3>
+            <p>
+              auto selects the platform default. Keychain uses macOS Keychain.
+              The file provider stores one file per key under
+              ~/.ctx/secrets/&lt;profile&gt;/ with mode 0600; use disk
+              encryption. The pass provider uses the Unix GPG password store at
+              ctx/&lt;profile&gt;/&lt;KEY&gt;. Initialize pass with your own GPG
+              identity before selecting it.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx config secret-provider pass
+ctx doctor</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Set and inspect a key</h3>
+            <p>
+              Enter the password at the prompt. list prints names; get prints
+              the value and is best kept out of logs and recordings. For
+              setup-managed injection, include the intended key name in the
+              profile’s SECRET_KEYS. The cluster login can separately declare
+              required keys in login.secrets.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx secret set acme CLUSTER_PASSWORD
+ctx secret list acme</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Migrate a profile’s values</h3>
+            <p>
+              Migration copies values between native providers on the machine.
+              For example, copy from file storage into an initialized pass
+              store, then select pass and verify the profile’s keys. The copy
+              operation and provider selection are separate steps.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx secret migrate acme pass file
+ctx config secret-provider pass
+ctx secret list acme</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Move to another laptop</h3>
+            <p>
+              Export/import carries profile and identity configuration. Restore
+              secret values separately from your chosen provider, provision the
+              required SSH keys, then verify the imported profile.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx config export ~/ctx-migration
+# On the destination machine:
+ctx config import ~/ctx-migration
+ctx doctor</code></pre>
+            </div>
+          </section>
+        </article>
+        <article id="enterprise" tabindex="-1">
+          <p class="category">Credentials</p>
+          <h2>Vault and 1Password</h2>
+          <p class="intro">
+            Vault and 1Password can supply credentials alongside ctx. Native ctx
+            storage choices are Keychain, file, and pass, with auto selecting a
+            default. The Unix pass store is a separate product from 1Password.
+          </p>
+          <section>
+            <h3>Use 1Password with a process</h3>
+            <p>
+              Let ctx select the client identity and let the 1Password CLI
+              resolve its own references. Prepare a local dotenv file containing
+              references such as SERVICE_TOKEN=op://Client/Service/token and use
+              the vault, item, and field names from your account. Replace
+              your-command with your application.
+            </p>
+            <div class="snippet">
+              <pre><code>ctx run -p acme -- op run --env-file=./references.env -- your-command</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Use HashiCorp Vault</h3>
+            <p>
+              Authenticate to Vault using your team’s existing method. Vault
+              Agent can render a restricted application configuration file, or a
+              CI job can retrieve values for its child process. Run the
+              application with ctx for its client identity. Avoid configuring
+              the same variable in both sources so precedence is explicit.
+            </p>
+          </section>
+          <section>
+            <h3>Understand reference handling</h3>
+            <p>
+              Writing an op:// URI or a Vault path with ctx secret set stores
+              that literal text. ctx does not authenticate to those services or
+              resolve those references. Use the external tool for retrieval,
+              rotation and audit. For ctx-managed Kubernetes logins, supply keys
+              using a supported local provider.
+            </p>
+          </section>
+        </article>
+        <article id="docs-mcp" tabindex="-1">
+          <p class="category">Hosted documentation</p>
+          <h2>Connect the documentation MCP</h2>
+          <p class="intro">
+            Use the public Cloudflare endpoint to search this guide from an MCP
+            client. The hosted service reads published documentation. Cluster
+            login, client knowledge, credentials, and change approvals belong to
+            the separate local ctx mcp server.
+          </p>
+          <section>
+            <h3>Add the remote endpoint</h3>
+            <p>
+              Choose a remote HTTP MCP server in your client and enter the URL
+              below. In Claude Code you can register it with this command. No
+              client profile or cluster password is needed.
+            </p>
+            <div class="snippet">
+              <pre><code>claude mcp add --transport http ctx-docs https://ctx-workspace-guide.pages.dev/mcp</code></pre>
+            </div>
+          </section>
+          <section>
+            <h3>Search or read a chapter</h3>
+            <p>
+              Call search_guides with a query such as “Vault”, “trace”, or
+              “SSH”. Use a returned chapter ID with read_guide to retrieve the
+              complete guide. For example, read mcp for local operator setup or
+              enterprise for external secret managers.
+            </p>
+          </section>
         </article>
         <article id="troubleshoot" tabindex="-1">
           <p class="category">Support</p>

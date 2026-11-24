@@ -1,0 +1,12 @@
+{
+  "name": "ctx-documentation",
+  "version": "1.0.0",
+  "scripts": {},
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  },
+  "private": true,
+  "type": "module"
+}

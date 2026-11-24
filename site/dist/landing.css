@@ -445,3 +445,54 @@ footer .brand {
     gap: 12px;
   }
 }
+
+.ops-feature,
+.capabilities {
+  border-top: 1px solid var(--rule);
+  padding: clamp(36px, 5vw, 72px) 0;
+  display: grid;
+  gap: clamp(26px, 4vw, 64px);
+  align-items: center;
+}
+.ops-feature {
+  grid-template-columns: 0.95fr 1.05fr;
+}
+.ops-feature figure {
+  margin: 0;
+}
+.ops-feature img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+.ops-feature figcaption {
+  color: var(--sub);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+.ops-feature p:not(.section-label),
+.capabilities article > p:not(.section-label) {
+  color: var(--sub);
+  max-width: 54ch;
+}
+.capabilities {
+  grid-template-columns: repeat(3, 1fr);
+  align-items: start;
+}
+.capabilities h3 {
+  font: 650 clamp(24px, 2.3vw, 36px) / 1.08 var(--display);
+  letter-spacing: -0.035em;
+  margin: 0;
+}
+.capabilities a {
+  color: var(--accent);
+  text-underline-offset: 4px;
+  font-weight: 600;
+}
+@media (max-width: 760px) {
+  .ops-feature,
+  .capabilities {
+    grid-template-columns: 1fr;
+  }
+}
