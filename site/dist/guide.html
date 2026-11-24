@@ -46,6 +46,10 @@
           ><a href="#clone">Clone with GitHub</a
           ><a href="#automation">Run commands and scripts</a
           ><a href="#troubleshoot">Troubleshoot activation</a>
+          <a href="#cloud">Cloud accounts and clusters</a>
+          <a href="#agent-workflow">Scripts and repository agent rules</a>
+          <a href="#inventory">Dashboard and live checks</a>
+          <a href="#migration">Repeatable setup and migration</a>
           <a href="#mcp">Kubernetes with MCP</a
           ><a href="#secrets">Passwords and secret stores</a
           ><a href="#enterprise">Vault and 1Password</a
@@ -286,6 +290,71 @@ ctx secret list acme</code></pre>
           <a class="next" href="#troubleshoot"
             >Next guide · Troubleshoot activation</a
           >
+        </article>
+        <article id="cloud" tabindex="-1">
+          <h2>Cloud accounts and clusters</h2>
+          <section>
+            <h3>Activate a client workspace</h3>
+            <p>Configure cloud accounts during setup, or extend an existing profile. Activating it applies the configured AWS profile, Azure subscription, Google Cloud project and account, and kubectl context. Check the active context before working on a cluster.</p>
+            <div class="snippet"><pre><code>ctx setup --extend acme
+ctx use acme
+kubectl config current-context</code></pre></div>
+          </section>
+          <section>
+            <h3>Run one cloud command</h3>
+            <p>Use a named profile to run the AWS CLI with that profile’s AWS environment. For a single kubectl process, supply the context explicitly. Replace acme-dev with the context from your own kubeconfig.</p>
+            <div class="snippet"><pre><code>ctx run -p acme -- aws sts get-caller-identity
+ctx run -p acme -- kubectl --context acme-dev get namespaces</code></pre></div>
+          </section>
+        </article>
+        <article id="agent-workflow" tabindex="-1">
+          <h2>Scripts and repository agent rules</h2>
+          <section>
+            <h3>Scope a single process</h3>
+            <p>Run a tool with the profile’s Git author, SSH identity, GitHub credentials and configured cloud variables. Use the folder’s profile by default or pick one by name.</p>
+            <div class="snippet"><pre><code>ctx run -p acme -- git var GIT_AUTHOR_IDENT</code></pre></div>
+          </section>
+          <section>
+            <h3>Give agents repository instructions</h3>
+            <p>Preview the instructions, then use --write in the repository to add the managed section to AGENTS.md. It tells agents how to check identity, scope credentialed commands and respond to a blocked commit.</p>
+            <div class="snippet"><pre><code>ctx agent-rules
+ctx agent-rules --write</code></pre></div>
+          </section>
+        </article>
+        <article id="inventory" tabindex="-1">
+          <h2>Dashboard and live checks</h2>
+          <section>
+            <h3>Compare client profiles</h3>
+            <p>The dashboard shows each client’s workspace, active state, Git identity, SSH key path and configured integrations from saved profile metadata.</p>
+            <div class="snippet"><pre><code>ctx dashboard</code></pre></div>
+          </section>
+          <section>
+            <h3>Verify one profile or diagnose the machine</h3>
+            <p>Use verify for a live SSH and GitHub identity check on one client. Use doctor to inspect installed tools, shell hooks and profile setup across the machine. Both commands support JSON for scripts.</p>
+            <div class="snippet"><pre><code>ctx verify acme
+ctx doctor --json</code></pre></div>
+          </section>
+        </article>
+        <article id="migration" tabindex="-1">
+          <h2>Repeatable setup and migration</h2>
+          <section>
+            <h3>Preview a repeatable setup</h3>
+            <p>Prepare a KEY=value configuration using examples/setup.noninteractive.conf.example in the project repository. Preview the changes before applying the same configuration without prompts.</p>
+            <div class="snippet"><pre><code>ctx setup --config setup.conf --dry-run
+ctx setup --config setup.conf -y</code></pre></div>
+          </section>
+          <section>
+            <h3>Export on the old machine</h3>
+            <p>Export profiles, Git identities and ctx SSH host configuration to a directory. Transfer that directory to the new machine. Restore SSH keys and secret values separately.</p>
+            <div class="snippet"><pre><code>ctx config export ~/ctx-migration</code></pre></div>
+          </section>
+          <section>
+            <h3>Import on the new machine</h3>
+            <p>Import the bundle from its new location, restore the credentials with your configured provider, and check that workspace paths and accounts match this machine.</p>
+            <div class="snippet"><pre><code>ctx config import ~/ctx-migration
+ctx doctor
+ctx verify acme</code></pre></div>
+          </section>
         </article>
         <article id="mcp" tabindex="-1">
           <p class="category">Agent operations</p>
