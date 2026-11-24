@@ -19,6 +19,12 @@ Profiles auto-activate when you `cd` into a client directory.
 
 ---
 
+## Profile overview and diagnostics
+
+Run `ctx dashboard` to see each profile’s active state, workspace, Git identity, SSH key path, and cloud integrations together. The dashboard reads profile metadata only.
+
+Run `ctx --json doctor` for machine checks or `ctx --json verify acme` for a profile. Both return a diagnostic envelope with integer `version: 1`, a `command` name, and a `checks` array. Each check has a `level` (`pass`, `warning`, or `error`) and a human-readable `message`. Verify exits 1 if a check fails. Doctor reports warnings with exit status 0.
+
 ## How it works
 
 1. `ctx setup` — interactive wizard with onboarding modes: use current directory (default), provide an existing path, or create a new client folder; it can import existing SSH/GitHub/cloud references or run fully manual
@@ -68,6 +74,13 @@ Notes for WSL users:
 ---
 
 ## Installation
+
+Use the full installer for a first setup. Choose Homebrew if you already manage your shell tools separately.
+
+| Installation method | What it installs | After installation |
+| --- | --- | --- |
+| `install.sh` | The CLI, shell libraries, available `ctx-core` binary, and supporting tools | Reload the shell, then run `ctx setup` |
+| Homebrew formula | The CLI, shell libraries, and a locally built `ctx-core` | Install the integrations you need, then run `ctx init` and `ctx doctor` |
 
 ### One-liner
 

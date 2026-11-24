@@ -16,15 +16,15 @@ Update this file when an item ships (check the box, link PR or commit).
 |----|------|------|--------|------------|
 | A1 | Unit tests for **directory → profile** resolution (`ctx_resolve_path_profile`) | S | [x] | `test/test.sh` covers nested `WORK_DIR`, `.ctx` override, no match |
 | A2 | **Golden / fixture** test for `generate_mise_toml` minimal output | S | [x] | Deterministic `mise.toml` matches `test/fixtures/mise_generated_minimal.toml` |
-| A3 | Integration tests for **`ctx setup`** / real **`git clone`** | M | [ ] | CI job with temp `HOME`, scripted non-interactive setup, clone smoke |
-| A4 | Snapshot or contract tests for **`~/.ctx/config`** writes and SSH include snippets | M | [ ] | Fixtures + diff on representative mutations |
+| A3 | Integration tests for **`ctx setup`** / real **`git clone`** | M | [x] | [Setup and offline clone smoke test](../../test/test.sh) runs in CI with a temporary `HOME` in Go and Bash modes |
+| A4 | Snapshot or contract tests for **`~/.ctx/config`** writes and SSH include snippets | M | [x] | [Golden files](../../test/fixtures/) cover config key replacement and append, SSH include placement, and the managed host entry |
 
 ## Phase B — CLI ergonomics & automation
 
 | ID | Item | Size | Status | Acceptance |
 |----|------|------|--------|------------|
 | B1 | **`ctx --json list`** and **`ctx --json status`** (machine-readable) | S | [x] | Documented schema version field; stable keys; works with `-q` |
-| B2 | Extend **`--json`** to **`ctx list`**-style data from **`verify`** / **`doctor`** (optional) | M | [ ] | Opt-in; no breaking change to default TTY output |
+| B2 | Extend **`--json`** to **`ctx list`**-style data from **`verify`** / **`doctor`** (optional) | M | [x] | Opt-in; no breaking change to default TTY output |
 | B3 | **Hook hardening**: idempotent bash `PROMPT_COMMAND` (no duplicate autoswitch prefix) | S | [x] | Strip `_ctx_profile_autoswitch` / legacy `_ctx_auto_switch` before prepend |
 | B4 | **`ctx guard`**: git hooks that block wrong-identity commits and wrong-alias pushes | S | [x] | `test_guard_git_hooks`: email mismatch blocked, chaining to `.git/hooks`, bypass, uninstall, refuses foreign `core.hooksPath` |
 | B5 | **Per-terminal `GH_TOKEN`** in the autoswitch hook instead of global `gh auth switch` | S | [x] | Hook test: token per profile, cleared outside, user `GH_TOKEN` untouched |
@@ -39,7 +39,7 @@ Update this file when an item ships (check the box, link PR or commit).
 | C1 | **`AGENTS.md`** for AI / agent contributors | S | [x] | Points here + CONTRIBUTING + test/shellcheck commands |
 | C2 | **Runbooks** (`docs/runbooks/`) | S | [x] | Common failures: SSH include, wrong profile, post–force-push clone |
 | C3 | **Positioning** (`docs/positioning.md`): ctx vs direnv-only vs raw mise | S | [x] | Clear “when to use” table |
-| C4 | README table: **Homebrew formula vs `install.sh`** (what each installs) | S | [ ] | Single obvious path for new users |
+| C4 | README table: **Homebrew formula vs `install.sh`** (what each installs) | S | [x] | Single obvious path for new users |
 
 ## Phase D — Platform & enterprise (explicit deferrals)
 
@@ -60,7 +60,7 @@ Update this file when an item ships (check the box, link PR or commit).
 | E4b | `setup` wizard with its `import`/`add` aliases, plus `Ask`/`PickOne`/`Spin` | L | [x] | `internal/setup`, `internal/gitssh`, `internal/shquote`; `--extend` fixed |
 | E4c | Remaining Bash-only commands: `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `completion`, `help`, `version` | L | [x] | `internal/ghacct`, `internal/atomicfile`; fixes listed in CHANGELOG; Bash stays as fallback |
 | E5 | Shell hook via `ctx activate` / `ctx hook-env` | M | [x] | `internal/hookenv`; `lib/ctx_autoswitch.*` are shims that run `ctx activate`; switch ~68 ms to ~9 ms, unchanged prompt ~2 ms to 0.04 ms with no fork (`scripts/bench-hook.sh`) |
-| E6 | Drop Bash | L | [ ] | Needs a new version source (today `CTX_VERSION` in `lib/core.sh`, also read by `upgrade --check`); `install.sh` file list (no `lib/*.sh`) |
+| E6 | Drop Bash | L | [ ] | Deferred by maintainer. Preserve the supported Bash fallback. The standalone Go entry point and VERSION file have landed. |
 
 Notes for E6 (from E5):
 
@@ -75,9 +75,9 @@ Notes for E6 (from E5):
 
 | Item | Notes |
 |------|-------|
-| Profile dashboard | A comprehensive, intuitive visual view of profiles, opened by a command (for example a `ctx dashboard` TUI) or something better. |
-| ctx logo | A logo for the project. |
-| Project website | Modeled on https://go-tui.dev/: simple and clean, with docs and its color palette as the reference; ctx's own branding and copy. |
+| Profile dashboard | [x] `ctx dashboard` in Go and Bash |
+| ctx logo | [x] [Project mark](../../site/dist/ctx.png) |
+| Project website | [x] [Installation and profile guide](../../site/dist/index.html) |
 
 ---
 
