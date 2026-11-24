@@ -239,8 +239,9 @@ _ctx_deactivate_emit_unsets() {
       printf 'set -e CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER\n'
       printf 'set -e CTX_PROMPT_SHOW CTX_PROMPT_PROFILE CTX_PROMPT_WORK_DIR\n'
       if [[ -n "$wd" ]]; then
-        local qwd
-        qwd="${wd//\'/\'\\\'\'}"
+        local qwd slash='\' quote="'"
+        qwd=${wd//"$slash"/"$slash$slash"}
+        qwd=${qwd//"$quote"/"$slash$quote"}
         printf "set -l __ctx_wd '%s'\n" "$qwd"
         printf '%s\n' 'if string match "$__ctx_wd/*" "$PWD" >/dev/null 2>&1; or test "$PWD" = "$__ctx_wd"'
         printf '%s\n' '  git config --unset user.name 2>/dev/null; or true'
@@ -503,6 +504,31 @@ cmd_status() {
 }
 
 # ─── list ─────────────────────────────────────────────────────────────────────
+cmd_dashboard() {
+  ctx_init_dirs
+  local f name current marker found=false
+  current="$(active_profile)"
+  printf 'PROFILE DASHBOARD\n'
+  for f in "$CTX_PROFILES_DIR"/*.conf; do
+    [[ -f "$f" ]] || continue
+    found=true
+    name="$(basename "$f" .conf)"
+    marker=""
+    [[ "$name" != "$current" ]] || marker='  [active]'
+    (
+      unset WORK_DIR GIT_NAME GIT_EMAIL GITHUB_USER SSH_KEY_PATH AWS_PROFILE_NAME AZURE_SUBSCRIPTION GCP_PROJECT KUBE_CONTEXT
+      # shellcheck source=/dev/null
+      source "$f" || exit 1
+      printf '\n%s%s\n' "$name" "$marker"
+      printf '  Workspace   %s\n  Git         %s <%s>\n  GitHub      %s\n  SSH key     %s\n' \
+        "${WORK_DIR:-—}" "${GIT_NAME:-—}" "${GIT_EMAIL:-—}" "${GITHUB_USER:-—}" "${SSH_KEY_PATH:-—}"
+      printf '  AWS         %s\n  Azure       %s\n  GCP         %s\n  Kubernetes  %s\n' \
+        "${AWS_PROFILE_NAME:-—}" "${AZURE_SUBSCRIPTION:-—}" "${GCP_PROJECT:-—}" "${KUBE_CONTEXT:-—}"
+    ) || return 1
+  done
+  $found || printf 'No profiles yet. Run: ctx setup\n'
+}
+
 cmd_list() {
   if [[ "${CTX_JSON:-0}" == "1" ]]; then
     ctx_init_dirs
@@ -1038,6 +1064,28 @@ _ctx_gh_active_account() {
       if (!known && n > 0) print user[1]
     }'
 }
+
+# FD 3 carries structured check records while headings and hints are discarded.
+cmd_diagnostic_json() (
+  local cmd="$1" rc=0 records sep="" message
+  shift
+  records="$(
+    _record() { printf '{"level":"%s","message":"%s"}\n' "$1" "$(ctx_json_escape "$2")" >&3; }
+    success() { _record pass "$*"; }
+    warn() { _record warning "$*"; }
+    error() { _record error "$*"; }
+    HAS_GUM=false
+    "cmd_$cmd" "$@" 3>&1 >/dev/null
+  )" || rc=$?
+  printf '{"version":1,"command":"%s","checks":[' "$cmd"
+  while IFS= read -r message; do
+    [[ -n "$message" ]] || continue
+    printf '%s%s' "$sep" "$message"
+    sep=,
+  done <<<"$records"
+  printf ']}\n'
+  return "$rc"
+)
 
 cmd_verify() {
   local name="${1:-}"

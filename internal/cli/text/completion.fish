@@ -4,14 +4,14 @@ end
 
 complete -c ctx -f
 
-complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
+complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status, verify, doctor)'
 complete -c ctx -n '__fish_use_subcommand' -l dry-run -d 'Preview without writing files'
 complete -c ctx -n '__fish_use_subcommand' -s q -l quiet -d 'Suppress output'
 complete -c ctx -n '__fish_use_subcommand' -l no-gum -d 'Plain prompts'
 complete -c ctx -n '__fish_use_subcommand' -s v -l version -d 'Print version'
 complete -c ctx -n '__fish_use_subcommand' -s h -l help -d 'Show help'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall remove check'

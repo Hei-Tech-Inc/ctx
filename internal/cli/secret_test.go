@@ -284,6 +284,7 @@ func TestSecretSetCancelled(t *testing.T) {
 
 func TestSecretSetRich(t *testing.T) {
 	h := newSecretHarness(t)
+	h.p.Setenv("TERM", "xterm-256color")
 	h.install()
 	h.setup()
 	var o, e bytes.Buffer

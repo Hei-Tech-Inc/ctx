@@ -52,7 +52,7 @@ var ctxCommands = map[string]bool{
 	"clone": true, "workdir-prompt": true, "config": true, "secret": true, "verify": true,
 	"edit": true, "remove": true, "undo": true, "install-hook": true, "upgrade": true,
 	"uninstall": true, "doctor": true, "guard": true, "env": true, "run": true,
-	"agent-rules": true, "completion": true, "help": true, "mcp": true, "knowledge": true,
+	"dashboard": true, "agent-rules": true, "completion": true, "help": true, "mcp": true, "knowledge": true,
 }
 
 // ownsInterrupt are the commands that handle SIGINT themselves (a cancel

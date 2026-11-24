@@ -127,7 +127,7 @@ func DeactivateUnsets(p *profile.Profile, fish bool, wd string) string {
 		line("set -e CTX_ACTIVE_PROFILE CTX_ACTIVATION_TRIGGER")
 		line("set -e CTX_PROMPT_SHOW CTX_PROMPT_PROFILE CTX_PROMPT_WORK_DIR")
 		if wd != "" {
-			line("set -l __ctx_wd '%s'", strings.ReplaceAll(wd, "'", `'\''`))
+			line("set -l __ctx_wd %s", fishQuote(wd))
 			line(`if string match "$__ctx_wd/*" "$PWD" >/dev/null 2>&1; or test "$PWD" = "$__ctx_wd"`)
 			line("  git config --unset user.name 2>/dev/null; or true")
 			line("  git config --unset user.email 2>/dev/null; or true")

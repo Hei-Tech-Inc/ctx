@@ -145,6 +145,7 @@ func richKeys(t *testing.T, keys string) Term {
 }
 
 func TestRichAskPickOne(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	for _, c := range []struct {
 		in, def, want string
 	}{

@@ -418,6 +418,7 @@ ctx_json_escape() {
       $'\n') out+='\n' ;;
       $'\r') out+='\r' ;;
       $'\t') out+='\t' ;;
+      [[:cntrl:]]) printf -v c '\\u%04x' "'$c"; out+="$c" ;;
       *) out+="$c" ;;
     esac
   done

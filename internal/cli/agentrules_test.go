@@ -64,7 +64,7 @@ func (e *arEnv) seed(t *testing.T, repo bool, tweak func(home string)) {
 		t.Fatal(err)
 	}
 	if repo {
-		cmd := exec.Command("git", "init", "-q")
+		cmd := exec.Command(testutil.SystemTool("git"), "-c", "init.defaultBranch=main", "init", "--template=", "-q")
 		cmd.Dir = e.cwd
 		cmd.Env = e.p.Environ()
 		if out, err := cmd.CombinedOutput(); err != nil {

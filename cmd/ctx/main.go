@@ -28,7 +28,7 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|status|workdir-prompt|env|run|secret|config|deactivate|activate|hook-env|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor|install-hook|init|upgrade> [args]\n"
+const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|dashboard|list|status|workdir-prompt|env|run|secret|config|deactivate|activate|hook-env|use|remove|setup|guard|agent-rules|edit|undo|uninstall|verify|clone|doctor|install-hook|init|upgrade> [args]\n"
 
 // implemented is the single table of commands ctx-core runs instead of Bash.
 // Each entry gets the arguments after the command and reports whether
@@ -36,6 +36,7 @@ const usage = "usage: ctx-core <version|help|completion|mcp|knowledge|list|statu
 // subcommand or flag; "" when absent). Later tasks flip entries to true.
 // list and status take no subcommand besides --json; guard for every subcommand.
 var implemented = map[string]func(args []string) bool{
+	"dashboard":      func([]string) bool { return true },
 	"list":           func(a []string) bool { return first(a) == "" || first(a) == "--json" },
 	"status":         func(a []string) bool { return first(a) == "" || first(a) == "--json" },
 	"workdir-prompt": func([]string) bool { return true },
@@ -127,6 +128,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "ctx-core %s\n", version)
 		return 0
+	case "dashboard":
+		return cli.Dashboard(stdout)
 	case "list", "status":
 		return runListStatus(args, stdout, stderr)
 	case "workdir-prompt":

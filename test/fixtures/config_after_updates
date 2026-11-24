@@ -1,0 +1,5 @@
+# user settings
+autoswitch_notify=on
+
+work_root=/work
+secret_provider=file
