@@ -208,7 +208,7 @@ func fullCases() []cloneCase {
 	}
 }
 
-var mkdirErrRE = regexp.MustCompile(`mkdir: [^\n]*: File exists\n`)
+var mkdirErrRE = regexp.MustCompile(`mkdir: (?:[^\n]*: File exists|Already exists)\n`)
 
 func seedBatchConf(t *testing.T, home string) {
 	seedFile(t, home, "b.conf", "PROFILE_NAME=acme\nGIT_NAME=Dev\nGIT_EMAIL=dev@acme.com\nWORK_MODE=current\n"+
