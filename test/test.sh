@@ -3061,6 +3061,36 @@ test_installer_runs_install_hook() {
   pass "install.sh installs the hook with the installed ctx install-hook"
 }
 
+test_installer_requires_release_checksum() {
+  (
+    local td asset digest manifest
+    td="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$td"' EXIT
+    CTX_INSTALL_SOURCE_ONLY=1 source "$ROOT_DIR/install.sh"
+    OS=Linux ARCH=amd64
+    CTX_RELEASE_BASE="file://$td"
+    asset=ctx-core_linux_amd64
+    mkdir "$td/v1"
+    printf 'fixture' >"$td/v1/$asset"
+    digest="$(_sha256_of "$td/v1/$asset")"
+    wget() { return 1; }
+    for manifest in missing unlisted mismatch valid; do
+      case "$manifest" in
+        missing) ;;
+        unlisted) printf '%s  another-file\n' "$digest" >"$td/v1/checksums.txt" ;;
+        mismatch) printf '%064d  %s\n' 0 "$asset" >"$td/v1/checksums.txt" ;;
+        valid) printf '%s  %s\n' "$digest" "$asset" >"$td/v1/checksums.txt" ;;
+      esac
+      if _download_ctx_core "$td/core" 1; then
+        [[ "$manifest" == valid ]] && cmp "$td/core" "$td/v1/$asset" || exit 1
+      else
+        [[ "$manifest" != valid && ! -e "$td/core" ]] || exit 1
+      fi
+    done
+  ) || fail "release download requires matching SHA-256"
+  pass "release download requires matching SHA-256"
+}
+
 # install.sh downloads bin and lib from CTX_REPO when the environment sets it
 # (ctx upgrade exports it for CTX_UPGRADE_REPO and forks).
 test_installer_honors_ctx_repo() {
@@ -3191,6 +3221,7 @@ test_uninstall_refuses_unsafe_paths
 test_install_hook_keeps_rc
 test_rc_writes_checked
 test_installer_runs_install_hook
+test_installer_requires_release_checksum
 test_installer_honors_ctx_repo
 test_temp_guard_restores_traps
 test_upgrade_dry_run_and_temp_cleanup
