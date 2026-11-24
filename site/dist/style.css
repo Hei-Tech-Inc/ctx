@@ -1,12 +1,18 @@
+@font-face {
+  font-family: Bricolage;
+  src: url(fonts/bricolage.ttf) format("truetype");
+  font-weight: 200 800;
+  font-display: swap;
+}
 :root {
-  color-scheme: dark;
-  --paper: #22231e;
-  --panel: #2c2d26;
-  --line: #54564a;
-  --ink: #fafaf1;
-  --muted: #babcaf;
-  --cyan: #66d9ef;
-  --lime: #b5e16a;
+  color-scheme: light;
+  --paper: #f6f6f0;
+  --panel: #eaece4;
+  --line: #c8cfc4;
+  --ink: #17211b;
+  --muted: #465248;
+  --cyan: #356542;
+  --lime: #43764b;
   font:
     16px/1.55 "DM Sans",
     system-ui,
@@ -57,7 +63,10 @@ nav .brand {
   align-items: center;
   gap: 7px;
   margin-right: auto;
-  font: bold 28px monospace;
+  font:
+    800 32px Bricolage,
+    system-ui,
+    sans-serif;
 }
 .brand img {
   width: 42px;
@@ -74,7 +83,8 @@ h1,
 h2,
 h3 {
   line-height: 1.05;
-  letter-spacing: -0.05em;
+  font-family: Bricolage, system-ui, sans-serif;
+  letter-spacing: -0.04em;
   margin: 0;
 }
 h1 {

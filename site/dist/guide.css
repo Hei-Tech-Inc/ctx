@@ -70,7 +70,7 @@
   align-items: flex-start;
 }
 .snippet pre {
-  color: var(--lime);
+  color: #c8f878;
   flex: 1;
   min-width: 0;
 }
