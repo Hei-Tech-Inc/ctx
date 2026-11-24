@@ -3182,6 +3182,57 @@ test_client_workflows() (
   pass "client identity explanation and read-only offboarding"
 )
 
+test_organize_existing_repos() (
+  local td name repo out bin="$ROOT_DIR/bin/ctx"
+  td=$(mktemp -d)
+  trap 'rm -rf "$td"' EXIT
+  export HOME="$td" CTX_DIR="$td/.ctx" GIT_CONFIG_GLOBAL="$td/.gitconfig" GIT_CONFIG_NOSYSTEM=1
+  unset CTX_ACTIVE_PROFILE GIT_AUTHOR_EMAIL GIT_COMMITTER_EMAIL GIT_DIR GIT_WORK_TREE
+  mkdir -p "$CTX_DIR/profiles" "$HOME/.config/git"
+  for name in acme orbit; do
+    printf 'GIT_EMAIL=%s@example.test\n' "$name" > "$CTX_DIR/profiles/$name.conf"
+    printf '[user]\n name = Demo\n email = %s@example.test\n' "$name" > "$HOME/.config/git/ctx-$name"
+  done
+  for repo in 'old apps' billing unknown; do git init -q "$td/work/$repo"; done
+  git -C "$td/work/old apps" remote add origin https://demo-password@github.com/acme/api.git
+  git -C "$td/work/billing" remote add origin git@github-orbit:team/billing.git
+  out=$("$bin" organize "$td/work")
+  [[ "$out" == *'GitHub owner acme'* && "$out" == *'SSH alias github-orbit'* && "$out" == *'Needs review'* && "$out" != *demo-password* ]] || fail "inventory evidence or redaction"
+  "$bin" --dry-run organize adopt acme "$td/work/old apps" >/dev/null
+  [[ ! -e "$CTX_DIR/projects" && ! -e "$GIT_CONFIG_GLOBAL" ]] || fail "organize preview wrote files"
+  "$bin" organize adopt acme "$td/work/old apps" >/dev/null
+  "$bin" organize adopt orbit "$td/work/billing" >/dev/null
+  "$bin" organize adopt acme "$td/work/old apps" >/dev/null
+  if "$bin" organize adopt orbit "$td/work/old apps" >/dev/null 2>&1; then fail "unexpected reassignment"; fi
+  mkdir "$td/work/old apps/sub"
+  cd "$td/work/old apps/sub" || exit 1
+  out=$("$bin" explain)
+  [[ "$out" == *' -> acme'* && "$out" == *'Live Git AUTHOR: acme@example.test'* ]] || fail "adopted identity in subdirectory"
+  cd "$td/work/billing" || exit 1
+  out=$("$bin" explain)
+  [[ "$out" == *' -> orbit'* && "$out" == *'Live Git AUTHOR: orbit@example.test'* ]] || fail "second adopted client"
+  printf 'profile=acme\n' > "$td/work/unknown/.ctx"
+  cd "$td/work/unknown" || exit 1
+  out=$("$bin" explain)
+  [[ "$out" == *' -> none'* ]] || fail "unconfirmed repository bound itself"
+  "$bin" organize forget orbit "$td/work/billing" >/dev/null
+  if git -C "$td/work/billing" config --get user.email; then fail "forgotten identity still active"; fi
+  printf 'export API_KEY=hidden-value\nPASSWORD=another-value\n' > "$td/selected.env"
+  [[ "$("$bin" organize env-keys "$td/selected.env")" == $'API_KEY\nPASSWORD' ]] || fail "unexpected credential inventory"
+  mv "$td/work/old apps" "$td/work/relocated"
+  "$bin" organize forget acme "$td/work/old apps" >/dev/null
+  git init -q "$td/work/old apps"
+  if git -C "$td/work/old apps" config --get user.email; then fail "stale assignment after move"; fi
+  mkdir -p "$HOME/.ssh"
+  ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/unnamed"
+  printf 'SSH_KEY_PATH="%s/.ssh/unnamed"\n' "$HOME" >>"$CTX_DIR/profiles/acme.conf"
+  out=$("$bin" organize ssh)
+  [[ "$out" == *SHA256:* && "$out" == *'Referenced by profile acme'* && "$out" != *'PRIVATE KEY'* ]] || fail "public key inventory"
+  pass "organize discovers, adopts and forgets repositories in place"
+)
+
+test_organize_existing_repos
+
 test_client_workflows
 
 test_valid_env_keys
@@ -3261,4 +3312,5 @@ test_installer_requires_release_checksum
 test_installer_honors_ctx_repo
 test_temp_guard_restores_traps
 test_upgrade_dry_run_and_temp_cleanup
+bash "$ROOT_DIR/test/organize-sources.sh"
 echo "All tests passed."

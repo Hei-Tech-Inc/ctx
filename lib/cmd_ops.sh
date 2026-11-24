@@ -656,6 +656,7 @@ cmd_remove() {
     dim "Active profile was removed — run: eval \"\$(ctx deactivate)\" to clear shell env (or open a new terminal)."
   fi
 
+  rm -f "${CTX_DIR}/projects/${name}.gitconfig" || return 1
   rm -f "$CTX_PROFILES_DIR/${name}.conf"
   success "Profile '$name' removed."
   echo ""
@@ -2726,4 +2727,174 @@ ctx_check_cloud() {
     _ctx_cloud_result 'Kubernetes context' "$KUBE_CONTEXT" "$actual" || rc=1
   fi
   return "$rc"
+}
+
+# Report candidate inputs, not an evaluated environment. Only emit known
+# identity selectors, even for multiline values, comments or dynamic scripts.
+_ctx_organize_sources() {
+  local dir="$1" scope=checkout file rel notes
+  while [[ -n "$dir" ]]; do
+    for rel in .envrc .env mise.toml .mise.toml mise.local.toml .mise.local.toml .config/mise/config.toml mise.lock .tool-versions; do
+      file="${dir%/}/$rel"
+      [[ -f "$file" || -L "$file" ]] || continue
+      printf '  %s candidate: %q' "$scope" "$file"
+      case "$rel" in
+        .envrc|.env|*.toml)
+          if [[ -L "$file" || ! -r "$file" ]]; then
+            printf ' (contents uninspected)'
+          else
+            notes=$(LC_ALL=C awk -v filename="$rel" '
+              filename ~ /[.]toml$/ && /^[[:space:]]*\[(tools|tasks)([.]|\])/ {
+                if ($0 ~ /^[[:space:]]*\[tools/) tools=1; else tasks=1
+              }
+              BEGIN { n=split("AWS_PROFILE AWS_DEFAULT_PROFILE AZURE_SUBSCRIPTION_ID CLOUDSDK_CORE_PROJECT CLOUDSDK_CORE_ACCOUNT GOOGLE_CLOUD_PROJECT KUBECONFIG GIT_AUTHOR_EMAIL GIT_COMMITTER_EMAIL GIT_SSH_COMMAND GH_TOKEN CTX_ACTIVE_PROFILE", names) }
+              !/^[[:space:]]*#/ {
+                for (i=1; i<=n; i++) if ($0 ~ ("(^|[^[:alnum:]_])" names[i] "([^[:alnum:]_]|$)")) seen[i]=1
+              }
+              END {
+                if (tools) { printf "tools section"; sep=", " }
+                if (tasks) { printf "%stasks section", sep; sep=", " }
+                for (i=1; i<=n; i++) if (seen[i]) { printf "%s%s", sep, names[i]; sep=", " }
+              }
+            ' "$file")
+            [[ -z "$notes" ]] || printf ' (review: %s)' "$notes"
+          fi ;;
+      esac
+      printf '\n'
+    done
+    for rel in mise-tasks .mise/tasks .config/mise/tasks; do
+      [[ -d "${dir%/}/$rel" ]] && printf '  %s task directory: %q\n' "$scope" "${dir%/}/$rel"
+    done
+    [[ "$dir" != / ]] || break
+    dir=${dir%/*}; dir=${dir:-/}; scope=ancestor
+  done
+}
+
+# Inventory reads local Git configuration only. Never print raw remote URLs:
+# an HTTPS userinfo field or query string can contain access credentials.
+_ctx_organize_repo() {
+  local root="$1" binding remote slug="" evidence="Needs review" owner="" alias=""
+  remote=$(git -C "$root" config --local --no-includes --get remote.origin.url 2>/dev/null) || remote=""
+  local github='^(https://([^/@]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+)/[A-Za-z0-9_.-]+/?$'
+  local aliased='^git@github-([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+)/[A-Za-z0-9_.-]+$'
+  if [[ "$remote" =~ $github ]]; then
+    slug=${BASH_REMATCH[3]}
+    evidence="GitHub owner $slug; confirm client"
+  elif [[ "$remote" =~ $aliased ]]; then
+    alias=${BASH_REMATCH[1]}; slug=${BASH_REMATCH[2]}
+    evidence="SSH alias github-$alias; GitHub owner $slug"
+    profile_exists "$alias" && owner=$alias
+  fi
+  if binding=$(ctx_adopted_path "$root" "$CTX_PROFILES_DIR"); then
+    owner=${binding%%$'\t'*}; evidence="confirmed assignment"
+  elif [[ -n "$slug" && -z "$owner" ]] && profile_exists "$slug"; then
+    owner=$slug
+  fi
+  printf '%s\t%s\t%s\n' "$root" "${owner:-Needs review}" "$evidence"
+  _ctx_organize_sources "$root"
+}
+
+_ctx_organize_scan() (
+  [[ $# -gt 0 ]] || set -- "$PWD"
+  local dir marker inventory
+  inventory=$(mktemp) || return 1
+  trap 'rm -f "$inventory"' EXIT
+  for dir in "$@"; do
+    dir=$(cd -- "$dir" && pwd -P) || return 1
+    find "$dir" \( -name node_modules -o -name .cache \) -prune -o -name .git -prune -print0 >>"$inventory" || return 1
+  done
+  printf 'Repository\tSuggested client\tEvidence\n'
+  while IFS= read -r -d '' marker; do _ctx_organize_repo "${marker%/.git}"; done <"$inventory"
+)
+
+_ctx_organize_change() (
+  local action="$1" name="$2" repo="$3" root key file identity existing
+  [[ "$name" =~ ^[A-Za-z0-9_.-]+$ && "$name" != . && "$name" != .. ]] && profile_exists "$name" || die "Choose an existing client profile (ctx list or ctx setup)."
+  if [[ "$action" == forget && ! -d "$repo" && "$repo" == /* ]]; then
+    local base=${repo%/} suffix=""
+    while [[ ! -d "$base" && -n "$base" ]]; do
+      suffix="/${base##*/}$suffix"
+      base=${base%/*}
+    done
+    root=$(cd -- "${base:-/}" && pwd -P) || return 1
+    root="${root%/}$suffix"
+  else
+    root=$(cd -- "$repo" && pwd -P) || return 1
+  fi
+  if [[ "$action" == adopt ]]; then
+    [[ -d "$root/.git" && ! -L "$root/.git" ]] || die "Select the root of an ordinary Git checkout. Linked worktrees and submodules are inventory-only."
+    git -C "$root" rev-parse --is-inside-work-tree 2>/dev/null | grep -qx true || die "Invalid working tree."
+  fi
+  [[ "$root" != *[[:cntrl:]]* && "$root" != *'*'* && "$root" != *'?'* && "$root" != *'['* && "$root" != *'\'* ]] || die "This path cannot be represented as a literal Git include condition."
+  identity="$HOME/.config/git/ctx-$name"
+  file="$CTX_DIR/projects/$name.gitconfig"
+  key="includeIf.gitdir:$root/.git.path"
+  printf '%s %s: %s\n' "$action" "$name" "$root"
+  if [[ "$action" == adopt ]]; then
+    _ctx_organize_sources "$root"
+    [[ -f "$identity" ]] || die "Missing generated Git identity. Run ctx setup --extend for this profile."
+  fi
+  if [[ "${CTX_DRY_RUN:-0}" != 1 ]]; then
+    umask 077
+    mkdir -p "$CTX_DIR/projects" || return 1
+    local lock="$CTX_DIR/projects/.organize-lock"
+    mkdir "$lock" || die "Another organize change holds $lock. Retry after it finishes."
+    trap 'rmdir "$lock"' EXIT
+  fi
+  if [[ "$action" == forget ]]; then
+    [[ -f "$file" && "$(git config --file "$file" --no-includes --get "$key")" == "$identity" ]] || die "No confirmed assignment to $name."
+    if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then printf 'Would remove checkout rule from %s\n' "$file"; return 0; fi
+    git config --file "$file" --unset-all "$key" || return 1
+  else
+    existing=$(ctx_adopted_path "$root" "$CTX_PROFILES_DIR") || existing=""
+    existing=${existing%%$'\t'*}
+    [[ -z "$existing" || "$existing" == "$name" ]] || die "Already assigned to $existing. Forget that assignment before changing clients."
+    if [[ "${CTX_DRY_RUN:-0}" == 1 ]]; then
+      printf 'Would register %s in global Git configuration and include %s for this checkout.\n' "$file" "$identity"
+      return 0
+    fi
+    # Replacing only an identical value keeps unrelated global includes.
+    git config --global --fixed-value --replace-all include.path "$file" "$file" || return 1
+    git config --file "$file" --replace-all "$key" "$identity" || return 1
+    printf 'Check inside the repository with ctx explain and git var GIT_AUTHOR_IDENT.\n'
+  fi
+)
+
+cmd_organize() {
+  case "${1:-}" in
+    lookup) [[ $# == 2 ]] && ctx_adopted_path "$2" "$CTX_PROFILES_DIR" ;;
+    adopt|forget)
+      [[ $# == 3 ]] || die "Usage: ctx organize $1 <profile> <repository-root>"
+      _ctx_organize_change "$1" "$2" "$3" ;;
+    ssh)
+      local pub config conf
+      for pub in "$HOME"/.ssh/*.pub; do
+        [[ -f "$pub" ]] || continue
+        printf '%s\t' "$pub"
+        ssh-keygen -lf "$pub" 2>/dev/null | awk '{ print $2 }' || printf 'Fingerprint unavailable\n'
+        for conf in "$CTX_PROFILES_DIR"/*.conf; do
+          [[ -f "$conf" ]] || continue
+          (
+            local profile=${conf##*/} key
+            profile=${profile%.conf}
+            load_profile "$profile"
+            key=${SSH_KEY_PATH:-}; key=${key/#\~\//$HOME/}
+            if [[ -n "$key" && ( "$key" == "${pub%.pub}" || "$key" -ef "${pub%.pub}" ) ]]; then
+              printf '  Referenced by profile %s\n' "$profile"
+            fi
+          )
+        done
+      done
+      for config in "$HOME/.ssh/config" "$HOME/.ssh/ctx_config"; do
+        [[ -f "$config" ]] || continue
+        printf 'Declarations in %s\n' "$config"
+        awk 'tolower($1)=="host" || tolower($1)=="identityfile" {sub(/[[:space:]]+#.*/, ""); print}' "$config"
+      done ;;
+    env-keys)
+      [[ $# == 2 && -f "$2" && -r "$2" ]] || die "Usage: ctx organize env-keys <selected-env-file>"
+      LC_ALL=C sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=.*/\2/p' <"$2" | LC_ALL=C sort -u ;;
+    scan) shift; _ctx_organize_scan "$@" ;;
+    -*) die "Usage: ctx organize [scan] [directories...] | adopt|forget <profile> <root> | ssh | env-keys <file>" ;;
+    *) _ctx_organize_scan "$@" ;;
+  esac
 }

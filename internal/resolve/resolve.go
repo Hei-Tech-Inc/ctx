@@ -5,6 +5,7 @@ package resolve
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -43,6 +44,9 @@ func Path(pwd, profilesDir string) (name, wd string, err error) {
 	names, err := profile.List(profilesDir)
 	if err != nil {
 		return "", "", fmt.Errorf("profiles dir: %w", err)
+	}
+	if adopted, root := adoptedPath(pwd, profilesDir, names); adopted != "" {
+		return adopted, root, nil
 	}
 	best, bestWD := "", ""
 	for _, n := range names {
@@ -127,4 +131,42 @@ func ctxOverride(pwd, profilesDir string) string {
 		d = d[:i]
 	}
 	return ""
+}
+
+// adoptedPath checks the nearest actual checkout against the user's path grants.
+// A repository-controlled .ctx or gitdir pointer cannot manufacture a grant.
+func adoptedPath(pwd, profilesDir string, names []string) (string, string) {
+	base := filepath.Join(filepath.Dir(profilesDir), "projects")
+	if _, err := os.Stat(base); err != nil {
+		return "", ""
+	}
+	root, err := filepath.EvalSymlinks(pwd)
+	if err != nil {
+		return "", ""
+	}
+	for {
+		info, err := os.Lstat(filepath.Join(root, ".git"))
+		if err == nil {
+			if !info.IsDir() {
+				return "", ""
+			}
+			break
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return "", ""
+		}
+		root = parent
+	}
+	for _, name := range names {
+		file := filepath.Join(base, name+".gitconfig")
+		if _, err := os.Stat(file); err != nil {
+			continue
+		}
+		out, err := exec.Command("git", "config", "--no-includes", "--file", file, "--get", "includeIf.gitdir:"+root+"/.git.path").Output()
+		if err == nil && strings.TrimSuffix(string(out), "\n") == filepath.Join(os.Getenv("HOME"), ".config", "git", "ctx-"+name) {
+			return name, root
+		}
+	}
+	return "", ""
 }

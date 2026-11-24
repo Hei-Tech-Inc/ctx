@@ -27,6 +27,30 @@ Profiles auto-activate when you `cd` into a client directory.
 
 Run `ctx dashboard` to see each profile’s active state, workspace, Git identity, SSH key path, and cloud integrations together. The dashboard reads profile metadata only.
 
+### Adopt repositories already on your laptop
+
+Choose the directories to search for checkouts. For each checkout, the scan and adoption preview also walk its ancestors to the filesystem root and list common direnv, dotenv, and mise files and task directories. Identity selector names such as `AWS_PROFILE` are flagged for review. These are static mentions; actual loading depends on shell hooks, trust and configuration. Symlinked files are listed without reading their targets. The inventory shows origin-owner or SSH-alias evidence for your review. A fork can belong to a personal account even when its upstream belongs to a client.
+
+```bash
+ctx organize ~/work ~/Desktop/projects
+ctx organize ssh
+ctx organize env-keys ~/work/api/.env
+```
+
+The SSH inventory reads public key fingerprints and declarations in the main SSH and ctx config files. The environment inventory prints assignment names from the selected file. Neither command migrates credentials.
+
+Create the client with `ctx setup` if needed. Assign each ordinary checkout explicitly after reviewing it. Each client can have several repositories outside its primary workspace.
+
+```bash
+ctx --dry-run organize adopt acme ~/work/api
+ctx organize adopt acme ~/work/api
+cd ~/work/api
+ctx explain
+git var GIT_AUTHOR_IDENT
+```
+
+Adoption registers an exact Git directory condition in a private per-client include file and links it from your global Git configuration. The working tree, remotes, SSH keys and repository-local settings stay in place. A repository-local email override can still win; `ctx explain` shows that mismatch. Use `ctx organize forget acme ~/work/api` to remove the assignment. Linked worktrees and submodules can be inventoried; adoption currently supports ordinary clones. Before moving a checkout, forget its old assignment and adopt the new location. If it has already moved, pass the original absolute path to forget.
+
 Before a commit, run `ctx explain` in that terminal. Compare the folder match, saved activation and shell profile with Git’s live author and committer. Cloud and SSH entries show configured values. Use `ctx verify <profile>` for live account checks.
 
 Use `ctx explain --cloud` before a deployment to compare the named AWS profile’s account and Azure subscription with the active accounts, and the configured GCP project and Kubernetes context with local CLI selections. Each configured target reports matched, mismatch, or unverified. A nonzero exit means at least one target could not be confirmed. No provider is contacted by plain `ctx explain`.
@@ -249,7 +273,7 @@ It needs `ctx-core`, the Go binary that `install.sh`, `ctx upgrade` and the Home
 
 #### ctx-core in everyday commands
 
-`ctx mcp` and `ctx knowledge` always run in `ctx-core` and error if it is missing. **Every other command also runs in `ctx-core` when it is installed**, for speed, and falls back to the Bash implementation silently when it is not; their output is unchanged except for the bug fixes listed in the CHANGELOG. That covers `list`, `status`, `use`, `deactivate`, `remove` (`rm`, `del`), `secret`, `config`, `guard`, `env`, `run`, `workdir-prompt`, `setup` (with `import`, `add`, `--config`, `--scope`, `--extend`, `--dry-run`, `--help`), `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `help`, `completion` and `version`. Set `CTX_CORE=off` to force Bash; the Bash fallback stays until phase E6 drops it. In a terminal (stdin and stdout both terminals, `CTX_NO_GUM` not `1`, no `--no-gum`) `ctx-core` draws the rich UI itself (lipgloss/huh), so **gum is optional** when `ctx-core` is installed; the Bash fallback still uses gum if present. Piped output is plain. The shell autoswitch hook also runs in `ctx-core` (`ctx activate` and `ctx hook-env`, see **Auto-switch**); with `CTX_CORE=off` or without `ctx-core` the Bash/fish hook runs.
+`ctx mcp` and `ctx knowledge` always run in `ctx-core` and error if it is missing. `ctx organize` uses the shared Bash CLI. **The commands listed below also run in `ctx-core` when it is installed**, for speed, and falls back to the Bash implementation silently when it is not; their output is unchanged except for the bug fixes listed in the CHANGELOG. That covers `list`, `status`, `use`, `deactivate`, `remove` (`rm`, `del`), `secret`, `config`, `guard`, `env`, `run`, `workdir-prompt`, `setup` (with `import`, `add`, `--config`, `--scope`, `--extend`, `--dry-run`, `--help`), `agent-rules`, `doctor`, `verify`, `clone`, `init`, `install-hook`, `upgrade`, `uninstall`, `undo`, `edit`, `help`, `completion` and `version`. Set `CTX_CORE=off` to force Bash; the Bash fallback stays until phase E6 drops it. In a terminal (stdin and stdout both terminals, `CTX_NO_GUM` not `1`, no `--no-gum`) `ctx-core` draws the rich UI itself (lipgloss/huh), so **gum is optional** when `ctx-core` is installed; the Bash fallback still uses gum if present. Piped output is plain. The shell autoswitch hook also runs in `ctx-core` (`ctx activate` and `ctx hook-env`, see **Auto-switch**); with `CTX_CORE=off` or without `ctx-core` the Bash/fish hook runs.
 
 The public [documentation MCP](https://ctx-workspace-guide.pages.dev/guide.html#docs-mcp) supports `search_guides` and `read_guide` over Streamable HTTP. To connect, use `https://ctx-workspace-guide.pages.dev/mcp`. Use the local server below for client operations.
 

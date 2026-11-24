@@ -361,6 +361,15 @@ _ctx_profile_autoswitch() {
     [[ -n "$path_wd" ]] && best_work_dir="$path_wd"
   fi
 
+  if [[ -d "${profiles_dir%/*}/projects" ]]; then
+    local binding
+    if binding=$(command ctx organize lookup "$PWD"); then
+      path_profile=${binding%%$'\t'*}
+      best_work_dir=${binding#*$'\t'}
+      path_wd=$best_work_dir
+    fi
+  fi
+
   _ctx_as_read_config
   local current="$_cfg_active" src_manual=0 manual_anchor="" target
   case "$_cfg_source" in [Mm][Aa][Nn][Uu][Aa][Ll]) src_manual=1 ;; esac

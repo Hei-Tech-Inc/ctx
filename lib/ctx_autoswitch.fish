@@ -225,6 +225,16 @@ function _ctx_profile_autoswitch --on-variable PWD
     test -n "$_sync_wd"; and set best_work_dir "$_sync_wd"
   end
 
+  set -l adopted_root ""
+  if test -d (dirname "$profiles_dir")/projects
+    set -l binding (command ctx organize lookup "$PWD" | string split \t)
+    if test (count $binding) -eq 2
+      set path_profile "$binding[1]"
+      set best_work_dir "$binding[2]"
+      set adopted_root "$binding[2]"
+    end
+  end
+
   set -l current (grep "^active=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2-)
   set -l src (grep "^active_source=" "$active_conf" 2>/dev/null | tail -1 | cut -d= -f2- | string lower)
   set -l manual_anchor ""
@@ -259,6 +269,7 @@ function _ctx_profile_autoswitch --on-variable PWD
     set profwd (string replace -r '^~' "$HOME" -- "$profwd")
     test "$profwd" != "/"; and set profwd (string replace -r '/$' '' -- "$profwd")
     set display_root "$profwd"
+    test -n "$adopted_root"; and set display_root "$adopted_root"
     test -z "$display_root"; and test -n "$best_work_dir"; and set display_root "$best_work_dir"
   end
   if test -n "$display_root"
