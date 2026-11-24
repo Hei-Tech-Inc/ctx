@@ -41,6 +41,8 @@
   install-hook [rc]     Install mise + ctx hooks into shell rc
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
+  explain               Explain shell, folder and live Git identity
+  offboard <profile>    Print a read-only client handoff checklist
   dashboard             Show profile identities, workspaces, and integrations
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles
   guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity

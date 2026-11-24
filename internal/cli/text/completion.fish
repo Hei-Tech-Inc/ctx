@@ -11,7 +11,7 @@ complete -c ctx -n '__fish_use_subcommand' -l no-gum -d 'Plain prompts'
 complete -c ctx -n '__fish_use_subcommand' -s v -l version -d 'Print version'
 complete -c ctx -n '__fish_use_subcommand' -s h -l help -d 'Show help'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate explain offboard dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall remove check'
@@ -19,6 +19,7 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install un
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -l eval -d 'Print shell exports for eval' -x -a 'fish bash'
 complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx offboard' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx remove rm del' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx verify' -a '(__fish_ctx_profiles)'
 

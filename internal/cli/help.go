@@ -98,6 +98,8 @@ func helpCard(ver string) string {
 		"  install-hook     Install mise + ctx hooks into shell rc",
 		"  upgrade [--check] Re-run installer, or check for newer version",
 		"  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe",
+		"  explain          Explain shell and workspace identities",
+		"  offboard <name>  Preview the client handoff checklist",
 		"  dashboard        View identities and integrations across profiles",
 		"  doctor           Machine-wide: tools, hooks, SSH layout, profiles",
 		"  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity",

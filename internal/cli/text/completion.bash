@@ -1,6 +1,6 @@
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
+  local cmds="init setup import add use deactivate explain offboard dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -30,7 +30,7 @@ _ctx_comp() {
     return
   fi
   case "$prev" in
-    use|edit|remove|rm|del|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    use|edit|offboard|remove|rm|del|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     env) COMPREPLY=($(compgen -W "-p --profile --secrets --fish" -- "$cur")) ;;
     run) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     mcp) COMPREPLY=($(compgen -W "install --profile" -- "$cur")) ;;

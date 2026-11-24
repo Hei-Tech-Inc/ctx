@@ -97,6 +97,8 @@ cmd_help() {
       "  install-hook     Install mise + ctx hooks into shell rc" \
       "  upgrade [--check] Re-run installer, or check for newer version" \
       "  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe" \
+      "  explain          Explain shell and workspace identities" \
+      "  offboard <name>  Preview the client handoff checklist" \
       "  dashboard        View identities and integrations across profiles" \
       "  doctor           Machine-wide: tools, hooks, SSH layout, profiles" \
       "  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity" \
@@ -164,6 +166,8 @@ ${_b}MAINTENANCE${_r}
   install-hook [rc]     Install mise + ctx hooks into shell rc
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
+  explain               Explain shell, folder and live Git identity
+  offboard <profile>    Print a read-only client handoff checklist
   dashboard             Show profile identities, workspaces, and integrations
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles
   guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity
@@ -233,6 +237,8 @@ _ctx() {
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
+    'explain:Explain shell and workspace identities'
+    'offboard:Preview the client handoff checklist'
     'dashboard:Overview of profile identities and integrations'
     'doctor:Health check'
     'guard:Git identity guard (status, install, uninstall, check)'
@@ -272,7 +278,7 @@ _ctx() {
     3)
       case ${words[2]} in
         --dry-run|--quiet|-q|--no-gum|--json) _describe 'ctx commands' cmds ;;
-        use|edit|remove|rm|del|verify) _describe 'profiles' profiles ;;
+        use|edit|offboard|remove|rm|del|verify) _describe 'profiles' profiles ;;
         env) local fl=('-p:Profile' '--profile:Profile' '--secrets:Include secrets' '--fish:Fish syntax'); _describe 'env flags' fl ;;
         run) local fl=('-p:Profile' '--profile:Profile'); _describe 'run flags' fl ;;
         mcp) local sub=('install:Register with Claude Code or Cursor' '--profile:Serve one profile'); _describe 'mcp options' sub ;;
@@ -335,7 +341,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
+  local cmds="init setup import add use deactivate explain offboard dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -365,7 +371,7 @@ _ctx_comp() {
     return
   fi
   case "$prev" in
-    use|edit|remove|rm|del|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    use|edit|offboard|remove|rm|del|verify) COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     env) COMPREPLY=($(compgen -W "-p --profile --secrets --fish" -- "$cur")) ;;
     run) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     mcp) COMPREPLY=($(compgen -W "install --profile" -- "$cur")) ;;
@@ -409,7 +415,7 @@ complete -c ctx -n '__fish_use_subcommand' -l no-gum -d 'Plain prompts'
 complete -c ctx -n '__fish_use_subcommand' -s v -l version -d 'Print version'
 complete -c ctx -n '__fish_use_subcommand' -s h -l help -d 'Show help'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate explain offboard dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall remove check'
@@ -417,6 +423,7 @@ complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install un
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx use' -l eval -d 'Print shell exports for eval' -x -a 'fish bash'
 complete -c ctx -n '__fish_seen_subcommand_from ctx edit' -a '(__fish_ctx_profiles)'
+complete -c ctx -n '__fish_seen_subcommand_from ctx offboard' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx remove rm del' -a '(__fish_ctx_profiles)'
 complete -c ctx -n '__fish_seen_subcommand_from ctx verify' -a '(__fish_ctx_profiles)'
 
@@ -593,6 +600,10 @@ main() {
     uninstall)
       _ctx_core_forward uninstall "$@"
       cmd_uninstall "$@"
+      ;;
+    explain|offboard)
+      _ctx_core_forward "$cmd" "$@"
+      "cmd_$cmd" "$@"
       ;;
     dashboard)
       _ctx_core_forward dashboard "$@"

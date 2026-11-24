@@ -3148,6 +3148,28 @@ test_temp_guard_restores_traps() {
   pass "_ctx_temp_done puts the EXIT and TERM traps back"
 }
 
+test_client_workflows() (
+  local td out
+  td="$(mktemp -d)"
+  trap 'rm -rf "$td"' EXIT
+  export HOME="$td" CTX_DIR="$td/.ctx" CTX_ACTIVE_PROFILE=orbit
+  export GIT_AUTHOR_NAME=Demo GIT_COMMITTER_NAME=Demo
+  export GIT_AUTHOR_EMAIL=wrong@example.test GIT_COMMITTER_EMAIL=orbit@example.test
+  mkdir -p "$CTX_DIR/profiles" "$td/client"
+  cd "$td/client" || exit 1
+  printf 'active=acme\nactive_source=manual\n' >"$CTX_DIR/config"
+  printf 'WORK_DIR="%s"\nSSH_KEY_PATH="%s/key"\n' "$PWD" "$td" >"$CTX_DIR/profiles/acme.conf"
+  printf 'GIT_EMAIL=orbit@example.test\nSSH_KEY_PATH="%s/key"\n' "$td" >"$CTX_DIR/profiles/orbit.conf"
+  out="$("$ROOT_DIR/bin/ctx" explain)" || fail "explain failed"
+  [[ "$out" == *' -> acme'* && "$out" == *'Comparing with profile: orbit'* && "$out" == *'Live Git AUTHOR: wrong@example.test'* && "$out" == *'Check Git environment'* ]] || fail "wrong shell or folder explanation"
+  out="$("$ROOT_DIR/bin/ctx" offboard orbit)" || fail "offboard failed"
+  [[ "$out" == *'Shared SSH key with acme'* && "$out" == *'administrator'* && -e "$CTX_DIR/profiles/orbit.conf" ]] || fail "incomplete offboarding preview"
+  if "$ROOT_DIR/bin/ctx" offboard ../invalid >/dev/null 2>&1; then fail "offboard accepted invalid name"; fi
+  pass "client identity explanation and read-only offboarding"
+)
+
+test_client_workflows
+
 test_valid_env_keys
 test_timeout_helper
 test_clone_extra_args_drop_url
