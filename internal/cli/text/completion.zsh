@@ -25,6 +25,7 @@ _ctx() {
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
+    'dashboard:Overview of profile identities and integrations'
     'doctor:Health check'
     'guard:Git identity guard (status, install, uninstall, check)'
     'run:Run a command with the profile identity'
@@ -56,7 +57,7 @@ _ctx() {
     '--quiet:Suppress output'
     '-q:Suppress output'
     '--no-gum:Plain prompts'
-    '--json:JSON output (list, status)'
+    '--json:JSON output (list, status, verify, doctor)'
   )
   case $CURRENT in
     2) _describe 'ctx flags' global_flags && _describe 'ctx commands' cmds ;;

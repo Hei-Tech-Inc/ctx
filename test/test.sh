@@ -496,6 +496,43 @@ STUB
   pass "trailing-slash WORK_DIR matches in Bash and Go (resolver, guard, autoswitch)"
 }
 
+test_dashboard_and_diagnostics() {
+  (
+    local td rc=0
+    td="$(mktemp -d)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td" CTX_DIR="$td/.ctx"
+    mkdir -p "$CTX_DIR/profiles"
+    "$ROOT_DIR/bin/ctx" dashboard | grep -q 'No profiles yet' || exit 1
+    printf 'PROFILE_NAME=acme\nGIT_EMAIL=dev@example.test\nKUBE_CONTEXT=staging\n' >"$CTX_DIR/profiles/acme.conf"
+    printf 'active=acme\n' >"$CTX_DIR/config"
+    "$ROOT_DIR/bin/ctx" dashboard >"$td/view" || exit 1
+    grep -Fqx 'acme  [active]' "$td/view" && grep -Fqx '  Kubernetes  staging' "$td/view" || exit 1
+    "$ROOT_DIR/bin/ctx" -q verify --json >"$td/json" || rc=$?
+    [[ "$rc" == 1 ]] || exit 1
+    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert (r["version"],r["command"])==(1,"verify"); assert {"pass","warning"}=={c["level"] for c in r["checks"]}' "$td/json" || exit 1
+    _t_doctor_tools "$td/tools"
+    PATH="$td/tools:$PATH" "$ROOT_DIR/bin/ctx" --json doctor >"$td/json" || exit 1
+    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert (r["version"],r["command"])==(1,"doctor"); assert any(c["level"]=="warning" for c in r["checks"])' "$td/json"
+  ) || fail "dashboard and diagnostic JSON"
+  pass "dashboard and diagnostic JSON"
+}
+
+test_config_write_contract() {
+  (
+    local td
+    td="$(mktemp -d)"
+    trap 'rm -rf "$td"' EXIT
+    export HOME="$td" CTX_DIR="$td/.ctx"
+    mkdir -p "$CTX_DIR"
+    printf '# user settings\nautoswitch_notify=off\n\nwork_root=/work\nautoswitch_notify=off\n' >"$CTX_DIR/config"
+    "$ROOT_DIR/bin/ctx" config autoswitch-notify on >/dev/null || exit 1
+    "$ROOT_DIR/bin/ctx" config secret-provider file >/dev/null || exit 1
+    diff -u "$ROOT_DIR/test/fixtures/config_after_updates" "$CTX_DIR/config"
+  ) || fail "config write contract"
+  pass "config replaces duplicate keys and appends new keys while preserving user lines"
+}
+
 test_setup_scope_clone_batch() {
   (
     set -euo pipefail
@@ -508,6 +545,7 @@ test_setup_scope_clone_batch() {
     ssh-keygen -t ed25519 -f "$home/.ssh/id_testclone" -N "" -q
     export HOME="$home"
     export CTX_DIR="$home/.ctx"
+    printf 'Host personal\n  User developer\n' >"$home/.ssh/config"
     cfg="$td/clone.conf"
     cat >"$cfg" <<EOF
 SETUP_SCOPE=clone
@@ -516,13 +554,24 @@ SSH_MODE=existing
 SSH_KEY_PATH=$home/.ssh/id_testclone
 AUTO_CONFIRM=true
 EOF
-    "$ROOT/bin/ctx" setup --config "$cfg" --yes >/dev/null
+    "$ROOT/bin/ctx" setup --config "$cfg" --yes </dev/null >/dev/null || exit 1
     [[ -f "$CTX_DIR/profiles/cloneonly.conf" ]] || exit 1
-    grep -q '^Host github-cloneonly$' "$home/.ssh/ctx_config" || exit 1
-    # shellcheck source=../lib/core.sh
-    source "$ROOT/lib/core.sh"
-    out="$(github_clone_url_for_profile cloneonly 'git@github.com:Org/repo.git' n)"
-    [[ "$out" == 'git@github-cloneonly:Org/repo.git' ]] || exit 1
+    local file
+    for file in config ctx_config; do
+      # Expand only the HOME placeholder in the golden SSH files.
+      awk -F '@HOME@' 'NF == 2 { print $1 ENVIRON["HOME"] $2; next } { print }' \
+        "$ROOT/test/fixtures/ssh_$file" >"$td/expected" || exit 1
+      diff -u "$td/expected" "$home/.ssh/$file" || exit 1
+    done
+    # Only the profile-rewritten SSH URL can reach the local fixture.
+    export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$home/.gitconfig" GIT_ALLOW_PROTOCOL=file
+    git init -q "$td/source" || exit 1
+    git -C "$td/source" -c user.name=Fixture -c user.email=fixture@example.test \
+      commit -q --allow-empty -m fixture || exit 1
+    git config --global url."file://$td/source".insteadOf 'git@github-cloneonly:Org/repo.git' || exit 1
+    "$ROOT/bin/ctx" clone -p cloneonly 'git@github.com:Org/repo.git' "$td/checkout" </dev/null || exit 1
+    [[ "$(git -C "$td/checkout" rev-parse HEAD)" == "$(git -C "$td/source" rev-parse HEAD)" ]] || exit 1
+    [[ "$(git -C "$td/checkout" config remote.origin.url)" == 'git@github-cloneonly:Org/repo.git' ]] || exit 1
     rm -rf "$td"
   ) || fail "setup SETUP_SCOPE=clone batch"
   pass "setup scope clone (batch)"
@@ -1498,6 +1547,9 @@ test_hook_integration() {
     done
   done
   if command -v fish >/dev/null 2>&1; then
+    # The notify output of a step is the stderr between its markers (event handlers
+    # write to the shell's own stderr, whatever a redirection on `emit` says): entering
+    # a notifies, re-applying the other terminal's lock does not (as legacy, m1 and m2).
     out="$(
       set -euo pipefail
       local td
@@ -1505,9 +1557,6 @@ test_hook_integration() {
       _hook_it_session_fish >"$td/session.fish"
       cd "$td"
       fish --no-config "$td/session.fish" "$ROOT_DIR" "$td" 2>"$td/err" || echo "fish exited $?; stderr: $(cat "$td/err")"
-      # The notify output of a step is the stderr between its markers (event handlers
-      # write to the shell's own stderr, whatever a redirection on `emit` says): entering
-      # a notifies, re-applying the other terminal's lock does not (as legacy, m1 and m2).
       sed -n '/^M-enter-start$/,/^M-enter-end$/p' "$td/err" | grep -qF '[ctx] → a' || echo "enter notify: $(cat "$td/err")"
       [[ "$(sed -n '/^M-reapply-start$/,/^M-reapply-end$/p' "$td/err")" == $'M-reapply-start\nM-reapply-end' ]] \
         || echo "re-apply notified: $(cat "$td/err")"
@@ -3081,6 +3130,8 @@ test_config_upsert_literal_values
 test_base64_decode_gnu_style
 test_autoswitch_hook_resolution
 test_trailing_slash_work_dir
+test_dashboard_and_diagnostics
+test_config_write_contract
 test_setup_scope_clone_batch
 test_ctx_json_list_and_status
 test_guard_git_hooks

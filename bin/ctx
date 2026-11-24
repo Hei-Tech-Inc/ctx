@@ -97,6 +97,7 @@ cmd_help() {
       "  install-hook     Install mise + ctx hooks into shell rc" \
       "  upgrade [--check] Re-run installer, or check for newer version" \
       "  uninstall [--purge] Remove ctx install; optional ~/.ctx wipe" \
+      "  dashboard        View identities and integrations across profiles" \
       "  doctor           Machine-wide: tools, hooks, SSH layout, profiles" \
       "  guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity" \
       "  completion <zsh|bash|fish>  Print shell completion script" \
@@ -107,7 +108,7 @@ cmd_help() {
       "  --dry-run        Preview changes without writing files" \
       "  --quiet, -q      Suppress output (used by auto-switch)" \
       "  --no-gum         Force plain text prompts" \
-      "  --json           Machine-readable JSON (list, status)" \
+      "  --json           Machine-readable JSON (list, status, verify, doctor)" \
       "" \
       "$(gum style --faint "SETUP FLAGS")" \
       "  --scope clone|full   Clone-only profile or full wizard" \
@@ -163,6 +164,7 @@ ${_b}MAINTENANCE${_r}
   install-hook [rc]     Install mise + ctx hooks into shell rc
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
+  dashboard             Show profile identities, workspaces, and integrations
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles
   guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity
   completion <zsh|bash|fish> Print shell completion script
@@ -173,7 +175,7 @@ ${_b}FLAGS${_r}
   --dry-run             Preview changes, write nothing
   --quiet, -q           Suppress output (auto-switch hook uses this)
   --no-gum              Force plain text prompts
-  --json                Machine-readable JSON for supported commands (list, status)
+  --json                Machine-readable JSON for supported commands (list, status, verify, doctor)
   setup --scope clone   Profile + SSH host for ctx clone only
   setup --extend NAME   Add git/folder/cloud/secrets to a profile
   setup --config FILE   Non-interactive wizard (KEY=value file)
@@ -231,6 +233,7 @@ _ctx() {
     'install-hook:Install shell hooks'
     'upgrade:Update ctx via installer'
     'uninstall:Remove ctx install'
+    'dashboard:Overview of profile identities and integrations'
     'doctor:Health check'
     'guard:Git identity guard (status, install, uninstall, check)'
     'run:Run a command with the profile identity'
@@ -262,7 +265,7 @@ _ctx() {
     '--quiet:Suppress output'
     '-q:Suppress output'
     '--no-gum:Plain prompts'
-    '--json:JSON output (list, status)'
+    '--json:JSON output (list, status, verify, doctor)'
   )
   case $CURRENT in
     2) _describe 'ctx flags' global_flags && _describe 'ctx commands' cmds ;;
@@ -332,7 +335,7 @@ ZSH
     bash) cat <<'BASH'
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
+  local cmds="init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -371,7 +374,7 @@ _ctx_comp() {
     init) [[ "$w1" == knowledge ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     agent-rules) COMPREPLY=($(compgen -W "--write" -- "$cur")) ;;
     --write) [[ "$w1" == agent-rules ]] && COMPREPLY=($(compgen -f -- "$cur")) ;;
-    -p|--profile) [[ "$w1" =~ ^(env|run|mcp)$ ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    -p|--profile) [[ "$w1" =~ ^(env|run|mcp|clone)$ ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     secret) COMPREPLY=($(compgen -W "set get list delete migrate" -- "$cur")) ;;
     config) COMPREPLY=($(compgen -W "show work-root secret-provider prompt-workdir-depth prompt-extra-paths autoswitch-notify export import" -- "$cur")) ;;
@@ -381,9 +384,6 @@ _ctx_comp() {
     completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
     ctx) COMPREPLY=($(compgen -W "$cmds --dry-run --quiet -q --no-gum --json -v --version -h --help" -- "$cur")) ;;
   esac
-  if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
-    COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
-  fi
   if [[ ${COMP_WORDS[1]} == use ]]; then
     [[ $COMP_CWORD -eq 3 ]] && COMPREPLY=($(compgen -W "--eval" -- "$cur"))
     [[ "$prev" == --eval ]] && COMPREPLY=($(compgen -W "bash fish" -- "$cur"))
@@ -402,14 +402,14 @@ end
 
 complete -c ctx -f
 
-complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status)'
+complete -c ctx -n '__fish_use_subcommand' -l json -d 'JSON output (list, status, verify, doctor)'
 complete -c ctx -n '__fish_use_subcommand' -l dry-run -d 'Preview without writing files'
 complete -c ctx -n '__fish_use_subcommand' -s q -l quiet -d 'Suppress output'
 complete -c ctx -n '__fish_use_subcommand' -l no-gum -d 'Plain prompts'
 complete -c ctx -n '__fish_use_subcommand' -s v -l version -d 'Print version'
 complete -c ctx -n '__fish_use_subcommand' -s h -l help -d 'Show help'
 
-complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
+complete -c ctx -n '__fish_use_subcommand' -a 'init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help'
 
 complete -c ctx -n '__fish_seen_subcommand_from ctx help' -a 'setup' -d 'Wizard and --config reference'
 complete -c ctx -n '__fish_seen_subcommand_from ctx guard' -a 'status install uninstall remove check'
@@ -556,7 +556,7 @@ main() {
       ;;
     verify)
       _ctx_core_forward verify "$@"
-      cmd_verify "${1:-}"
+      if [[ "$CTX_JSON" == 1 ]]; then cmd_diagnostic_json verify "${1:-}"; else cmd_verify "${1:-}"; fi
       ;;
     edit)
       _ctx_core_forward edit "$@"
@@ -594,9 +594,13 @@ main() {
       _ctx_core_forward uninstall "$@"
       cmd_uninstall "$@"
       ;;
+    dashboard)
+      _ctx_core_forward dashboard "$@"
+      cmd_dashboard
+      ;;
     doctor)
       _ctx_core_forward doctor "$@"
-      cmd_doctor
+      if [[ "$CTX_JSON" == 1 ]]; then cmd_diagnostic_json doctor; else cmd_doctor; fi
       ;;
     guard)
       case "${1:-}" in ""|check|status|install|uninstall|remove) _ctx_core_forward guard "$@" ;; esac

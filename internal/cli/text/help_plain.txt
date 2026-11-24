@@ -41,6 +41,7 @@
   install-hook [rc]     Install mise + ctx hooks into shell rc
   upgrade [--check]     Re-run installer, or compare to latest on main
   uninstall [--purge]   Remove ctx binary + lib; --purge deletes ~/.ctx
+  dashboard             Show profile identities, workspaces, and integrations
   doctor                Machine-wide: tools, hooks, SSH layout, all profiles
   guard [status|install|uninstall|check]  Block commits/pushes with the wrong profile identity
   completion <zsh|bash|fish> Print shell completion script
@@ -51,7 +52,7 @@
   --dry-run             Preview changes, write nothing
   --quiet, -q           Suppress output (auto-switch hook uses this)
   --no-gum              Force plain text prompts
-  --json                Machine-readable JSON for supported commands (list, status)
+  --json                Machine-readable JSON for supported commands (list, status, verify, doctor)
   setup --scope clone   Profile + SSH host for ctx clone only
   setup --extend NAME   Add git/folder/cloud/secrets to a profile
   setup --config FILE   Non-interactive wizard (KEY=value file)

@@ -15,6 +15,7 @@ func richTerm(in string) Term {
 // that hits EOF right after the keys, huh's EOF grace can cancel the form
 // before it handles them on a loaded machine. Only the EOF cases use richTerm.
 func TestRichPrompts(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	got, err := richKeys(t, "s3cret\r").Prompter().AskSecret("Value for K")
 	if err != nil || got != "s3cret" {
 		t.Errorf("AskSecret = %q, %v", got, err)

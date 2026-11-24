@@ -1,4 +1,8 @@
+<img src="site/dist/ctx.png" alt="ctx logo" width="80">
+
 # ctx — client context switcher
+
+[Project website and quick start](https://ctx-client-context-switcher.littlepixie16.chatgpt.site)
 
 [![CI](https://github.com/Hei-Tech-Inc/ctx/actions/workflows/ci.yml/badge.svg)](https://github.com/Hei-Tech-Inc/ctx/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Hei-Tech-Inc/ctx?label=release)](https://github.com/Hei-Tech-Inc/ctx/releases)
@@ -18,6 +22,12 @@ ctx use acme
 Profiles auto-activate when you `cd` into a client directory.
 
 ---
+
+## Profile overview and diagnostics
+
+Run `ctx dashboard` to see each profile’s active state, workspace, Git identity, SSH key path, and cloud integrations together. The dashboard reads profile metadata only.
+
+Run `ctx --json doctor` for machine checks or `ctx --json verify acme` for a profile. Both return a diagnostic envelope with integer `version: 1`, a `command` name, and a `checks` array. Each check has a `level` (`pass`, `warning`, or `error`) and a human-readable `message`. Verify exits 1 if a check fails. Doctor reports warnings with exit status 0.
 
 ## How it works
 
@@ -68,6 +78,13 @@ Notes for WSL users:
 ---
 
 ## Installation
+
+Use the full installer for a first setup. Choose Homebrew if you already manage your shell tools separately.
+
+| Installation method | What it installs | After installation |
+| --- | --- | --- |
+| `install.sh` | The CLI, shell libraries, available `ctx-core` binary, and supporting tools | Reload the shell, then run `ctx setup` |
+| Homebrew formula | The CLI, shell libraries, and a locally built `ctx-core` | Install the integrations you need, then run `ctx init` and `ctx doctor` |
 
 ### One-liner
 

@@ -11,3 +11,6 @@
 
 # Go build output
 /bin/ctx-core
+
+# Generated Graphify index
+/graphify-out/

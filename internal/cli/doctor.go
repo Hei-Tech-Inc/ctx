@@ -40,7 +40,12 @@ var sshIncludeRe = regexp.MustCompile(`^[ \t\n\v\f\r]*Include[ \t\n\v\f\r]+.*ctx
 // of the Bash version cannot occur here. Profiles are read with profile.Load,
 // not sourced (Bash executes the .conf in-process).
 func Doctor(t tui.Term, _ []string) int {
-	u := termUI(t)
+	return runDiagnostic(t, "doctor", func(u diagnosticUI) int {
+		return doctorChecks(t, u)
+	})
+}
+
+func doctorChecks(t tui.Term, u diagnosticUI) int {
 	_, _ = io.WriteString(u.out, tui.Header(t, "ctx doctor"))
 	u.dim("  Machine-wide — tools on PATH, shell hooks, SSH Include → ctx_config, profile files.")
 	u.dim("  For live GitHub SSH auth for one client, run: ctx verify <name>")

@@ -1,0 +1,5 @@
+# ctx managed hosts — added by ctx installer
+Include @HOME@/.ssh/ctx_config
+
+Host personal
+  User developer

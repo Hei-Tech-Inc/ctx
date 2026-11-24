@@ -6,6 +6,7 @@ Thanks for contributing to `ctx`.
 
 - See [docs/sprint/SPRINT.md](docs/sprint/SPRINT.md) for the current engineering backlog (tests, CLI contracts, docs).
 - Run `bash install.sh` for local dependencies.
+- For the optional Graphify code map, install the CLI with `uv tool install graphifyy` and run `graphify update .` from the repository root. Open `graphify-out/graph.html` or run `graphify query "profile setup clone"`.
 - Run `bin/ctx help` to validate CLI wiring.
 - Run `bash test/test.sh` before opening a pull request (CI runs the same script on Ubuntu).
 
@@ -40,6 +41,6 @@ If CI is green but the UI still shows the bot, wait for GitHub to refresh the gr
 
 ## Tests
 
-`test/test.sh` covers pure helpers (env keys, timeouts, clone URL rewrite, version parsing, secret paths), plus a smoke check that `bin/ctx version` prints the version from `lib/core.sh`. Interactive flows (`ctx setup`, real `git clone`) are not automated yet — exercise those manually when changing onboarding or clone behavior.
+`test/test.sh` covers pure helpers (env keys, timeouts, clone URL rewrite, version parsing, secret paths), plus a smoke check that `bin/ctx version` prints the version from `lib/core.sh`. The suite also runs non-interactive `ctx setup` and clones a local Git fixture through the generated profile alias. Exercise interactive prompts manually when changing onboarding.
 
 Pushing a tag matching `v*` (for example `v3.2.0`) triggers the release workflow, which creates a GitHub Release with auto-generated notes.

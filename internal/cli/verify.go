@@ -22,7 +22,12 @@ import (
 // answer. The gh account is the active one (ghacct.Active). Verify installs no
 // interrupt handler: Ctrl+C ends it, and the tty stops ssh and gh with it.
 func Verify(t tui.Term, args []string) int {
-	u := termUI(t)
+	return runDiagnostic(t, "verify", func(u diagnosticUI) int {
+		return verifyChecks(t, u, args)
+	})
+}
+
+func verifyChecks(t tui.Term, u diagnosticUI, args []string) int {
 	name := ""
 	if len(args) > 0 {
 		name = args[0]

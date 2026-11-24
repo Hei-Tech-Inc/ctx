@@ -1,6 +1,6 @@
 _ctx_comp() {
   local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local cmds="init setup import add use deactivate list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
+  local cmds="init setup import add use deactivate dashboard list ls status st clone workdir-prompt config secret verify edit remove rm del undo install-hook upgrade uninstall doctor guard run env agent-rules mcp knowledge completion version help"
   local profiles; profiles=$(ctx list 2>/dev/null | grep '^  [a-z]' | awk '{print $1}' | tr '\n' ' ')
   local w1="${COMP_WORDS[1]-}"
   # ctx list|status [--json]
@@ -39,7 +39,7 @@ _ctx_comp() {
     init) [[ "$w1" == knowledge ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     agent-rules) COMPREPLY=($(compgen -W "--write" -- "$cur")) ;;
     --write) [[ "$w1" == agent-rules ]] && COMPREPLY=($(compgen -f -- "$cur")) ;;
-    -p|--profile) [[ "$w1" =~ ^(env|run|mcp)$ ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
+    -p|--profile) [[ "$w1" =~ ^(env|run|mcp|clone)$ ]] && COMPREPLY=($(compgen -W "$profiles" -- "$cur")) ;;
     clone) COMPREPLY=($(compgen -W "-p --profile" -- "$cur")) ;;
     secret) COMPREPLY=($(compgen -W "set get list delete migrate" -- "$cur")) ;;
     config) COMPREPLY=($(compgen -W "show work-root secret-provider prompt-workdir-depth prompt-extra-paths autoswitch-notify export import" -- "$cur")) ;;
@@ -49,9 +49,6 @@ _ctx_comp() {
     completion) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
     ctx) COMPREPLY=($(compgen -W "$cmds --dry-run --quiet -q --no-gum --json -v --version -h --help" -- "$cur")) ;;
   esac
-  if [[ ${COMP_WORDS[1]} == clone && ${COMP_WORDS[COMP_CWORD-2]} == @(-p|--profile) ]]; then
-    COMPREPLY=($(compgen -W "$profiles" -- "$cur"))
-  fi
   if [[ ${COMP_WORDS[1]} == use ]]; then
     [[ $COMP_CWORD -eq 3 ]] && COMPREPLY=($(compgen -W "--eval" -- "$cur"))
     [[ "$prev" == --eval ]] && COMPREPLY=($(compgen -W "bash fish" -- "$cur"))

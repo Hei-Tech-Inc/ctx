@@ -1,0 +1,6 @@
+
+Host github-cloneonly
+  HostName github.com
+  User git
+  IdentityFile @HOME@/.ssh/id_testclone
+  IdentitiesOnly yes
